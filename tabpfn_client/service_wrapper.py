@@ -4,16 +4,13 @@
 import logging
 from pathlib import Path
 from typing import Literal
-import threading
-import contextlib
 
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client.tabpfn_common_utils.utils import Singleton
+from tabpfn_client.mock_prediction import is_mock_mode, mock_predict
 
 logger = logging.getLogger(__name__)
-# Thread-local namespace for mock predictions
-_thread_local = threading.local()
 
 
 class ServiceClientWrapper:
@@ -240,8 +237,8 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         X_train=None,
         y_train=None,
     ):
-        if cls._is_mock_mode():
-            return cls._mock_predict(
+        if is_mock_mode():
+            return mock_predict(
                 X, task, train_set_uid, config, predict_params, X_train, y_train
             )
         else:
@@ -254,56 +251,3 @@ class InferenceClient(ServiceClientWrapper, Singleton):
                 X_train=X_train,
                 y_train=y_train,
             )
-
-    @staticmethod
-    def _mock_predict(
-        X,
-        task: Literal["classification", "regression"],
-        train_set_uid: str,
-        config=None,
-        predict_params=None,
-        X_train=None,
-        y_train=None,
-    ):
-        if not hasattr(_thread_local, "cost"):
-            _thread_local.cost = 0.0
-        _thread_local.cost += 2
-        return {}
-
-    @staticmethod
-    def _is_mock_mode() -> bool:
-        """Return whether the current thread should use the mock prediction."""
-        return getattr(_thread_local, "use_mock", False)
-
-    @staticmethod
-    def set_mock_mode(value: bool):
-        """Enable or disable mock mode for the current thread."""
-        setattr(_thread_local, "use_mock", value)
-
-    def get_local_cost() -> float:
-        """
-        Return the accumulated cost for the current thread.
-        """
-        return getattr(_thread_local, "cost", 0.0)
-
-    def reset_local_cost():
-        """
-        Reset the accumulated cost for the current thread to zero.
-        """
-        if hasattr(_thread_local, "cost"):
-            _thread_local.cost = 0.0
-
-    @classmethod
-    @contextlib.contextmanager
-    def mock_mode(cls):
-        """
-        Context manager that enables mock mode in the current thread,
-        then restores the previous mode after exiting the block.
-        """
-        old_value = cls._is_mock_mode()
-        cls.set_mock_mode(True)
-        cls.reset_local_cost()
-        try:
-            yield lambda: cls.get_local_cost()
-        finally:
-            cls.set_mock_mode(old_value)
