@@ -224,7 +224,10 @@ class InferenceClient(ServiceClientWrapper, Singleton):
 
     @classmethod
     def fit(cls, X, y, config=None) -> str:
-        return ServiceClient.fit(X, y, config=config)
+        if is_mock_mode():
+            return "mock_id"
+        else:
+            return ServiceClient.fit(X, y, config=config)
 
     @classmethod
     def predict(
@@ -238,8 +241,12 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         y_train=None,
     ):
         if is_mock_mode():
+            if X_train is None or y_train is None:
+                raise ValueError(
+                    "X_train and y_train must be provided in mock mode during prediction."
+                )
             return mock_predict(
-                X, task, train_set_uid, config, predict_params, X_train, y_train
+                X, task, train_set_uid, X_train, y_train, config, predict_params
             )
         else:
             return ServiceClient.predict(

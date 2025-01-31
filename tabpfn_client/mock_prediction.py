@@ -1,6 +1,7 @@
 import threading
 import contextlib
 from typing import Literal
+import numpy as np
 
 _thread_local = threading.local()
 
@@ -31,18 +32,49 @@ def reset_cost():
 
 
 def mock_predict(
-    X,
+    X_test,
     task: Literal["classification", "regression"],
     train_set_uid: str,
+    X_train,
+    y_train,
     config=None,
     predict_params=None,
-    X_train=None,
-    y_train=None,
 ):
+    # Accumulate cost for prediction
     if not hasattr(_thread_local, "cost"):
         _thread_local.cost = 0.0
-    _thread_local.cost += 2
-    return {}
+
+    cost = (
+        (X_train.shape[0] + X_test.shape[0])
+        * X_test.shape[1]
+        * config.get("n_estimators", 4 if task == "classification" else 8)
+    )
+    _thread_local.cost += cost
+
+    # Return random result in the correct format
+    if task == "classification":
+        if (
+            not predict_params["output_type"]
+            or predict_params["output_type"] == "preds"
+        ):
+            return np.random.rand(X_test.shape[0])
+        elif predict_params["output_type"] == "probas":
+            return np.random.rand(X_test.shape[0], 2)
+
+    elif task == "regression":
+        if not predict_params["output_type"] or predict_params["output_type"] == "mean":
+            return np.random.rand(X_test.shape[0])
+        elif predict_params["output_type"] == "full":
+            return {
+                "logits": np.random.rand(X_test.shape[0], 5000),
+                "mean": np.random.rand(X_test.shape[0]),
+                "median": np.random.rand(X_test.shape[0]),
+                "mode": np.random.rand(X_test.shape[0]),
+                "quantiles": np.random.rand(3, X_test.shape[0]),
+                "borders": np.random.rand(5001),
+                "ei": np.random.rand(X_test.shape[0]),
+                "pi": np.random.rand(X_test.shape[0]),
+            }
 
 
 @contextlib.contextmanager
