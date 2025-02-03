@@ -59,7 +59,8 @@ def mock_predict(
         ):
             return np.random.rand(X_test.shape[0])
         elif predict_params["output_type"] == "probas":
-            return np.random.rand(X_test.shape[0], 2)
+            probs = np.random.rand(X_test.shape[0], len(np.unique(y_train)))
+            return probs / probs.sum(axis=1, keepdims=True)
 
     elif task == "regression":
         if not predict_params["output_type"] or predict_params["output_type"] == "mean":
