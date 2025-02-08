@@ -109,3 +109,8 @@ endpoints:
     methods: [ "DELETE" ]
     description: "Delete user account, alongside all associated data"
 
+  get_prediction_hits_data:
+    path: "/get_prediction_hits_data/"
+    methods: [ "POST" ]
+    description: "Get prediction hits data for a given user"
+

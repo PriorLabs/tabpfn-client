@@ -81,3 +81,7 @@ def get_access_token() -> str:
 def set_access_token(access_token: str):
     UserAuthenticationClient.set_token(access_token)
     Config.is_initialized = True
+
+def get_usage_details() -> dict:
+    access_token = get_access_token()
+    return ServiceClient.get_prediction_hits_data(access_token)

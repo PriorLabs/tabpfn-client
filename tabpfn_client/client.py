@@ -855,3 +855,23 @@ class ServiceClient(Singleton):
             return True, token
 
         return False, "Browser login failed or was cancelled"
+
+    @classmethod
+    def get_prediction_hits_data(cls, access_token: str):
+        """
+        Get the prediction hits data of the user from the server.
+
+        Returns
+        -------
+        summary: str
+
+        """
+        response = cls.httpx_client.post(
+            cls.server_endpoints.get_prediction_hits_data.path,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        cls._validate_response(response, "get_prediction_hits_data")
+
+        response = response.json()
+
+        return f"Currently, you have used {response['current_usage']} of the allowed limit of {'Unlimited' if int(response['custom_usage_allowed']) == -1 else response['custom_usage_allowed']} credits. The limit will reset at {response['reset_time']}."
