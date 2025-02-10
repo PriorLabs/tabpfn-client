@@ -857,21 +857,17 @@ class ServiceClient(Singleton):
         return False, "Browser login failed or was cancelled"
 
     @classmethod
-    def get_prediction_hits_data(cls, access_token: str):
+    def get_api_usage(cls, access_token: str):
         """
-        Get the prediction hits data of the user from the server.
-
-        Returns
-        -------
-        summary: str
-
+        Retrieve current API usage data of the user from the server.
+        Returns summary: str
         """
         response = cls.httpx_client.post(
-            cls.server_endpoints.get_prediction_hits_data.path,
+            cls.server_endpoints.get_api_usage.path,
             headers={"Authorization": f"Bearer {access_token}"},
         )
-        cls._validate_response(response, "get_prediction_hits_data")
+        cls._validate_response(response, "get_api_usage")
 
         response = response.json()
 
-        return f"Currently, you have used {response['current_usage']} of the allowed limit of {'Unlimited' if int(response['custom_usage_allowed']) == -1 else response['custom_usage_allowed']} credits. The limit will reset at {response['reset_time']}."
+        return f"Currently, you have used {response['current_usage']} of the allowed limit of {'Unlimited' if int(response['usage_limit']) == -1 else response['usage_limit']} credits. The limit will reset at {response['reset_time']}."
