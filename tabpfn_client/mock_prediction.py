@@ -7,6 +7,7 @@ from unittest import mock
 import warnings
 import logging
 import functools
+from tabpfn_client.client import ServiceClient
 # from tabpfn_client import get_api_usage
 
 
@@ -177,18 +178,22 @@ def check_api_credits(func):
     Decorator that first runs the decorated function in mock mode to simulate its credit usage.
     If user has enough credits, function is then executed for real.
     """
+    from tabpfn_client import get_access_token
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         with mock_mode() as get_cost:
             func(*args, **kwargs)
             credit_estimate = get_cost()
-        print(f"Credit estimate: {credit_estimate}")
-        credits_left = 1000000000  # TODO: Get actual credits here
+        access_token = get_access_token()
+        api_usage = ServiceClient.get_api_usage(access_token)
 
-        if credits_left < credit_estimate:
+        if (
+            not api_usage["usage_limit"] == -1
+            and api_usage["usage_limit"] - api_usage["current_usage"] < credit_estimate
+        ):
             raise RuntimeError(
-                f"Not enough credits left. Estimated credit usage: {credit_estimate}, credits left: {credits_left}"
+                f"Not enough credits left. Estimated credit usage: {credit_estimate}, credits left: {api_usage['usage_limit'] - api_usage['current_usage']}"
             )
         else:
             print("Enough credits left.")
