@@ -8,7 +8,6 @@ import warnings
 import logging
 import functools
 from tabpfn_client.client import ServiceClient
-# from tabpfn_client import get_api_usage
 
 
 _thread_local = threading.local()
