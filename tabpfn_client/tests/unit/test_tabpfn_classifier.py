@@ -6,8 +6,9 @@ import json
 import numpy as np
 
 from sklearn.datasets import load_breast_cancer
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.exceptions import NotFittedError
+
 
 from tabpfn_client import init, reset
 from tabpfn_client.estimator import TabPFNClassifier
@@ -836,3 +837,34 @@ class TestTabPFNModelSelection(unittest.TestCase):
         tabpfn_false.fit(X, y)
         y_pred_false = tabpfn_false.predict(test_X)
         self.assertIsNotNone(y_pred_false)
+
+    @patch.object(
+        InferenceClient, "predict", return_value={"probas": np.random.rand(20, 2)}
+    )
+    @patch.object(InferenceClient, "fit", return_value="dummy_uid")
+    def test_cross_validation(self, mock_fit, mock_predict):
+        """Test that TabPFNClassifier works with sklearn's cross_val_score,
+        even when predict_proba is required."""
+
+        # Create synthetic dataset
+        X = np.random.rand(100, 10)
+        y = np.random.randint(0, 2, 100)
+
+        # Initialize classifier
+        clf = TabPFNClassifier()
+
+        # Compute cross validation scores
+        scores = cross_val_score(clf, X, y, cv=5, scoring="roc_auc")
+
+        # Basic validation checks
+        self.assertEqual(len(scores), 5)  # 5-fold CV should return 5 scores
+        self.assertTrue(
+            all(0 <= score <= 1 for score in scores)
+        )  # ROC AUC scores should be between 0 and 1
+
+        # Verify fit and predict were called appropriate number of times
+        # For 5-fold CV, fit should be called 5 times (once per fold)
+        self.assertEqual(mock_fit.call_count, 5)
+
+        # predict_proba should be called 5 times (once per fold)
+        self.assertEqual(mock_predict.call_count, 5)

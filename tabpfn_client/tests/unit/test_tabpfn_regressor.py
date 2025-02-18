@@ -4,7 +4,7 @@ from unittest.mock import patch
 import shutil
 import numpy as np
 from sklearn.datasets import load_diabetes
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.exceptions import NotFittedError
 
 from tabpfn_client import init, reset
@@ -608,6 +608,33 @@ class TestTabPFNRegressorInference(unittest.TestCase):
         with self.assertRaises(ValueError) as cm:
             tabpfn.fit(X, y_pd_na)
         self.assertIn("contains NaN.", str(cm.exception))
+
+    @patch.object(InferenceClient, "predict", return_value={"mean": np.random.rand(20)})
+    @patch.object(InferenceClient, "fit", return_value="dummy_uid")
+    def test_cross_validation(self, mock_fit, mock_predict):
+        """Test that TabPFNRegressor works with sklearn's cross_val_score."""
+
+        # Create synthetic dataset
+        X = np.random.rand(100, 10)
+        y = np.random.rand(100)
+
+        # Initialize regressor
+        reg = TabPFNRegressor()
+
+        # Compute cross validation scores using R² score
+        scores = cross_val_score(reg, X, y, cv=5, scoring="r2")
+
+        # Basic validation checks
+        self.assertEqual(len(scores), 5)  # 5-fold CV should return 5 scores
+        # R² scores are typically <= 1, but can be negative for poor models
+        self.assertTrue(all(score <= 1 for score in scores))
+
+        # Verify fit and predict were called appropriate number of times
+        # For 5-fold CV, fit should be called 5 times (once per fold)
+        self.assertEqual(mock_fit.call_count, 5)
+
+        # predict should be called 5 times (once per fold)
+        self.assertEqual(mock_predict.call_count, 5)
 
 
 class TestTabPFNModelSelection(unittest.TestCase):
