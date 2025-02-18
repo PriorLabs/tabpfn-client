@@ -219,7 +219,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             )
 
 
-class TabPFNRegressor(BaseEstimator, RegressorMixin, TabPFNModelSelection):
+class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
         "default",
         "2noar4o2",
