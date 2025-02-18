@@ -838,9 +838,7 @@ class TestTabPFNModelSelection(unittest.TestCase):
         y_pred_false = tabpfn_false.predict(test_X)
         self.assertIsNotNone(y_pred_false)
 
-    @patch.object(
-        InferenceClient, "predict", return_value={"probas": np.random.rand(20, 2)}
-    )
+    @patch.object(InferenceClient, "predict", return_value=np.random.rand(20, 2))
     @patch.object(InferenceClient, "fit", return_value="dummy_uid")
     def test_cross_validation(self, mock_fit, mock_predict):
         """Test that TabPFNClassifier works with sklearn's cross_val_score,

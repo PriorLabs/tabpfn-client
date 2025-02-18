@@ -609,7 +609,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             tabpfn.fit(X, y_pd_na)
         self.assertIn("contains NaN.", str(cm.exception))
 
-    @patch.object(InferenceClient, "predict", return_value={"mean": np.random.rand(20)})
+    @patch.object(InferenceClient, "predict", return_value=np.random.rand(20))
     @patch.object(InferenceClient, "fit", return_value="dummy_uid")
     def test_cross_validation(self, mock_fit, mock_predict):
         """Test that TabPFNRegressor works with sklearn's cross_val_score."""
