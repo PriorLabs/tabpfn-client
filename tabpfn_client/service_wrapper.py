@@ -240,6 +240,9 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         X_train=None,
         y_train=None,
     ):
+        # Check if we are in mock mode, which is used when only trying to simulate the credits
+        # and time needed for doing a prediction. In this case, only call a mock prediction
+        # function, otherwise call the normal prediction function.
         if is_mock_mode():
             if X_train is None or y_train is None:
                 raise ValueError(
