@@ -85,4 +85,5 @@ def set_access_token(access_token: str):
 
 def get_api_usage() -> dict:
     access_token = get_access_token()
-    return ServiceClient.get_api_usage(access_token)
+    response = ServiceClient.get_api_usage(access_token)
+    return f"Currently, you have used {response['current_usage']} of the allowed limit of {'Unlimited' if int(response['usage_limit']) == -1 else response['usage_limit']} credits. The limit will reset at {response['reset_time']}."

@@ -197,6 +197,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             train_set_uid=self.last_train_set_uid,
             config=estimator_param,
             predict_params={"output_type": output_type},
+            X_train=self.last_train_X,
+            y_train=self.last_train_y,
         )
         return res
 
