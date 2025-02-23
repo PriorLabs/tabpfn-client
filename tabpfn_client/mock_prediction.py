@@ -110,6 +110,11 @@ def mock_predict(
     prediction function. Outputs random results in the expacted format and
     keeps track of the simulated cost and time.
     """
+    if X_train is None or y_train is None:
+        raise ValueError(
+            "X_train and y_train must be provided in mock mode during prediction."
+        )
+
     duration = estimate_duration(
         X_train.shape[0] + X_test.shape[0], X_test.shape[1], task, config
     )

@@ -244,10 +244,6 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         # and time needed for doing a prediction. In this case, only call a mock prediction
         # function, otherwise call the normal prediction function.
         if is_mock_mode():
-            if X_train is None or y_train is None:
-                raise ValueError(
-                    "X_train and y_train must be provided in mock mode during prediction."
-                )
             return mock_predict(
                 X, task, train_set_uid, X_train, y_train, config, predict_params
             )
