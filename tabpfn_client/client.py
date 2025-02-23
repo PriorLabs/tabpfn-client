@@ -870,4 +870,4 @@ class ServiceClient(Singleton):
 
         response = response.json()
 
-        return f"Currently, you have used {response['current_usage']} of the allowed limit of {'Unlimited' if int(response['usage_limit']) == -1 else response['usage_limit']} credits. The limit will reset at {response['reset_time']}."
+        return response

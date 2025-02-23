@@ -8,6 +8,7 @@ from typing import Literal
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client.tabpfn_common_utils.utils import Singleton
+from tabpfn_client.mock_prediction import is_mock_mode, mock_predict
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +214,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
     Wrapper of ServiceClient to handle inference, including:
     - fitting
     - prediction
+    - mock prediction
     """
 
     def __new__(self):
@@ -222,7 +224,10 @@ class InferenceClient(ServiceClientWrapper, Singleton):
 
     @classmethod
     def fit(cls, X, y, config=None) -> str:
-        return ServiceClient.fit(X, y, config=config)
+        if is_mock_mode():
+            return "mock_id"
+        else:
+            return ServiceClient.fit(X, y, config=config)
 
     @classmethod
     def predict(
@@ -235,12 +240,20 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         X_train=None,
         y_train=None,
     ):
-        return ServiceClient.predict(
-            train_set_uid=train_set_uid,
-            x_test=X,
-            tabpfn_config=config,
-            predict_params=predict_params,
-            task=task,
-            X_train=X_train,
-            y_train=y_train,
-        )
+        # Check if we are in mock mode, which is used when only trying to simulate the credits
+        # and time needed for doing a prediction. In this case, only call a mock prediction
+        # function, otherwise call the normal prediction function.
+        if is_mock_mode():
+            return mock_predict(
+                X, task, train_set_uid, X_train, y_train, config, predict_params
+            )
+        else:
+            return ServiceClient.predict(
+                train_set_uid=train_set_uid,
+                x_test=X,
+                tabpfn_config=config,
+                predict_params=predict_params,
+                task=task,
+                X_train=X_train,
+                y_train=y_train,
+            )
