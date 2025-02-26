@@ -6,7 +6,7 @@ from tabpfn_client.mock_prediction import (
     mock_mode,
     check_api_credits,
     get_mock_time,
-    get_cost,
+    get_mock_cost,
     estimate_duration,
     is_mock_mode,
 )
@@ -28,7 +28,7 @@ class TestMockPrediction(unittest.TestCase):
         with mock_mode():
             self.assertTrue(is_mock_mode())
             initial_time = get_mock_time()
-            initial_cost = get_cost()
+            initial_cost = get_mock_cost()
 
             # Use TabPFNClassifier for prediction
             clf = TabPFNClassifier(n_estimators=4)
@@ -50,7 +50,7 @@ class TestMockPrediction(unittest.TestCase):
                 * self.X_test.shape[1]
                 * self.config["n_estimators"]
             )
-            self.assertEqual(get_cost() - initial_cost, expected_cost)
+            self.assertEqual(get_mock_cost() - initial_cost, expected_cost)
 
         # Verify mock mode is disabled after context
         self.assertFalse(is_mock_mode())
