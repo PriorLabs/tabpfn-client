@@ -25,9 +25,13 @@ class TestMockPrediction(unittest.TestCase):
         """Test that mock mode properly tracks time and cost"""
         self.assertFalse(is_mock_mode())
 
-        # Patch get_access_token to return a fake token
-        with patch("tabpfn_client.config.get_access_token") as mock_token:
+        # Patch get_access_token and init to prevent authentication prompts
+        with (
+            patch("tabpfn_client.config.get_access_token") as mock_token,
+            patch("tabpfn_client.config.init") as mock_init,
+        ):
             mock_token.return_value = "fake_token"
+            mock_init.return_value = None  # Do nothing when init is called
 
             with mock_mode():
                 self.assertTrue(is_mock_mode())
@@ -63,9 +67,13 @@ class TestMockPrediction(unittest.TestCase):
 
     def test_mock_predict_output_consistency(self):
         """Test that mock predictions maintain consistent shapes and ranges"""
-        # Patch get_access_token to return a fake token
-        with patch("tabpfn_client.config.get_access_token") as mock_token:
+        # Patch get_access_token and init to prevent authentication prompts
+        with (
+            patch("tabpfn_client.config.get_access_token") as mock_token,
+            patch("tabpfn_client.config.init") as mock_init,
+        ):
             mock_token.return_value = "fake_token"
+            mock_init.return_value = None  # Do nothing when init is called
 
             with mock_mode():
                 # Test classification probabilities
@@ -109,14 +117,16 @@ class TestMockPrediction(unittest.TestCase):
             clf.predict(self.X_test)
             return "success"
 
-        # Mock both get_access_token and get_api_usage
+        # Mock both get_access_token, init, and get_api_usage
         with (
             patch("tabpfn_client.config.get_access_token") as mock_token,
+            patch("tabpfn_client.config.init") as mock_init,
             patch(
                 "tabpfn_client.mock_prediction.ServiceClient.get_api_usage"
             ) as mock_usage,
         ):
             mock_token.return_value = "fake_token"
+            mock_init.return_value = None  # Do nothing when init is called
 
             # Test when we have enough credits
             mock_usage.return_value = {"usage_limit": 10000, "current_usage": 0}
