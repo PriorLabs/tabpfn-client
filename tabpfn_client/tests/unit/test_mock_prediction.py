@@ -25,68 +25,78 @@ class TestMockPrediction(unittest.TestCase):
         """Test that mock mode properly tracks time and cost"""
         self.assertFalse(is_mock_mode())
 
-        with mock_mode():
-            self.assertTrue(is_mock_mode())
-            initial_time = get_mock_time()
-            initial_cost = get_mock_cost()
+        # Patch get_access_token to return a fake token
+        with patch("tabpfn_client.config.get_access_token") as mock_token:
+            mock_token.return_value = "fake_token"
 
-            # Use TabPFNClassifier for prediction
-            clf = TabPFNClassifier(n_estimators=4)
-            clf.fit(self.X_train, self.y_train)
-            clf.predict(self.X_test)
+            with mock_mode():
+                self.assertTrue(is_mock_mode())
+                initial_time = get_mock_time()
+                initial_cost = get_mock_cost()
 
-            # Verify time increased by the estimated duration
-            expected_duration = estimate_duration(
-                self.X_train.shape[0] + self.X_test.shape[0],
-                self.X_test.shape[1],
-                "classification",
-                self.config,
-            )
-            self.assertAlmostEqual(get_mock_time() - initial_time, expected_duration)
+                # Use TabPFNClassifier for prediction
+                clf = TabPFNClassifier(n_estimators=4)
+                clf.fit(self.X_train, self.y_train)
+                clf.predict(self.X_test)
 
-            # Verify cost was tracked
-            expected_cost = (
-                (self.X_train.shape[0] + self.X_test.shape[0])
-                * self.X_test.shape[1]
-                * self.config["n_estimators"]
-            )
-            self.assertEqual(get_mock_cost() - initial_cost, expected_cost)
+                # Verify time increased by the estimated duration
+                expected_duration = estimate_duration(
+                    self.X_train.shape[0] + self.X_test.shape[0],
+                    self.X_test.shape[1],
+                    "classification",
+                    self.config,
+                )
+                self.assertAlmostEqual(
+                    get_mock_time() - initial_time, expected_duration
+                )
+
+                # Verify cost was tracked
+                expected_cost = (
+                    (self.X_train.shape[0] + self.X_test.shape[0])
+                    * self.X_test.shape[1]
+                    * self.config["n_estimators"]
+                )
+                self.assertEqual(get_mock_cost() - initial_cost, expected_cost)
 
         # Verify mock mode is disabled after context
         self.assertFalse(is_mock_mode())
 
     def test_mock_predict_output_consistency(self):
         """Test that mock predictions maintain consistent shapes and ranges"""
-        with mock_mode():
-            # Test classification probabilities
-            clf = TabPFNClassifier(n_estimators=4)
-            clf.fit(self.X_train, self.y_train)
-            result = clf.predict_proba(self.X_test)
+        # Patch get_access_token to return a fake token
+        with patch("tabpfn_client.config.get_access_token") as mock_token:
+            mock_token.return_value = "fake_token"
 
-            self.assertEqual(
-                result.shape, (self.X_test.shape[0], len(np.unique(self.y_train)))
-            )
-            self.assertTrue(np.all(result >= 0) and np.all(result <= 1))
-            np.testing.assert_array_almost_equal(
-                result.sum(axis=1), np.ones(self.X_test.shape[0])
-            )
+            with mock_mode():
+                # Test classification probabilities
+                clf = TabPFNClassifier(n_estimators=4)
+                clf.fit(self.X_train, self.y_train)
+                result = clf.predict_proba(self.X_test)
 
-            # Test regression with full output
-            y_train_reg = np.random.rand(100)
-            reg = TabPFNRegressor(n_estimators=8)
-            reg.fit(self.X_train, y_train_reg)
-            result = reg.predict(self.X_test, output_type="full")
+                self.assertEqual(
+                    result.shape, (self.X_test.shape[0], len(np.unique(self.y_train)))
+                )
+                self.assertTrue(np.all(result >= 0) and np.all(result <= 1))
+                np.testing.assert_array_almost_equal(
+                    result.sum(axis=1), np.ones(self.X_test.shape[0])
+                )
 
-            # Check all required fields are present with correct shapes
-            self.assertTrue(isinstance(result, dict))
-            self.assertEqual(result["logits"].shape, (self.X_test.shape[0], 5000))
-            self.assertEqual(result["mean"].shape, (self.X_test.shape[0],))
-            self.assertEqual(result["median"].shape, (self.X_test.shape[0],))
-            self.assertEqual(result["mode"].shape, (self.X_test.shape[0],))
-            self.assertEqual(result["quantiles"].shape, (3, self.X_test.shape[0]))
-            self.assertEqual(result["borders"].shape, (5001,))
-            self.assertEqual(result["ei"].shape, (self.X_test.shape[0],))
-            self.assertEqual(result["pi"].shape, (self.X_test.shape[0],))
+                # Test regression with full output
+                y_train_reg = np.random.rand(100)
+                reg = TabPFNRegressor(n_estimators=8)
+                reg.fit(self.X_train, y_train_reg)
+                result = reg.predict(self.X_test, output_type="full")
+
+                # Check all required fields are present with correct shapes
+                self.assertTrue(isinstance(result, dict))
+                self.assertEqual(result["logits"].shape, (self.X_test.shape[0], 5000))
+                self.assertEqual(result["mean"].shape, (self.X_test.shape[0],))
+                self.assertEqual(result["median"].shape, (self.X_test.shape[0],))
+                self.assertEqual(result["mode"].shape, (self.X_test.shape[0],))
+                self.assertEqual(result["quantiles"].shape, (3, self.X_test.shape[0]))
+                self.assertEqual(result["borders"].shape, (5001,))
+                self.assertEqual(result["ei"].shape, (self.X_test.shape[0],))
+                self.assertEqual(result["pi"].shape, (self.X_test.shape[0],))
 
     def test_check_api_credits_decorator(self):
         """Test that the credit checker properly validates available credits"""
