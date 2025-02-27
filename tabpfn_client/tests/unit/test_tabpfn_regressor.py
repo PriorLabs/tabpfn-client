@@ -77,9 +77,9 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         y_pred = tabpfn.predict(self.X_test, output_type=metric)
         self.assertTrue(np.all(np.array(response) == y_pred))
 
-        self.assertIn(
-            "n_estimators%22%3A%2010",
-            str(predict_route.calls.last.request.url),
+        self.assertTrue(
+            "n_estimators%22%3A%2010" in str(predict_route.calls.last.request.url)
+            or "n_estimators%22%3A+10" in str(predict_route.calls.last.request.url),
             "check that n_estimators is passed to the server",
         )
 
