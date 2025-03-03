@@ -2,5 +2,5 @@
 
 # lint and format checking
 pytest
-pre-commit==4.0.1
-ruff == 0.9.1
+pre-commit==4.1.0
+ruff == 0.9.9
