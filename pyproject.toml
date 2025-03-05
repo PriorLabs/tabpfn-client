@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "tabpfn-client"
 version = "0.1.4"
-requires-python = ">=3.9,<3.12"
+requires-python = ">=3.9,<=3.12"
 # doesn't work with 3.12 and 3.13 because cityhash wheels are not available yet
 # (see https://github.com/escherba/python-cityhash/issues/88)
 # (can be bypassed by installing with conda)
@@ -25,6 +25,7 @@ classifiers = [
   'Programming Language :: Python :: 3.9',
   'Programming Language :: Python :: 3.10',
   'Programming Language :: Python :: 3.11',
+  'Programming Language :: Python :: 3.12',
 ]
 license = { file = "LICENSE" }
 
