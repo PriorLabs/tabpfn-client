@@ -11,6 +11,10 @@ import functools
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.tabpfn_common_utils.expense_estimation import estimate_duration
 
+
+COST_ESTIMATION_LATENCY_OFFSET = 1.0
+
+
 # For seamlessly switching between a mock mode for simulating prediction
 # costs and real prediction, use thread-local variables to keep track of the
 # current mode, simulated costs and time.
@@ -75,7 +79,7 @@ def mock_predict(
         num_features=X_test.shape[1],
         task=task,
         tabpfn_config=config,
-        latency_offset=1.0,  # To slightly overestimate (safer)
+        latency_offset=COST_ESTIMATION_LATENCY_OFFSET,  # To slightly overestimate (safer)
     )
     increment_mock_time(duration)
 

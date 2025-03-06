@@ -9,6 +9,7 @@ from tabpfn_client.mock_prediction import (
     get_mock_cost,
     estimate_duration,
     is_mock_mode,
+    COST_ESTIMATION_LATENCY_OFFSET,
 )
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
 
@@ -50,10 +51,11 @@ class TestMockPrediction(unittest.TestCase):
 
                 # Verify time increased by the estimated duration
                 expected_duration = estimate_duration(
-                    self.X_train.shape[0] + self.X_test.shape[0],
-                    self.X_test.shape[1],
-                    "classification",
-                    self.config,
+                    num_rows=self.X_train.shape[0] + self.X_test.shape[0],
+                    num_features=self.X_test.shape[1],
+                    task="classification",
+                    tabpfn_config=self.config,
+                    latency_offset=COST_ESTIMATION_LATENCY_OFFSET,
                 )
                 self.assertAlmostEqual(
                     get_mock_time() - initial_time, expected_duration
