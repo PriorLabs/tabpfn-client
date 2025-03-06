@@ -75,7 +75,7 @@ def mock_predict(
         num_features=X_test.shape[1],
         task=task,
         tabpfn_config=config,
-        latency_offset=1.0, # To slightly overestimate (safer)
+        latency_offset=1.0,  # To slightly overestimate (safer)
     )
     increment_mock_time(duration)
 
