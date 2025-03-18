@@ -12,7 +12,7 @@ from unittest.mock import patch
 from sklearn.datasets import load_breast_cancer, load_diabetes
 from sklearn.model_selection import train_test_split
 
-from tabpfn_client import UserDataClient
+# from tabpfn_client import UserDataClient
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
 
 logging.basicConfig(level=logging.DEBUG)
@@ -37,7 +37,8 @@ if __name__ == "__main__":
         print("predicting_proba")
         print(tabpfn.predict_proba(X_test))
 
-        print(UserDataClient.get_data_summary())
+        # can be slow if you have a lot of data
+        # print(UserDataClient.get_data_summary())
 
         X, y = load_diabetes(return_X_y=True)
         X_train, X_test, y_train, y_test = train_test_split(
@@ -50,7 +51,7 @@ if __name__ == "__main__":
         print("predicting reg")
         print(tabpfn.predict(X_test, output_type="mean"))
 
-        print(UserDataClient.get_data_summary())
+        # print(UserDataClient.get_data_summary())
         # test predict_full
         print("predicting ")
         print(

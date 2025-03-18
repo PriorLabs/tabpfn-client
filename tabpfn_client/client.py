@@ -13,7 +13,7 @@ import numpy as np
 from omegaconf import OmegaConf
 import json
 from typing import Literal, Optional, Union
-from cityhash import CityHash128
+import hashlib
 import os
 from collections import OrderedDict
 import sseclient
@@ -77,7 +77,7 @@ class DatasetUIDCacheManager:
         combined_bytes = b"".join(
             item if isinstance(item, bytes) else str.encode(item) for item in args
         )
-        return str(CityHash128(combined_bytes))
+        return hashlib.md5(combined_bytes).hexdigest()
 
     def get_dataset_uid(self, *args):
         """
