@@ -2,3 +2,4 @@
 
 scikit-learn==1.6.1
 respx==0.22.0
+typing_extensions==4.12.2
