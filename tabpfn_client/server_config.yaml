@@ -113,4 +113,9 @@ endpoints:
     path: "/get_api_usage/"
     methods: [ "POST" ]
     description: "Get prediction hits data for a given user"
+  
+  generate_upload_url:
+    path: "/generate-upload-url/"
+    methods: ["POST"]
+    description: "Generate a signed URL for direct dataset file upload to cloud storage"
 
