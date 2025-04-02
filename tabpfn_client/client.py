@@ -25,6 +25,7 @@ from tabpfn_client.tabpfn_common_utils import utils as common_utils
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client.browser_auth import BrowserAuthHandler
 from tabpfn_client.tabpfn_common_utils.utils import Singleton
+from tabpfn_client.tabpfn_common_utils.usage_analytics import AnalyticsHttpClient
 
 logger = logging.getLogger(__name__)
 
@@ -157,10 +158,11 @@ class ServiceClient(Singleton):
     httpx_timeout_s = (
         4 * 5 * 60 + 15  # temporary workaround for slow computation on server side
     )
-    httpx_client = httpx.Client(
+    httpx_client = AnalyticsHttpClient(
         base_url=base_url,
         timeout=httpx_timeout_s,
         headers={"client-version": get_client_version()},
+        module_name="tabpfn_client",
     )
 
     _access_token = None
