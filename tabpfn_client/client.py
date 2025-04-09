@@ -22,7 +22,7 @@ import time
 from tqdm import tqdm
 
 from tabpfn_client.tabpfn_common_utils import utils as common_utils
-from tabpfn_client.constants import CACHE_DIR
+from tabpfn_client.constants import CACHE_DIR, LARGE_DATASET_THRESHOLD
 from tabpfn_client.browser_auth import BrowserAuthHandler
 from tabpfn_client.tabpfn_common_utils.utils import Singleton
 
@@ -223,36 +223,51 @@ class ServiceClient(Singleton):
         if cached_dataset_uid:
             return cached_dataset_uid
 
-        # Generate Upload URLs
-        response_x = cls.httpx_client.post(
-            url=cls.server_endpoints.generate_upload_url.path,
-            file_type="x_file",
-            file_name="x_train_filename",
-        )
-        cls._validate_response(response_x, "fit")
-        response_x = response_x.json()
+        num_cells = X.shape[0] * (X.shape[1] + 1)
+        if num_cells > LARGE_DATASET_THRESHOLD:
+            print("Large dataset upload triggered")
+            # Generate Upload URLs
+            response_x = cls.httpx_client.post(
+                url=cls.server_endpoints.generate_upload_url.path,
+                params={"file_type": "x_file", "file_name": "x_train_filename"},
+            )
+            cls._validate_response(response_x, "fit")
+            response_x = response_x.json()
 
-        response_y = cls.httpx_client.post(
-            url=cls.server_endpoints.generate_upload_url.path,
-            file_type="y_file",
-            file_name="y_train_filename",
-        )
-        cls._validate_response(response_y, "fit")
-        response_y = response_y.json()
+            response_y = cls.httpx_client.post(
+                url=cls.server_endpoints.generate_upload_url.path,
+                params={"file_type": "y_file", "file_name": "y_train_filename"},
+            )
+            cls._validate_response(response_y, "fit")
+            response_y = response_y.json()
 
-        # Upload train and test set to GCS
-        response = cls.httpx_client.put(response_x["signed_url"], data=X_serialized)
-        cls._validate_response(response, "fit")
-        response = cls.httpx_client.put(response_y["signed_url"], data=y_serialized)
-        cls._validate_response(response, "fit")
+            # Upload train and test set to GCS
+            response = cls.httpx_client.put(response_x["signed_url"], data=X_serialized)
+            cls._validate_response(response, "fit")
+            response = cls.httpx_client.put(response_y["signed_url"], data=y_serialized)
+            cls._validate_response(response, "fit")
 
-        # Call fit endpoint
-        response = cls.httpx_client.post(
-            url=cls.server_endpoints.fit.path,
-            x_gcs_path=response_x["gcs_path"],
-            y_gcs_path=response_y["gcs_path"],
-            params={"tabpfn_systems": json.dumps(tabpfn_systems)},
-        )
+            # Call fit endpoint
+            response = cls.httpx_client.post(
+                url=cls.server_endpoints.fit.path,
+                params={
+                    "x_gcs_path": response_x["gcs_path"],
+                    "y_gcs_path": response_y["gcs_path"],
+                    "tabpfn_systems": json.dumps(tabpfn_systems),
+                },
+            )
+        else:
+            # Small dataset, so upload directly.
+            response = cls.httpx_client.post(
+                url=cls.server_endpoints.fit.path,
+                files=common_utils.to_httpx_post_file_format(
+                    [
+                        ("x_file", "x_train_filename", X_serialized),
+                        ("y_file", "y_train_filename", y_serialized),
+                    ]
+                ),
+                params={"tabpfn_systems": json.dumps(tabpfn_systems)},
+            )
 
         cls._validate_response(response, "fit")
 
@@ -289,6 +304,8 @@ class ServiceClient(Singleton):
 
         x_test_serialized = common_utils.serialize_to_csv_formatted_bytes(x_test)
 
+        num_cells = x_test.shape[0] * (x_test.shape[1] + 1)
+
         params = {
             "train_set_uid": train_set_uid,
             "task": task,
@@ -323,7 +340,7 @@ class ServiceClient(Singleton):
         for attempt in range(max_attempts):
             try:
                 with cls._make_prediction_request(
-                    cached_test_set_uid, x_test_serialized, params
+                    cached_test_set_uid, x_test_serialized, params, num_cells
                 ) as response:
                     cls._validate_response(response, "predict")
                     # Handle updates from server
@@ -415,7 +432,9 @@ class ServiceClient(Singleton):
         return result
 
     @classmethod
-    def _make_prediction_request(cls, test_set_uid, x_test_serialized, params):
+    def _make_prediction_request(
+        cls, test_set_uid, x_test_serialized, params, num_cells
+    ):
         """
         Helper function to upload test set if required and make the prediction request to the server.
         """
@@ -426,26 +445,43 @@ class ServiceClient(Singleton):
                 method="post", url=cls.server_endpoints.predict.path, params=params
             )
         else:
-            # Generate upload URL
-            url_response = cls.httpx_client.post(
-                url=cls.server_endpoints.generate_upload_url.path,
-                file_type="x_file",
-                file_name="x_test_filename",
-            )
-            cls._validate_response(url_response, "predict")
-            url_response = url_response.json()
-            # Upload test set to GCS
-            response = cls.httpx_client.put(
-                url_response["signed_url"], data=x_test_serialized
-            )
-            cls._validate_response(response, "predict")
-            # Make prediction request
-            response = cls.httpx_client.stream(
-                method="post",
-                url=cls.server_endpoints.predict.path,
-                params=params,
-                x_gcs_path=url_response["gcs_path"],
-            )
+            if num_cells > LARGE_DATASET_THRESHOLD:
+                # Generate upload URL
+                url_response = cls.httpx_client.post(
+                    url=cls.server_endpoints.generate_upload_url.path,
+                    params={
+                        "file_type": "x_file",
+                        "file_name": "x_test_filename",
+                    },
+                )
+                cls._validate_response(url_response, "predict")
+                url_response = url_response.json()
+                # Upload test set to GCS
+                response = cls.httpx_client.put(
+                    url_response["signed_url"], data=x_test_serialized
+                )
+                cls._validate_response(response, "predict")
+                # Make prediction request
+                response = cls.httpx_client.stream(
+                    method="post",
+                    url=cls.server_endpoints.predict.path,
+                    params={
+                        **params,
+                        "x_gcs_path": url_response["gcs_path"],
+                    },
+                )
+            else:
+                # Small dataset, so upload directly.
+                response = cls.httpx_client.stream(
+                    method="post",
+                    url=cls.server_endpoints.predict.path,
+                    files=common_utils.to_httpx_post_file_format(
+                        [
+                            ("x_file", "x_test_filename", x_test_serialized),
+                        ]
+                    ),
+                    params=params,
+                )
         return response
 
     @staticmethod
