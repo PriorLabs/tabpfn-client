@@ -169,6 +169,10 @@ class ServiceClient(Singleton):
     dataset_uid_cache_manager = DatasetUIDCacheManager()
 
     @classmethod
+    def set_module_name(cls, module_name: str):
+        cls.httpx_client.module_name = module_name
+
+    @classmethod
     def get_access_token(cls):
         return cls._access_token
 

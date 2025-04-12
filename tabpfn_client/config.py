@@ -21,7 +21,10 @@ class Config:
     use_server = False
 
 
-def init(use_server=True):
+def init(
+    use_server=True,
+    module_name="tabpfn_client",
+):
     # initialize config
     Config.use_server = use_server
 
@@ -30,6 +33,8 @@ def init(use_server=True):
         return
 
     if use_server:
+        ServiceClient.set_module_name(module_name)
+
         # check connection to server
         if not UserAuthenticationClient.is_accessible_connection():
             raise RuntimeError(
