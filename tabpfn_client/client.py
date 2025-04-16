@@ -229,24 +229,31 @@ class ServiceClient(Singleton):
             # Generate Upload URLs
             response_x = cls.httpx_client.post(
                 url=cls.server_endpoints.generate_upload_url.path,
-                params={"file_type": "x_file", "file_name": "x_train_filename"},
+                json={"file_type": "x_train", "file_name": "x_train_filename"},
             )
             cls._validate_response(response_x, "fit")
             response_x = response_x.json()
 
             response_y = cls.httpx_client.post(
                 url=cls.server_endpoints.generate_upload_url.path,
-                params={"file_type": "y_file", "file_name": "y_train_filename"},
+                json={"file_type": "y_train", "file_name": "y_train_filename"},
             )
             cls._validate_response(response_y, "fit")
             response_y = response_y.json()
 
             # Upload train and test set to GCS
-            response = cls.httpx_client.put(response_x["signed_url"], data=X_serialized)
+            response = cls.httpx_client.put(
+                response_x["signed_url"],
+                data=X_serialized,
+                headers={"content-type": "text/csv"},
+            )
             cls._validate_response(response, "fit")
-            response = cls.httpx_client.put(response_y["signed_url"], data=y_serialized)
+            response = cls.httpx_client.put(
+                response_y["signed_url"],
+                data=y_serialized,
+                headers={"content-type": "text/csv"},
+            )
             cls._validate_response(response, "fit")
-
             # Call fit endpoint
             response = cls.httpx_client.post(
                 url=cls.server_endpoints.fit.path,
@@ -449,8 +456,8 @@ class ServiceClient(Singleton):
                 # Generate upload URL
                 url_response = cls.httpx_client.post(
                     url=cls.server_endpoints.generate_upload_url.path,
-                    params={
-                        "file_type": "x_file",
+                    json={
+                        "file_type": "x_test",
                         "file_name": "x_test_filename",
                     },
                 )
@@ -458,7 +465,9 @@ class ServiceClient(Singleton):
                 url_response = url_response.json()
                 # Upload test set to GCS
                 response = cls.httpx_client.put(
-                    url_response["signed_url"], data=x_test_serialized
+                    url_response["signed_url"],
+                    data=x_test_serialized,
+                    headers={"content-type": "text/csv"},
                 )
                 cls._validate_response(response, "predict")
                 # Make prediction request
