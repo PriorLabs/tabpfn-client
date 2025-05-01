@@ -225,7 +225,6 @@ class ServiceClient(Singleton):
 
         num_cells = X.shape[0] * (X.shape[1] + 1)
         if num_cells > LARGE_DATASET_THRESHOLD:
-            print("Large dataset upload triggered")
             # Generate Upload URLs
             response_x = cls.httpx_client.post(
                 url=cls.server_endpoints.generate_upload_url.path,
