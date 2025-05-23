@@ -4,3 +4,5 @@
 from pathlib import Path
 
 CACHE_DIR = Path(__file__).parent.resolve() / ".tabpfn"
+
+CELL_THRESHOLD_LARGE_DATASET = 500000
