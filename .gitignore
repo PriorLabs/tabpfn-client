@@ -161,3 +161,8 @@ cython_debug/
 
 models_diff/
 tabpfn_client/.tabpfn/
+*.node
+/node_modules
+package-lock.json
+package.json
+.DS_Store

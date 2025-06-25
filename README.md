@@ -1,22 +1,24 @@
 # TabPFN Client
+
 [![PyPI version](https://badge.fury.io/py/tabpfn-client.svg)](https://badge.fury.io/py/tabpfn-client)
 [![Discord](https://img.shields.io/discord/1285598202732482621?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.com/channels/1285598202732482621/)
-[![colab](https://colab.research.google.com/assets/colab-badge.svg)](https://tinyurl.com/tabpfn-colab-online)
+[![colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/PriorLabs/TabPFN/blob/main/examples/notebooks/TabPFN_Demo_Local.ipynb)
 [![Documentation](https://img.shields.io/badge/docs-priorlabs.ai-blue)](https://priorlabs.ai/docs)
 [![Twitter Follow](https://img.shields.io/twitter/follow/Prior_Labs?style=social)](https://twitter.com/Prior_Labs)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python Versions](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://pypi.org/project/tabpfn-client/)
 ![Last Commit](https://img.shields.io/github/last-commit/automl/tabpfn-client)
 
-
 TabPFN is a foundation model for tabular data that outperforms traditional methods while being dramatically faster. This client library provides easy access to the TabPFN API, enabling state-of-the-art tabular machine learning in just a few lines of code.
 
-📚 For detailed usage examples and best practices, check out our [Interactive Colab Tutorial](https://tinyurl.com/tabpfn-colab-online)
+📚 For detailed usage examples and best practices, check out our [Interactive Colab Tutorial](https://colab.research.google.com/github/PriorLabs/TabPFN/blob/main/examples/notebooks/TabPFN_Demo_Local.ipynb)
 
 ## ⚠️ Alpha Release Note
+
 This is an alpha release. While we've tested it thoroughly in our use cases, you may encounter occasional issues. We appreciate your understanding and feedback as we continue to improve the service.
 
 This is a cloud-based service. Your data will be sent to our servers for processing.
+
 - Do NOT upload any Personally Identifiable Information (PII)
 - Do NOT upload any sensitive or confidential data
 - Do NOT upload any data you don't have permission to share
@@ -35,11 +37,13 @@ Choose the right TabPFN implementation for your needs:
 ## 🏁 Quick Start
 
 ### Installation
+
 ```bash
 pip install tabpfn-client
 ```
 
 ### Basic Usage
+
 ```python
 from tabpfn_client import init, TabPFNClassifier, TabPFNRegressor
 from sklearn.datasets import load_breast_cancer
@@ -61,50 +65,59 @@ probabilities = model.predict_proba(X_test)
 
 ### Best Results
 
-For optimal performance, use the `AutoTabPFNClassifier` or `AutoTabPFNRegressor` for post-hoc ensembling. These can be found in the [TabPFN Extensions](https://github.com/PriorLabs/tabpfn-extensions) repository. Post-hoc ensembling combines multiple TabPFN models into an ensemble. 
+For optimal performance, use the `AutoTabPFNClassifier` or `AutoTabPFNRegressor` for post-hoc ensembling. These can be found in the [TabPFN Extensions](https://github.com/PriorLabs/tabpfn-extensions) repository. Post-hoc ensembling combines multiple TabPFN models into an ensemble.
 
 ## 🔑 Authentication
+
 ### Load Your Token
+
 ```python
 import tabpfn_client
 token = tabpfn_client.get_access_token()
 ```
 
 and login (on another machine) using your access token, skipping the interactive flow, use:
+
 ```python
 tabpfn_client.set_access_token(token)
 ```
 
 ## 🤝 Join Our Community
+
 We're building the future of tabular machine learning and would love your involvement! Here's how you can participate and get help:
 
 1. **Try TabPFN**: Use it in your projects and share your experience
-2. **Connect & Learn**: 
+2. **Connect & Learn**:
    - Join our [Discord Community](https://discord.gg/VJRuU3bSxt) for discussions and support
    - Read our [Documentation](https://priorlabs.ai/) for detailed guides
    - Check out [GitHub Issues](https://github.com/automl/tabpfn-client/issues) for known issues and feature requests
-3. **Contribute**: 
+3. **Contribute**:
    - Report bugs or request features through issues
    - Submit pull requests (see development guide below)
    - Share your success stories and use cases
 4. **Stay Updated**: Star the repo and join Discord for the latest updates
 
-
 ## 📊 Usage Limits
 
 ### API Cost Calculation
+
 Each API request consumes usage credits based on the following formula:
+
 ```python
 api_cost = (num_train_rows + num_test_rows) * num_cols * n_estimators
 ```
+
 Where `n_estimators` defaults to:
+
 - 4 for classification tasks
 - 8 for regression tasks
 
 Per day the current prediction allowance is 5,000,000 cells. We will adjust this limit based on usage patterns.
 
 ### Monitoring Usage
+
 Track your API usage through response headers:
+
 - `X-RateLimit-Limit`: Your total allowed usage
 - `X-RateLimit-Remaining`: Remaining usage
 - `X-RateLimit-Reset`: Reset timestamp (UTC)
@@ -114,11 +127,13 @@ Usage limits reset daily at 00:00:00 UTC.
 ### Size Limitations
 
 1. Maximum total cells per request must be below 500,000:
+
 ```python
 max_cells = (num_train_rows + num_test_rows) * num_cols
 ```
 
 2. For regression with full output (`return_full_output=True`), the number of test samples must be below 500:
+
 ```python
 if task == 'regression' and return_full_output and num_test_samples > 500:
     raise ValueError("Cannot return full output for regression with >500 test samples")
@@ -165,27 +180,35 @@ print(UserDataClient.get_data_summary())
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE.txt](LICENSE.txt) file for details.
 
-
 ## Development
+
 To encourage better coding practices, `ruff` has been added to the pre-commit hooks. This will ensure that the code is formatted properly before being committed. To enable pre-commit (if you haven't), run the following command:
 
 ```bash
 pre-commit install
 ```
 
-
 Additionally, it is recommended that developers install the ruff extension in their preferred editor. For installation instructions, refer to the [Ruff Integrations Documentation](https://docs.astral.sh/ruff/integrations/).
 
 ### Build from GitHub
+
 ```bash
-!git clone https://github.com/automl/tabpfn-client
-%cd tabpfn-client
-!git submodule update --init --recursive
-!pip install -e .
-%cd ..
+git clone https://github.com/PriorLabs/tabpfn-client
+cd tabpfn-client
+git submodule update --init --recursive
+pip install -e .
+cd ..
+```
+
+NOTE: For development, you will need to download some additional dev dependencies.
+Use the below command to get it ready for development and running tests.
+
+```bash
+pip install -e ".[dev]"
 ```
 
 ### Build for PyPI
+
 ```bash
 if [ -d "dist" ]; then rm -rf dist/*; fi
 python3 -m pip install --upgrade build; python3 -m build
