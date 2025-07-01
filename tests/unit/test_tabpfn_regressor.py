@@ -10,7 +10,7 @@ from sklearn.exceptions import NotFittedError
 from tabpfn_client import init, reset
 from tabpfn_client.estimator import TabPFNRegressor
 from tabpfn_client.service_wrapper import UserAuthenticationClient, InferenceClient
-from tabpfn_client.tests.mock_tabpfn_server import with_mock_server
+from tests.mock_tabpfn_server import with_mock_server
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client import config
 import json

@@ -9,7 +9,7 @@ import json
 
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.constants import CACHE_DIR
-from tabpfn_client.tests.mock_tabpfn_server import with_mock_server
+from tests.mock_tabpfn_server import with_mock_server
 
 
 class TestServiceClient(unittest.TestCase):

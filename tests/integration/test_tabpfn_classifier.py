@@ -8,7 +8,7 @@ import numpy as np
 import tabpfn_client.client
 from tabpfn_client import init, reset
 from tabpfn_client import TabPFNClassifier
-from tabpfn_client.tests.mock_tabpfn_server import with_mock_server
+from tests.mock_tabpfn_server import with_mock_server
 from tabpfn_client.service_wrapper import UserAuthenticationClient
 
 
