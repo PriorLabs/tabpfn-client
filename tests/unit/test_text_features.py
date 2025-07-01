@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from tabpfn_client.estimator import _clean_text_features
 from io import BytesIO
-from tabpfn_client.tabpfn_common_utils import utils
+from tabpfn_common_utils import utils
 
 
 class TestCleanTextFeatures(unittest.TestCase):

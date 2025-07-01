@@ -1,30 +1,28 @@
 import unittest
 from unittest.mock import patch
+
 import shutil
-import json
-
 import numpy as np
-
-from sklearn.datasets import load_breast_cancer
+from sklearn.datasets import load_diabetes
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.exceptions import NotFittedError
 
-
 from tabpfn_client import init, reset
-from tabpfn_client.estimator import TabPFNClassifier
+from tabpfn_client.estimator import TabPFNRegressor
 from tabpfn_client.service_wrapper import UserAuthenticationClient, InferenceClient
-from tabpfn_client.tests.mock_tabpfn_server import with_mock_server
+from tests.mock_tabpfn_server import with_mock_server
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client import config
+import json
 
 
-class TestTabPFNClassifierInit(unittest.TestCase):
+class TestTabPFNRegressorInit(unittest.TestCase):
     dummy_token = "dummy_token"
 
     def setUp(self):
         # set up dummy data
         reset()
-        X, y = load_breast_cancer(return_X_y=True)
+        X, y = load_diabetes(return_X_y=True)
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
             X, y, test_size=0.33
         )
@@ -36,7 +34,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
     @patch("tabpfn_client.browser_auth.webbrowser.open", return_value=False)
     @patch("tabpfn_client.prompt_agent.PromptAgent.prompt_and_set_token")
     @with_mock_server()
-    def test_init_remote_classifier(
+    def test_init_remote_regressor(
         self,
         mock_server,
         mock_prompt_and_set_token,
@@ -51,28 +49,33 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         mock_server.router.post(mock_server.endpoints.fit.path).respond(
             200, json={"train_set_uid": "5"}
         )
-
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
 
-        mock_predict_response = [1, 0, 1]
-        predict_route = mock_server.router.post(mock_server.endpoints.predict.path)
-        predict_route.respond(
-            200,
-            content=f'data: {json.dumps({"event": "result", "data": {"classification": mock_predict_response, "test_set_uid": "6"}})}\n\n',
-            headers={"Content-Type": "text/event-stream"},
-        )
+        mock_predict_responses = {
+            "mean": [100, 200, 300],
+            "median": [110, 210, 310],
+            "mode": [120, 220, 320],
+        }
+        for metric, response in mock_predict_responses.items():
+            predict_route = mock_server.router.post(mock_server.endpoints.predict.path)
+            predict_route.respond(
+                200,
+                content=f'data: {json.dumps({"event": "result", "data": {"regression": response, "test_set_uid": "6"}})}\n\n',
+                headers={"Content-Type": "text/event-stream"},
+            )
 
-        init(use_server=True)
-        self.assertTrue(mock_prompt_and_set_token.called)
+            init(use_server=True)
+            self.assertTrue(mock_prompt_and_set_token.called)
 
-        tabpfn = TabPFNClassifier(n_estimators=10)
+        tabpfn = TabPFNRegressor(n_estimators=10)
         self.assertRaises(NotFittedError, tabpfn.predict, self.X_test)
         tabpfn.fit(self.X_train, self.y_train)
         self.assertTrue(mock_prompt_and_set_token.called)
-        y_pred = tabpfn.predict(self.X_test)
-        self.assertTrue(np.all(mock_predict_response == y_pred))
+
+        y_pred = tabpfn.predict(self.X_test, output_type=metric)
+        self.assertTrue(np.all(np.array(response) == y_pred))
         # Checking for both %20 and + enconding of spaces
         # since httpx was inconsistent with its spacen encoding scheme
         self.assertTrue(
@@ -119,7 +122,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         self.assertTrue(mock_prompt_and_set_token.called)
 
     @with_mock_server()
-    def test_reset_on_remote_classifier(self, mock_server):
+    def test_reset_on_remote_regressor(self, mock_server):
         # create dummy token file
         token_file = UserAuthenticationClient.CACHED_TOKEN_FILE
         token_file.parent.mkdir(parents=True, exist_ok=True)
@@ -151,7 +154,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
     )
     @patch("tabpfn_client.browser_auth.webbrowser.open", return_value=False)
     @patch("builtins.input", side_effect=["1"])
-    @with_mock_server()  # TODO (leo): investigate why this needs to be the last decorator
+    @with_mock_server()
     def test_decline_terms_and_cond(
         self,
         mock_server,
@@ -174,11 +177,6 @@ class TestTabPFNClassifierInit(unittest.TestCase):
     def test_cache_based_on_paper_version(
         self, mock_server, mock_prompt_for_terms_and_cond, mock_prompt_and_set_token
     ):
-        """
-        Check that the dataset cached is different for different paper_version
-        and similar for the same paper_version
-        """
-        # a bit out of place but we don't want to skip init for this test
         mock_prompt_and_set_token.side_effect = (
             lambda: UserAuthenticationClient.set_token(self.dummy_token)
         )
@@ -192,22 +190,26 @@ class TestTabPFNClassifierInit(unittest.TestCase):
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
 
-        mock_predict_response = [[1, 0.0], [0.9, 0.1], [0.01, 0.99]]
+        mock_predict_response = {
+            "mean": [100, 200, 300],
+            "median": [110, 210, 310],
+            "mode": [120, 220, 320],
+        }
         predict_route = mock_server.router.post(mock_server.endpoints.predict.path)
         predict_route.respond(
             200,
-            content=f'data: {json.dumps({"event": "result", "data": {"classification": mock_predict_response, "test_set_uid": "6"}})}\n\n',
+            content=f'data: {json.dumps({"event": "result", "data": {"regression": mock_predict_response, "test_set_uid": "6"}})}\n\n',
             headers={"Content-Type": "text/event-stream"},
         )
 
         init(use_server=True)
 
         X = np.random.rand(10, 5)
-        y = np.random.randint(0, 2, 10)
+        y = np.random.rand(10)
         test_X = np.random.rand(5, 5)
 
         # Initialize with paper_version=True
-        tabpfn_true = TabPFNClassifier(paper_version=True)
+        tabpfn_true = TabPFNRegressor(paper_version=True)
 
         tabpfn_true.fit(X, y)
         tabpfn_true.predict(test_X)
@@ -224,7 +226,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         )
 
         # Initialize with paper_version=False
-        tabpfn_false = TabPFNClassifier(paper_version=False)
+        tabpfn_false = TabPFNRegressor(paper_version=False)
 
         tabpfn_false.fit(X, y)
         tabpfn_false.predict(test_X)
@@ -301,7 +303,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         # )
 
 
-class TestTabPFNClassifierInference(unittest.TestCase):
+class TestTabPFNRegressorInference(unittest.TestCase):
     def setUp(self):
         # skip init
         config.Config.is_initialized = True
@@ -314,17 +316,17 @@ class TestTabPFNClassifierInference(unittest.TestCase):
         self,
     ):
         X = np.random.rand(10, 5)
-        y = np.random.randint(0, 2, 11)
-        tabpfn = TabPFNClassifier()
+        y = np.random.rand(11)
+        tabpfn = TabPFNRegressor()
 
         with self.assertRaises(ValueError):
             tabpfn.fit(X, y)
 
     def test_data_size_check_on_train_with_oversized_data_raise_error(self):
         X = np.random.randn(10001, 501)
-        y = np.random.randint(0, 2, 10001)
+        y = np.random.randn(10001)
 
-        tabpfn = TabPFNClassifier()
+        tabpfn = TabPFNRegressor()
 
         # test oversized columns
         with self.assertRaises(ValueError):
@@ -336,7 +338,7 @@ class TestTabPFNClassifierInference(unittest.TestCase):
 
     def test_data_size_check_on_predict_with_oversized_data_raise_error(self):
         test_X = np.random.randn(10001, 5)
-        tabpfn = TabPFNClassifier()
+        tabpfn = TabPFNRegressor()
 
         # skip fitting
         tabpfn.fitted_ = True
@@ -347,15 +349,14 @@ class TestTabPFNClassifierInference(unittest.TestCase):
 
     def test_data_check_on_predict_with_valid_data_pass(self):
         test_X = np.random.randn(10, 5)
-        tabpfn = TabPFNClassifier()
+        tabpfn = TabPFNRegressor()
 
         # skip fitting
         tabpfn.fitted_ = True
-        tabpfn.classes_ = np.array([0, 1])
 
         # mock prediction
         with patch.object(InferenceClient, "predict") as mock_predict:
-            mock_predict.return_value = {"probas": np.random.rand(10, 2)}
+            mock_predict.return_value = {"mean": np.random.randn(10)}
             tabpfn.predict(test_X)
 
     def test_only_allowed_parameters_passed_to_config(self):
@@ -371,29 +372,27 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             "random_state",
             "inference_config",
             "model_path",
-            "balance_probabilities",
             "paper_version",
         }
 
-        # Create classifier with various parameters
-        classifier = TabPFNClassifier(
-            n_estimators=5,
-            softmax_temperature=0.8,
+        # Create regressor with various parameters
+        regressor = TabPFNRegressor(
+            n_estimators=8,
+            softmax_temperature=0.9,
             paper_version=True,
             random_state=42,
-            balance_probabilities=True,
         )
 
         # Skip fitting
-        classifier.fitted_ = True
-        classifier.last_train_set_uid = "dummy_uid"
+        regressor.fitted_ = True
+        regressor.last_train_set_uid = "dummy_uid"
 
         test_X = np.random.randn(10, 5)
 
         # Mock predict and capture config
         with patch.object(InferenceClient, "predict") as mock_predict:
-            mock_predict.return_value = np.random.rand(10, 2)
-            classifier.predict(test_X)
+            mock_predict.return_value = {"mean": np.random.randn(10)}
+            regressor.predict(test_X)
 
             # Get the config that was passed to predict
             actual_config = mock_predict.call_args[1]["config"]
@@ -415,73 +414,35 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             )
 
     def test_predict_params_output_type(self):
-        """Test that predict_params contains correct output_type."""
-        classifier = TabPFNClassifier()
-        classifier.fitted_ = True  # Skip fitting
+        """Test that predict_params contains correct output_type and quantiles."""
+        regressor = TabPFNRegressor()
+        regressor.fitted_ = True  # Skip fitting
         test_X = np.random.randn(10, 5)
 
-        # Test predict() sets output_type to "preds"
+        # Test default predict() sets output_type to "mean"
         with patch.object(InferenceClient, "predict") as mock_predict:
-            mock_predict.return_value = np.random.rand(10)
-            classifier.predict(test_X)
+            mock_predict.return_value = {"mean": np.random.randn(10)}
+            regressor.predict(test_X)
 
             predict_params = mock_predict.call_args[1]["predict_params"]
-            self.assertEqual(predict_params, {"output_type": "preds"})
+            self.assertEqual(predict_params, {"output_type": "mean", "quantiles": None})
 
-        # Test predict_proba() sets output_type to "probas"
+        # Test predict() with quantiles
         with patch.object(InferenceClient, "predict") as mock_predict:
-            mock_predict.return_value = np.random.rand(10, 2)
-            classifier.predict_proba(test_X)
+            mock_predict.return_value = {"quantiles": np.random.randn(10, 3)}
+            quantiles = [0.1, 0.5, 0.9]
+            regressor.predict(test_X, output_type="quantiles", quantiles=quantiles)
 
             predict_params = mock_predict.call_args[1]["predict_params"]
-            self.assertEqual(predict_params, {"output_type": "probas"})
+            self.assertEqual(
+                predict_params, {"output_type": "quantiles", "quantiles": quantiles}
+            )
 
-    def test_string_label_predictions(self):
-        """Test that string labels in y are preserved in predictions."""
-        X = np.random.rand(10, 5)
-        test_X = np.random.rand(5, 5)
-
-        # Test with pure string labels
-        y_str = np.array(["cat", "dog"] * 5)
-        clf_str = TabPFNClassifier()
-
-        # Mock fit and predict
-        with patch.object(InferenceClient, "fit") as mock_fit:
-            mock_fit.return_value = "dummy_uid"
-            clf_str.fit(X, y_str)
-
-            with patch.object(InferenceClient, "predict") as mock_predict:
-                mock_predict.return_value = np.array(["cat", "dog"] * 5)
-                y_pred = clf_str.predict(test_X)
-
-                self.assertTrue(np.all(np.isin(y_pred, ["cat", "dog"])))
-                self.assertTrue(
-                    y_pred.dtype.kind in {"U", "O"}, "Predictions should be string type"
-                )
-
-        # Test with numeric-like strings
-        y_num_str = np.array(["0", "1"] * 5)
-        clf_num_str = TabPFNClassifier()
-
-        with patch.object(InferenceClient, "fit") as mock_fit:
-            mock_fit.return_value = "dummy_uid"
-            clf_num_str.fit(X, y_num_str)
-
-            with patch.object(InferenceClient, "predict") as mock_predict:
-                mock_predict.return_value = np.array(["0", "1"] * 5)
-                y_pred = clf_num_str.predict(test_X)
-
-                self.assertTrue(np.all(np.isin(y_pred, ["0", "1"])))
-                self.assertTrue(
-                    y_pred.dtype.kind in {"U", "O"}, "Predictions should be string type"
-                )
-
-    def test_predict_with_uncleaned_text(self):
+    def test_predict_with_long_and_comma_text(self):
         """Test predictions with long text (>2500 chars) and text containing commas."""
         # Skip initialization
-        tabpfn = TabPFNClassifier()
+        tabpfn = TabPFNRegressor()
         tabpfn.fitted_ = True
-        tabpfn.classes_ = np.array([0, 1])  # Binary classification
 
         # Create test data with a mix of numeric and text features
         n_samples = 5
@@ -519,14 +480,8 @@ class TestTabPFNClassifierInference(unittest.TestCase):
         X_spaces_copy = X_spaces_array.copy()
 
         # Mock predictions
-        expected_predictions = np.random.randint(0, 2, n_samples)
-        expected_probas = np.random.rand(n_samples, 2)
-        expected_probas = (
-            expected_probas / expected_probas.sum(axis=1)[:, np.newaxis]
-        )  # Normalize
-
+        expected_predictions = np.random.randn(n_samples)
         with patch.object(InferenceClient, "predict") as mock_predict:
-            # Test predict()
             mock_predict.return_value = expected_predictions
 
             # Test predictions for each variation
@@ -563,60 +518,16 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             np.testing.assert_array_equal(pred_commas, expected_predictions)
             np.testing.assert_array_equal(pred_spaces, expected_predictions)
 
-            # Verify that long text (which should be truncated) gives same predictions as normal text
-            np.testing.assert_array_equal(pred_normal, pred_long)
-
-            # Test predict_proba()
-            mock_predict.return_value = expected_probas
-
-            # Test probability predictions for each variation
-            proba_normal = tabpfn.predict_proba(X_normal_array)
-            proba_long = tabpfn.predict_proba(X_long_array)
-            proba_commas = tabpfn.predict_proba(X_commas_array)
-            proba_spaces = tabpfn.predict_proba(X_spaces_array)
-
-            # Verify input arrays were not modified during predict_proba
-            np.testing.assert_array_equal(
-                X_normal_array,
-                X_normal_copy,
-                "Input array with normal text was modified during probability prediction",
-            )
-            np.testing.assert_array_equal(
-                X_long_array,
-                X_long_copy,
-                "Input array with long text was modified during probability prediction",
-            )
-            np.testing.assert_array_equal(
-                X_commas_array,
-                X_commas_copy,
-                "Input array with comma text was modified during probability prediction",
-            )
-            np.testing.assert_array_equal(
-                X_spaces_array,
-                X_spaces_copy,
-                "Input array with special spaces was modified during probability prediction",
-            )
-
-            # Verify probability predictions are returned as expected
-            np.testing.assert_array_equal(proba_normal, expected_probas)
-            np.testing.assert_array_equal(proba_long, expected_probas)
-            np.testing.assert_array_equal(proba_commas, expected_probas)
-            np.testing.assert_array_equal(proba_spaces, expected_probas)
-
-            # Verify that long text gives same probability predictions as normal text
-            np.testing.assert_array_equal(proba_normal, proba_long)
-
-            # Verify predict and predict_proba were each called 4 times
-            self.assertEqual(mock_predict.call_count, 8)
+            # Verify predict was called the same way for all variations
+            self.assertEqual(mock_predict.call_count, 4)
 
     def test_predict_with_pandas_dataframe(self):
         """Test predictions with pandas DataFrame input, including text columns."""
         import pandas as pd
 
         # Skip initialization
-        tabpfn = TabPFNClassifier()
+        tabpfn = TabPFNRegressor()
         tabpfn.fitted_ = True
-        tabpfn.classes_ = np.array([0, 1])
 
         # Create test data
         n_samples = 5
@@ -636,9 +547,7 @@ class TestTabPFNClassifierInference(unittest.TestCase):
         df_copy = df.copy()
 
         # Mock predictions
-        expected_predictions = np.random.randint(0, 2, n_samples)
-        expected_probas = np.random.rand(n_samples, 2)
-        expected_probas = expected_probas / expected_probas.sum(axis=1)[:, np.newaxis]
+        expected_predictions = np.random.randn(n_samples)
 
         with patch.object(InferenceClient, "predict") as mock_predict:
             # Test predict()
@@ -652,23 +561,6 @@ class TestTabPFNClassifierInference(unittest.TestCase):
 
             # Verify predictions are returned as expected
             np.testing.assert_array_equal(pred, expected_predictions)
-
-            # Test predict_proba()
-            mock_predict.return_value = expected_probas
-            proba = tabpfn.predict_proba(df)
-
-            # Verify DataFrame wasn't modified during predict_proba
-            pd.testing.assert_frame_equal(
-                df,
-                df_copy,
-                "Input DataFrame was modified during probability prediction",
-            )
-
-            # Verify probability predictions are returned as expected
-            np.testing.assert_array_equal(proba, expected_probas)
-
-            # Verify predict and predict_proba were each called once
-            self.assertEqual(mock_predict.call_count, 2)
 
             # Test that column order doesn't matter
             shuffled_columns = list(df.columns)
@@ -690,6 +582,9 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             # Verify predictions match regardless of column order
             np.testing.assert_array_equal(pred, pred_shuffled)
 
+            # Verify predict was called twice
+            self.assertEqual(mock_predict.call_count, 2)
+
     def test_missing_values_in_y_raise_error(self):
         """Test that missing values in y raise a ValueError."""
         import pandas as pd
@@ -697,47 +592,50 @@ class TestTabPFNClassifierInference(unittest.TestCase):
         X = np.random.rand(10, 5)
 
         # Test with None values
-        y_none = np.array([0, 1, None, 1, 0, 1, None, 0, 1, 0])
-        print("y_none", y_none)
-        print("y_none.dtype", y_none.dtype)
-        tabpfn = TabPFNClassifier()
+        y_none = np.array([1.0, 2.0, None, 3.0, 4.0, 5.0, None, 6.0, 7.0, 8.0])
+        tabpfn = TabPFNRegressor()
         with self.assertRaises(ValueError) as cm:
             tabpfn.fit(X, y_none)
         self.assertIn("contains NaN.", str(cm.exception))
 
         # Test with np.nan values
-        y_nan = np.array([0, 1, np.nan, 1, 0, 1, np.nan, 0, 1, 0], dtype=float)
+        y_nan = np.array([1.0, 2.0, np.nan, 3.0, 4.0, 5.0, np.nan, 6.0, 7.0, 8.0])
         with self.assertRaises(ValueError) as cm:
             tabpfn.fit(X, y_nan)
         self.assertIn("contains NaN.", str(cm.exception))
 
         # Test with pd.NA values
-        y_pd_na = pd.Series([0, 1, pd.NA, 1, 0, 1, pd.NA, 0, 1, 0])
+        y_pd_na = pd.Series([1.0, 2.0, pd.NA, 3.0, 4.0, 5.0, pd.NA, 6.0, 7.0, 8.0])
         with self.assertRaises(ValueError) as cm:
             tabpfn.fit(X, y_pd_na)
         self.assertIn("contains NaN.", str(cm.exception))
 
-        # Test with multiclass data containing missing values
-        y_multiclass_na = pd.Series([0, 1, 2, pd.NA, 1, 0, 2, pd.NA, 1, 0])
-        with self.assertRaises(ValueError) as cm:
-            tabpfn.fit(X, y_multiclass_na)
-        self.assertIn("contains NaN.", str(cm.exception))
+    @patch.object(InferenceClient, "predict", return_value=np.random.rand(20))
+    @patch.object(InferenceClient, "fit", return_value="dummy_uid")
+    def test_cross_validation(self, mock_fit, mock_predict):
+        """Test that TabPFNRegressor works with sklearn's cross_val_score."""
 
-    def test_too_many_classes_raise_error(self):
-        """Test that having more than 10 classes raises a ValueError."""
-        X = np.random.rand(100, 5)
-        y = np.random.randint(0, 11, 100)  # 11 classes (0-10)
+        # Create synthetic dataset
+        X = np.random.rand(100, 10)
+        y = np.random.rand(100)
 
-        tabpfn = TabPFNClassifier()
-        with self.assertRaises(ValueError) as cm:
-            tabpfn.fit(X, y)
-        self.assertIn("exceeds the maximal number of", str(cm.exception))
+        # Initialize regressor
+        reg = TabPFNRegressor()
 
-        # Test with string labels
-        y_str = np.array([f"class_{i}" for i in range(11)])[y]
-        with self.assertRaises(ValueError) as cm:
-            tabpfn.fit(X, y_str)
-        self.assertIn("exceeds the maximal number of", str(cm.exception))
+        # Compute cross validation scores using R² score
+        scores = cross_val_score(reg, X, y, cv=5, scoring="r2")
+
+        # Basic validation checks
+        self.assertEqual(len(scores), 5)  # 5-fold CV should return 5 scores
+        # R² scores are typically <= 1, but can be negative for poor models
+        self.assertTrue(all(score <= 1 for score in scores))
+
+        # Verify fit and predict were called appropriate number of times
+        # For 5-fold CV, fit should be called 5 times (once per fold)
+        self.assertEqual(mock_fit.call_count, 5)
+
+        # predict should be called 5 times (once per fold)
+        self.assertEqual(mock_predict.call_count, 5)
 
 
 class TestTabPFNModelSelection(unittest.TestCase):
@@ -751,119 +649,84 @@ class TestTabPFNModelSelection(unittest.TestCase):
         config.reset()
 
     def test_list_available_models_returns_expected_models(self):
-        expected_models = [
-            "default",
-            "gn2p4bpt",
-            "llderlii",
-            "od3j1g5m",
-            "vutqq28w",
-            "znskzxi4",
-        ]
-        self.assertEqual(TabPFNClassifier.list_available_models(), expected_models)
+        expected_models = ["default", "2noar4o2", "5wof9ojf", "09gpqh39", "wyl4o83o"]
+        self.assertEqual(TabPFNRegressor.list_available_models(), expected_models)
 
     def test_validate_model_name_with_valid_model_passes(self):
         # Should not raise any exception
-        TabPFNClassifier._validate_model_name("default")
-        TabPFNClassifier._validate_model_name("gn2p4bpt")
+        TabPFNRegressor._validate_model_name("default")
+        TabPFNRegressor._validate_model_name("2noar4o2")
 
     def test_validate_model_name_with_invalid_model_raises_error(self):
         with self.assertRaises(ValueError):
-            TabPFNClassifier._validate_model_name("invalid_model")
+            TabPFNRegressor._validate_model_name("invalid_model")
 
     def test_model_name_to_path_returns_expected_path(self):
         # Test default model path
-        expected_default_path = "tabpfn-v2-classifier.ckpt"
+        expected_default_path = "tabpfn-v2-regressor.ckpt"
         self.assertEqual(
-            TabPFNClassifier._model_name_to_path("classification", "default"),
+            TabPFNRegressor._model_name_to_path("regression", "default"),
             expected_default_path,
         )
 
         # Test specific model path
-        expected_specific_path = "tabpfn-v2-classifier-gn2p4bpt.ckpt"
+        expected_specific_path = "tabpfn-v2-regressor-2noar4o2.ckpt"
         self.assertEqual(
-            TabPFNClassifier._model_name_to_path("classification", "gn2p4bpt"),
+            TabPFNRegressor._model_name_to_path("regression", "2noar4o2"),
             expected_specific_path,
         )
 
     def test_model_name_to_path_with_invalid_model_raises_error(self):
         with self.assertRaises(ValueError):
-            TabPFNClassifier._model_name_to_path("classification", "invalid_model")
+            TabPFNRegressor._model_name_to_path("regression", "invalid_model")
 
-    def test_predict_proba_uses_correct_model_path(self):
+    def test_predict_uses_correct_model_path(self):
+        # First verify available models are as expected
+        expected_models = ["default", "2noar4o2", "5wof9ojf", "09gpqh39", "wyl4o83o"]
+        self.assertEqual(TabPFNRegressor._AVAILABLE_MODELS, expected_models)
+
         # Setup
         X = np.random.rand(10, 5)
-        y = np.random.randint(0, 2, 10)
+        y = np.random.rand(10)
 
-        tabpfn = TabPFNClassifier(model_path="gn2p4bpt")
+        tabpfn = TabPFNRegressor(model_path="2noar4o2")
 
         # Mock the inference client
         with patch.object(InferenceClient, "predict") as mock_predict:
-            mock_predict.return_value = {"probas": np.random.rand(10, 2)}
-
+            mock_predict.return_value = {"mean": np.random.rand(10)}
             with patch.object(InferenceClient, "fit") as mock_fit:
                 mock_fit.return_value = "dummy_uid"
 
                 # Fit and predict
                 tabpfn.fit(X, y)
-                tabpfn.predict_proba(X)
+                tabpfn.predict(X)
 
                 # Verify the model path was correctly passed to predict
                 predict_kwargs = mock_predict.call_args[1]
-                expected_model_path = "tabpfn-v2-classifier-gn2p4bpt.ckpt"
+                expected_model_path = "tabpfn-v2-regressor-2noar4o2.ckpt"
 
                 self.assertEqual(
                     predict_kwargs["config"]["model_path"], expected_model_path
                 )
 
     @patch.object(InferenceClient, "fit", return_value="dummy_uid")
-    @patch.object(
-        InferenceClient, "predict", return_value={"probas": np.random.rand(10, 2)}
-    )
+    @patch.object(InferenceClient, "predict", return_value={"mean": np.random.rand(10)})
     def test_paper_version_behavior(self, mock_predict, mock_fit):
-        # this just test that it doesn't break,
+        # this just tests that it doesn't break,
         # but the actual behavior is easier to test
         # on the server side
         X = np.random.rand(10, 5)
-        y = np.random.randint(0, 2, 10)
+        y = np.random.rand(10)
         test_X = np.random.rand(5, 5)
 
         # Test with paper_version=True
-        tabpfn_true = TabPFNClassifier(paper_version=True)
+        tabpfn_true = TabPFNRegressor(paper_version=True)
         tabpfn_true.fit(X, y)
         y_pred_true = tabpfn_true.predict(test_X)
         self.assertIsNotNone(y_pred_true)
 
         # Test with paper_version=False
-        tabpfn_false = TabPFNClassifier(paper_version=False)
+        tabpfn_false = TabPFNRegressor(paper_version=False)
         tabpfn_false.fit(X, y)
         y_pred_false = tabpfn_false.predict(test_X)
         self.assertIsNotNone(y_pred_false)
-
-    @patch.object(InferenceClient, "predict", return_value=np.random.rand(20, 2))
-    @patch.object(InferenceClient, "fit", return_value="dummy_uid")
-    def test_cross_validation(self, mock_fit, mock_predict):
-        """Test that TabPFNClassifier works with sklearn's cross_val_score,
-        even when predict_proba is required."""
-
-        # Create synthetic dataset
-        X = np.random.rand(100, 10)
-        y = np.random.randint(0, 2, 100)
-
-        # Initialize classifier
-        clf = TabPFNClassifier()
-
-        # Compute cross validation scores
-        scores = cross_val_score(clf, X, y, cv=5, scoring="roc_auc")
-
-        # Basic validation checks
-        self.assertEqual(len(scores), 5)  # 5-fold CV should return 5 scores
-        self.assertTrue(
-            all(0 <= score <= 1 for score in scores)
-        )  # ROC AUC scores should be between 0 and 1
-
-        # Verify fit and predict were called appropriate number of times
-        # For 5-fold CV, fit should be called 5 times (once per fold)
-        self.assertEqual(mock_fit.call_count, 5)
-
-        # predict_proba should be called 5 times (once per fold)
-        self.assertEqual(mock_predict.call_count, 5)

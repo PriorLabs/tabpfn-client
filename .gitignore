@@ -166,3 +166,7 @@ tabpfn_client/.tabpfn/
 package-lock.json
 package.json
 .DS_Store
+
+devenv.*
+.devenv*
+.envrc
