@@ -3,5 +3,5 @@
 # lint and format checking
 pytest
 pre-commit==4.2.0
-ruff == 0.11.9
+ruff == 0.12.3
 typing_extensions==4.12.2
