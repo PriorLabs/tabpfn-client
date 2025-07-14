@@ -21,10 +21,10 @@ import threading
 import time
 from tqdm import tqdm
 
-from tabpfn_client.tabpfn_common_utils import utils as common_utils
+from tabpfn_common_utils import utils as common_utils
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client.browser_auth import BrowserAuthHandler
-from tabpfn_client.tabpfn_common_utils.utils import Singleton
+from tabpfn_common_utils.utils import Singleton
 
 logger = logging.getLogger(__name__)
 

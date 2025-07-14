@@ -1,12 +1,11 @@
 [build-system]
-requires = ["hatchling", "hatch-requirements-txt"]
+requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
 name = "tabpfn-client"
 version = "0.1.7"
 requires-python = ">=3.9"
-dynamic = ["dependencies", "optional-dependencies"]
 
 description = "API access for TabPFN: Foundation model for tabular data"
 classifiers = [
@@ -27,19 +26,37 @@ classifiers = [
   'Programming Language :: Python :: 3.13',
 ]
 license = { file = "LICENSE" }
+dependencies = [
+    "tabpfn-common-utils",
+    "httpx>=0.25.0,<=0.28.1",
+    "omegaconf>=2.1.2,<=2.3.0",
+    "pandas>=2.1.2,<=2.2.3",
+    "password-strength>=0.0.3.post2,<=0.0.3.post2",
+    "scikit-learn>=1.3.1,<=1.6.1",
+    "sseclient-py>=1.8.0,<=1.8.0",
+    "tqdm>=4.63.0,<=4.67.1",
+    "xxhash>=1.1.0,<=3.5",
+]
 
 [project.urls]
 documentation = "https://priorlabs.ai/docs"
 source = "https://github.com/priorlabs/tabpfn-client"
-
-[tool.hatch.metadata.hooks.requirements_txt]
-files = ["requirements.txt"]
-
-[tool.hatch.metadata.hooks.requirements_txt.optional-dependencies]
-dev = ["requirements-dev.txt", "requirements-test.txt"]
 
 [tool.hatch.build.targets.wheel]
 exclude = ["tabpfn_client/.tabpfn", "models_diff"]
 
 [tool.hatch.build.targets.sdist]
 exclude = ["tabpfn_client/.tabpfn", "models_diff"]
+
+[dependency-groups]
+dev = [
+    "pre-commit==4.2.0",
+    "pytest>=8.4.1",
+    "respx==0.22.0",
+    "ruff==0.11.9",
+    "scikit-learn==1.6.1",
+    "typing-extensions==4.12.2",
+]
+
+[tool.uv.sources]
+tabpfn-common-utils = { git = "https://github.com/PriorLabs/tabpfn_common_utils", rev = "d2ae05ec283187a5374ab16f260cacf119b06b7a" }
