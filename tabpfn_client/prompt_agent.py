@@ -1,9 +1,11 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
-
+import re
 import textwrap
 import getpass
+
 from password_strength import PasswordPolicy
+import inquirer
 
 from tabpfn_client.service_wrapper import UserAuthenticationClient
 
@@ -265,14 +267,28 @@ class PromptAgent:
                 continue
             break
 
-        while True:
-            role = input(cls.indent("What is your role? "))
-            if not role or role.strip() == "":
-                print(
-                    cls.indent("Role is required. Please enter it.")
+        questions = [
+            inquirer.List(
+                'role',
+                message="What is your current role?",
+                choices=['Field practitioner', 'Researcher', 'Student', 'Other'],
+                carousel=True,
+            ),
+        ]
+
+        answers = inquirer.prompt(questions)
+
+        if answers and answers['role'] == 'Other':
+            other_question = [
+                inquirer.Text(
+                    'other_role',
+                    message="Please specify your role",
+                    validate=lambda _, x: re.match(r'\S+', x),
                 )
-                continue
-            break
+            ]
+            role = inquirer.prompt(other_question)["other_role"]
+        else:
+            role = answers["role"]
 
         while True:
             use_case = input(cls.indent("What do you want to use TabPFN for? "))
