@@ -6,3 +6,4 @@ password-strength>=0.0.3.post2,<=0.0.3.post2
 sseclient-py>=1.8.0,<=1.8.0
 tqdm>=4.63.0,<=4.67.1
 xxhash>=1.1.0,<=3.5
+inquirer>=3.4.0
