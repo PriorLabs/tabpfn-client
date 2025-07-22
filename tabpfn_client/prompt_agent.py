@@ -251,15 +251,37 @@ class PromptAgent:
 
         print(
             cls.indent(
-                "\nTo help us tailor our support and services to your needs, we have a few optional questions. "
-                "Feel free to skip any question by leaving it blank."
+                "\nPlease help us tailor our support and services to your needs"
             )
             + "\n"
         )
 
-        company = input(cls.indent("Where do you work? "))
-        role = input(cls.indent("What is your role? "))
-        use_case = input(cls.indent("What do you want to use TabPFN for? "))
+        while True:
+            company = input(cls.indent("Where do you work? "))
+            if not company or company.strip() == "":
+                print(
+                    cls.indent("Company is required. Please enter it.")
+                )
+                continue
+            break
+
+        while True:
+            role = input(cls.indent("What is your role? "))
+            if not role or role.strip() == "":
+                print(
+                    cls.indent("Role is required. Please enter it.")
+                )
+                continue
+            break
+
+        while True:
+            use_case = input(cls.indent("What do you want to use TabPFN for? "))
+            if not use_case or len(use_case.strip()) < 10:
+                print(
+                    cls.indent("Usecase must be at least 10 characters long. Please enter it.")
+                )
+                continue
+            break
 
         choice_contact = cls._choice_with_retries(
             "Can we reach out to you via email to support you? (y/n):", ["y", "n"]
