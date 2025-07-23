@@ -281,12 +281,16 @@ class PromptAgent:
         return choice
 
     @classmethod
-    def prompt_and_retry(cls, prompt: str) -> str:
+    def prompt_and_retry(cls, prompt: str, min_length: int = 2) -> str:
         last_name = None
         while last_name is None:
             last_name = input(cls.indent(f"{prompt}: ")).strip()
-            if not last_name or len(last_name.strip()) < 2:
-                print(cls.indent("Field is required. Please enter it."))
+            if len(last_name.strip()) < min_length:
+                print(
+                    cls.indent(
+                        f"Field is required. Please enter at least {min_length} characters."
+                    )
+                )
                 continue
         return last_name
 
@@ -316,12 +320,7 @@ class PromptAgent:
             + "\n"
         )
 
-        while True:
-            company = input(cls.indent("Where do you work? "))
-            if not company or company.strip() == "":
-                print(cls.indent("Company is required. Please enter it."))
-                continue
-            break
+        company = cls.prompt_and_retry("Where do you work?")
 
         role = cls.prompt_multi_select(
             ["Field practitioner", "Researcher", "Student", "Other"],
@@ -330,16 +329,9 @@ class PromptAgent:
         if role == "Other":
             role = cls.prompt_and_retry("Please specify your role")
 
-        while True:
-            use_case = input(cls.indent("What do you want to use TabPFN for? "))
-            if not use_case or len(use_case.strip()) < 10:
-                print(
-                    cls.indent(
-                        "Usecase must be at least 10 characters long. Please enter it."
-                    )
-                )
-                continue
-            break
+        use_case = cls.prompt_and_retry(
+            "What do you want to use TabPFN for? Minimum 10 characters.", min_length=10
+        )
 
         choice_contact = cls._choice_with_retries(
             "Can we reach out to you via email to support you? (y/n):", ["y", "n"]
