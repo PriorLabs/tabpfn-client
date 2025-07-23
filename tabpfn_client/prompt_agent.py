@@ -285,13 +285,13 @@ class PromptAgent:
         last_name = None
         while last_name is None:
             last_name = input(cls.indent(f"{prompt}: ")).strip()
-            if len(last_name.strip()) < min_length:
+            if len(last_name) < min_length:
                 print(
                     cls.indent(
                         f"Field is required. Please enter at least {min_length} characters."
                     )
                 )
-                continue
+                last_name = None
         return last_name
 
     @classmethod
