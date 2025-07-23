@@ -1,5 +1,6 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
+import os
 import re
 import textwrap
 import getpass
@@ -231,6 +232,60 @@ class PromptAgent:
         return choice == "y"
 
     @classmethod
+    def clear_console(cls) -> None:
+        os.system('cls' if os.name == 'nt' else 'clear')
+
+    @classmethod
+    def prompt_multi_select(cls, options: list[str], prompt: str) -> str:
+        """Creates an interactive multi select"""
+        num_options = len(options)
+        choice = None
+
+        while choice is None:
+            cls.clear_console()  # Clear the console before re-rendering the menu
+
+            # Print the title
+            print(f"\033[1;34m{prompt}\033[0m\n")  # Bold Blue
+
+            # Print the lettered menu options
+            for i, option in enumerate(options):
+                letter = chr(ord('A') + i)
+                print(f"  {letter}. {option}")
+
+            print("\n" + "=" * 40)  # Simple separator
+
+            # Prompt the user to enter a letter
+            choice_letter = input("\033[1;33mEnter the letter of your choice: \033[0m").strip().upper()
+
+            if not choice_letter:
+                print("\033[0;31mNo input received. Please enter a letter.\033[0m")  # Red text
+                input("Press Enter to continue...")  # Pause for user to read message
+                continue
+
+            # Generate valid letter choices (e.g., ['A', 'B', 'C'])
+            valid_choices = [chr(ord('A') + i) for i in range(num_options)]
+
+            if choice_letter in valid_choices:
+                # Convert the chosen letter back to a 0-based index
+                selected_index = ord(choice_letter) - ord('A')
+                choice = options[selected_index]
+            else:
+                print(
+                    f"\033[0;31mInvalid input. Please enter one of the following: {', '.join(valid_choices)}\033[0m")
+                input("Press Enter to continue...")  # Pause for user to read message
+        return choice
+
+    @classmethod
+    def prompt_and_retry(cls, prompt: str) -> str:
+        last_name = None
+        while last_name is None:
+            last_name = input(cls.indent(f"{prompt}: ")).strip()
+            if not last_name or len(last_name.strip()) < 2:
+                print(cls.indent("Field is required. Please enter it."))
+                continue
+        return last_name
+
+    @classmethod
     def prompt_add_user_information(cls) -> dict:
         print(cls.indent("\nPlease provide your name:"))
 
@@ -267,28 +322,12 @@ class PromptAgent:
                 continue
             break
 
-        questions = [
-            inquirer.List(
-                'role',
-                message="What is your current role?",
-                choices=['Field practitioner', 'Researcher', 'Student', 'Other'],
-                carousel=True,
-            ),
-        ]
-
-        answers = inquirer.prompt(questions)
-
-        if answers and answers['role'] == 'Other':
-            other_question = [
-                inquirer.Text(
-                    'other_role',
-                    message="Please specify your role",
-                    validate=lambda _, x: re.match(r'\S+', x),
-                )
-            ]
-            role = inquirer.prompt(other_question)["other_role"]
-        else:
-            role = answers["role"]
+        role = cls.prompt_multi_select(
+            ['Field practitioner', 'Researcher', 'Student', 'Other'],
+            "What is your current role?",
+        )
+        if role == "Other":
+            role = cls.prompt_and_retry("Please specify your role")
 
         while True:
             use_case = input(cls.indent("What do you want to use TabPFN for? "))
