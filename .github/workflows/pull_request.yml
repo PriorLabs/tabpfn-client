@@ -111,7 +111,7 @@ jobs:
       # REFER: https://github.com/actions/setup-python#caching-packages-dependencies
       - name: Setup pip cache
         id: pip-cache
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ matrix.dependency-set }}-${{ hashFiles('requirements-test.txt', 'requirements-generated.txt')}}
