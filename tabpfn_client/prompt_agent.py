@@ -231,7 +231,7 @@ class PromptAgent:
 
     @classmethod
     def clear_console(cls) -> None:
-        os.system('cls' if os.name == 'nt' else 'clear')
+        os.system("cls" if os.name == "nt" else "clear")
 
     @classmethod
     def prompt_multi_select(cls, options: list[str], prompt: str) -> str:
@@ -247,29 +247,36 @@ class PromptAgent:
 
             # Print the lettered menu options
             for i, option in enumerate(options):
-                letter = chr(ord('A') + i)
+                letter = chr(ord("A") + i)
                 print(f"  {letter}. {option}")
 
             print("\n" + "=" * 40)  # Simple separator
 
             # Prompt the user to enter a letter
-            choice_letter = input("\033[1;33mEnter the letter of your choice: \033[0m").strip().upper()
+            choice_letter = (
+                input("\033[1;33mEnter the letter of your choice: \033[0m")
+                .strip()
+                .upper()
+            )
 
             if not choice_letter:
-                print("\033[0;31mNo input received. Please enter a letter.\033[0m")  # Red text
+                print(
+                    "\033[0;31mNo input received. Please enter a letter.\033[0m"
+                )  # Red text
                 input("Press Enter to continue...")  # Pause for user to read message
                 continue
 
             # Generate valid letter choices (e.g., ['A', 'B', 'C'])
-            valid_choices = [chr(ord('A') + i) for i in range(num_options)]
+            valid_choices = [chr(ord("A") + i) for i in range(num_options)]
 
             if choice_letter in valid_choices:
                 # Convert the chosen letter back to a 0-based index
-                selected_index = ord(choice_letter) - ord('A')
+                selected_index = ord(choice_letter) - ord("A")
                 choice = options[selected_index]
             else:
                 print(
-                    f"\033[0;31mInvalid input. Please enter one of the following: {', '.join(valid_choices)}\033[0m")
+                    f"\033[0;31mInvalid input. Please enter one of the following: {', '.join(valid_choices)}\033[0m"
+                )
                 input("Press Enter to continue...")  # Pause for user to read message
         return choice
 
@@ -305,23 +312,19 @@ class PromptAgent:
             break
 
         print(
-            cls.indent(
-                "\nPlease help us tailor our support and services to your needs"
-            )
+            cls.indent("\nPlease help us tailor our support and services to your needs")
             + "\n"
         )
 
         while True:
             company = input(cls.indent("Where do you work? "))
             if not company or company.strip() == "":
-                print(
-                    cls.indent("Company is required. Please enter it.")
-                )
+                print(cls.indent("Company is required. Please enter it."))
                 continue
             break
 
         role = cls.prompt_multi_select(
-            ['Field practitioner', 'Researcher', 'Student', 'Other'],
+            ["Field practitioner", "Researcher", "Student", "Other"],
             "What is your current role?",
         )
         if role == "Other":
@@ -331,7 +334,9 @@ class PromptAgent:
             use_case = input(cls.indent("What do you want to use TabPFN for? "))
             if not use_case or len(use_case.strip()) < 10:
                 print(
-                    cls.indent("Usecase must be at least 10 characters long. Please enter it.")
+                    cls.indent(
+                        "Usecase must be at least 10 characters long. Please enter it."
+                    )
                 )
                 continue
             break
