@@ -72,6 +72,9 @@ jobs:
               if match:
                   package, min_ver, _ = match.groups()
                   min_reqs.append(f"{package}=={min_ver}")
+              else:
+                print(f"ERROR: Unmatched dependency found: {req}")
+                exit(1)
 
           with open('requirements-generated.txt', 'w') as f:
               f.write('\n'.join(min_reqs))
@@ -96,6 +99,9 @@ jobs:
               if match:
                   package, _, max_ver = match.groups()
                   max_reqs.append(f"{package}=={max_ver}")
+              else:
+                  print(f"ERROR: Unmatched dependency found: {req}")
+                  exit(1)
 
           with open('requirements-generated.txt', 'w') as f:
               f.write('\n'.join(max_reqs))
