@@ -2,6 +2,6 @@
 
 # lint and format checking
 pre-commit==4.2.0
-pytest
-ruff == 0.11.9
-twine
+pytest==8.4.1
+ruff==0.11.9
+twine==6.1.0
