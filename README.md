@@ -214,8 +214,7 @@ pip install -e ".[dev]"
 2. Build, upload to the test PyPI, install and run a quick test.
 
 ```bash
-if [ -d ".venv_test" ]; then rm -rf .venv_test/*; fi
-if [ -d "dist" ]; then rm -rf dist/*; fi
+rm -rf .venv_test dist
 python3 -m pip install --upgrade build && python3 -m build
 python3 -m pip install --upgrade twine && python3 -m twine upload --repository testpypi dist/*
 python3 -m venv .venv_test && source .venv_test/bin/activate
