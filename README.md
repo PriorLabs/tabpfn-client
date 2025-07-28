@@ -207,10 +207,33 @@ Use the below command to get it ready for development and running tests.
 pip install -e ".[dev]"
 ```
 
-### Build for PyPI
+### Release
+
+1. First ensure you've bumped the version in pyproject.toml. Use an rc suffix until you're sure it works. Something like x.y.zrc1.
+
+2. Build, upload to the test PyPI, install and run a quick test.
 
 ```bash
-if [ -d "dist" ]; then rm -rf dist/*; fi
+rm -rf .venv_test dist
+python3 -m pip install --upgrade build && python3 -m build
+python3 -m pip install --upgrade twine && python3 -m twine upload --repository testpypi dist/*
+python3 -m venv .venv_test && source .venv_test/bin/activate
+python3 -m pip install --pre --index-url https://test.pypi.org/simple/ --no-deps tabpfn-client
+pip install -r requirements.txt
+python tabpfn_client/tests/quick_test.py
+deactivate
+```
+
+3. Correct the version. Ideally this should be what is in main. It shouldn't have an rc suffix unless we're doing broader pre-release testing.
+
+4. Build, upload to the real PyPI, install and run a quick test.
+
+```bash
+rm -rf .venv_test dist
 python3 -m pip install --upgrade build && python3 -m build
 python3 -m pip install --upgrade twine && python3 -m twine upload --repository pypi dist/*
+python3 -m venv .venv_test && source .venv_test/bin/activate
+python3 -m pip install --pre tabpfn-client
+python tabpfn_client/tests/quick_test.py
+deactivate
 ```
