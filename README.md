@@ -11,9 +11,7 @@
 
 TabPFN is a foundation model for tabular data that outperforms traditional methods while being dramatically faster. This client library provides easy access to the TabPFN API, enabling state-of-the-art tabular machine learning in just a few lines of code.
 
-## 🏁 Quick Start
-
-### Interactive Notebook Tutorial
+## Interactive Notebook Tutorial
 > [!TIP]
 >
 > Dive right in with our interactive Colab notebook! It's the best way to get a hands-on feel for TabPFN, walking you through installation, classification, and regression examples.
