@@ -43,10 +43,11 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
 
         # Mitigate parallel writes by checking if the token is already set to
         # the same value. We'll consider using fcntl if this problem persists.
-        if cls.CACHED_TOKEN_FILE.exists():
-            current_token = cls.CACHED_TOKEN_FILE.read_text()
-            if current_token == access_token:
+        try:
+            if cls.CACHED_TOKEN_FILE.read_text() == access_token:
                 return
+        except FileNotFoundError:
+            pass
 
         # Write the new token
         cls.CACHED_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
