@@ -40,6 +40,15 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
     @classmethod
     def set_token(cls, access_token: str):
         ServiceClient.authorize(access_token)
+
+        # Mitigate parallel writes by checking if the token is already set to
+        # the same value. We'll consider using fcntl if this problem persists.
+        if cls.CACHED_TOKEN_FILE.exists():
+            current_token = cls.CACHED_TOKEN_FILE.read_text()
+            if current_token == access_token:
+                return
+
+        # Write the new token
         cls.CACHED_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
         cls.CACHED_TOKEN_FILE.write_text(access_token)
 
