@@ -18,17 +18,13 @@ TabPFN is a foundation model for tabular data that outperforms traditional metho
 >
 > [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/PriorLabs/TabPFN/blob/main/examples/notebooks/TabPFN_Demo_Local.ipynb)
 
-## ⚠️ Alpha Release Note
+## ✅ Stable Release
 
-This is an alpha release. While we've tested it thoroughly in our use cases, you may encounter occasional issues. We appreciate your understanding and feedback as we continue to improve the service.
+This API is now in a stable release. It has been extensively tested and is used across multiple use cases. While we continue to make improvements, the core service is reliable for day-to-day use. Please reach out to us if you encounter any stability issues.
 
-This is a cloud-based service. Your data will be sent to our servers for processing.
+This is a cloud-based service: your data will be sent to our servers for processing. 
 
-- Do NOT upload any Personally Identifiable Information (PII)
-- Do NOT upload any sensitive or confidential data
-- Do NOT upload any data you don't have permission to share
-- Consider anonymizing or pseudonymizing your data before upload
-- Review your organization's data sharing policies before use
+Please only upload data you have permission to share, and avoid sensitive, confidential, or personally identifiable information. Consider anonymizing or pseudonymizing your data in line with your organization’s policies.
 
 ## 🌐 TabPFN Ecosystem
 
