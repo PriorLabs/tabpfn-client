@@ -105,7 +105,7 @@ We're building the future of tabular machine learning and would love your involv
 Each API request consumes usage credits based on the following formula:
 
 ```python
-api_cost = (num_train_rows + num_test_rows) * num_cols * n_estimators
+api_cost = Max{(num_train_rows + num_test_rows) * num_cols * n_estimators, 5000}
 ```
 
 Where `n_estimators` defaults to:
