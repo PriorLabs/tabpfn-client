@@ -113,7 +113,7 @@ Where `n_estimators` defaults to:
 - 4 for classification tasks
 - 8 for regression tasks
 
-Per day the current prediction allowance is 5,000,000 cells. We will adjust this limit based on usage patterns.
+Per day the current prediction allowance is 10,000,000 credits. We will adjust this limit based on usage patterns. If you require further credits, please contact hello@priorlabs.ai.
 
 ### Monitoring Usage
 
