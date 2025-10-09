@@ -1,7 +1,7 @@
 # TabPFN Client
 
 [![PyPI version](https://badge.fury.io/py/tabpfn-client.svg)](https://badge.fury.io/py/tabpfn-client)
-[![Discord](https://img.shields.io/discord/1285598202732482621?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.com/channels/1285598202732482621/)
+[![Discord](https://img.shields.io/discord/1285598202732482621?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/BHnX2Ptf4j)
 [![colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/PriorLabs/TabPFN/blob/main/examples/notebooks/TabPFN_Demo_Local.ipynb)
 [![Documentation](https://img.shields.io/badge/docs-priorlabs.ai-blue)](https://priorlabs.ai/docs)
 [![Twitter Follow](https://img.shields.io/twitter/follow/Prior_Labs?style=social)](https://twitter.com/Prior_Labs)
@@ -11,19 +11,20 @@
 
 TabPFN is a foundation model for tabular data that outperforms traditional methods while being dramatically faster. This client library provides easy access to the TabPFN API, enabling state-of-the-art tabular machine learning in just a few lines of code.
 
-📚 For detailed usage examples and best practices, check out our [Interactive Colab Tutorial](https://colab.research.google.com/github/PriorLabs/TabPFN/blob/main/examples/notebooks/TabPFN_Demo_Local.ipynb)
+## Interactive Notebook Tutorial
+> [!TIP]
+>
+> Dive right in with our interactive Colab notebook! It's the best way to get a hands-on feel for TabPFN, walking you through installation, classification, and regression examples.
+>
+> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/PriorLabs/TabPFN/blob/main/examples/notebooks/TabPFN_Demo_Local.ipynb)
 
-## ⚠️ Alpha Release Note
+## ✅ Stable Release
 
-This is an alpha release. While we've tested it thoroughly in our use cases, you may encounter occasional issues. We appreciate your understanding and feedback as we continue to improve the service.
+This API is now in a stable release. It has been extensively tested and is used across multiple use cases. While we continue to make improvements, the core service is reliable for day-to-day use. Please reach out to us if you encounter any stability issues.
 
-This is a cloud-based service. Your data will be sent to our servers for processing.
+This is a cloud-based service: your data will be sent to our servers for processing. 
 
-- Do NOT upload any Personally Identifiable Information (PII)
-- Do NOT upload any sensitive or confidential data
-- Do NOT upload any data you don't have permission to share
-- Consider anonymizing or pseudonymizing your data before upload
-- Review your organization's data sharing policies before use
+Please only upload data you have permission to share, and avoid sensitive, confidential, or personally identifiable information. Consider anonymizing or pseudonymizing your data in line with your organization’s policies.
 
 ## 🌐 TabPFN Ecosystem
 
@@ -104,7 +105,7 @@ We're building the future of tabular machine learning and would love your involv
 Each API request consumes usage credits based on the following formula:
 
 ```python
-api_cost = (num_train_rows + num_test_rows) * num_cols * n_estimators
+api_cost = max((num_train_rows + num_test_rows) * num_cols * n_estimators, 5000)
 ```
 
 Where `n_estimators` defaults to:
@@ -112,7 +113,7 @@ Where `n_estimators` defaults to:
 - 4 for classification tasks
 - 8 for regression tasks
 
-Per day the current prediction allowance is 5,000,000 cells. We will adjust this limit based on usage patterns.
+Per day the current prediction allowance is 10,000,000 credits. We will adjust this limit based on usage patterns. If you require further credits, please contact [hello@priorlabs.ai](mailto:hello@priorlabs.ai).
 
 ### Monitoring Usage
 
@@ -178,7 +179,7 @@ print(UserDataClient.get_data_summary())
 
 ## 🤝 License
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE.txt](LICENSE.txt) file for details.
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
 ## Development
 
@@ -207,10 +208,33 @@ Use the below command to get it ready for development and running tests.
 pip install -e ".[dev]"
 ```
 
-### Build for PyPI
+### Release
+
+1. First ensure you've bumped the version in pyproject.toml. Use an rc suffix until you're sure it works. Something like x.y.zrc1.
+
+2. Build, upload to the test PyPI, install and run a quick test.
 
 ```bash
-if [ -d "dist" ]; then rm -rf dist/*; fi
-python3 -m pip install --upgrade build; python3 -m build
-python3 -m twine upload --repository pypi dist/*
+rm -rf .venv_test dist
+python3 -m pip install --upgrade build && python3 -m build
+python3 -m pip install --upgrade twine && python3 -m twine upload --repository testpypi dist/*
+python3 -m venv .venv_test && source .venv_test/bin/activate
+python3 -m pip install --pre --index-url https://test.pypi.org/simple/ --no-deps tabpfn-client
+pip install -r requirements.txt
+python tabpfn_client/tests/quick_test.py
+deactivate
+```
+
+3. Correct the version. Ideally this should be what is in main. It shouldn't have an rc suffix unless we're doing broader pre-release testing.
+
+4. Build, upload to the real PyPI, install and run a quick test.
+
+```bash
+rm -rf .venv_test dist
+python3 -m pip install --upgrade build && python3 -m build
+python3 -m pip install --upgrade twine && python3 -m twine upload --repository pypi dist/*
+python3 -m venv .venv_test && source .venv_test/bin/activate
+python3 -m pip install --pre tabpfn-client
+python tabpfn_client/tests/quick_test.py
+deactivate
 ```

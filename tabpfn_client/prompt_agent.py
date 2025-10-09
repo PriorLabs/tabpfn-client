@@ -1,8 +1,9 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
-
+import os
 import textwrap
 import getpass
+
 from password_strength import PasswordPolicy
 
 from tabpfn_client.service_wrapper import UserAuthenticationClient
@@ -229,6 +230,71 @@ class PromptAgent:
         return choice == "y"
 
     @classmethod
+    def clear_console(cls) -> None:
+        os.system("cls" if os.name == "nt" else "clear")
+
+    @classmethod
+    def prompt_multi_select(cls, options: list[str], prompt: str) -> str:
+        """Creates an interactive multi select"""
+        num_options = len(options)
+        choice = None
+
+        while choice is None:
+            cls.clear_console()  # Clear the console before re-rendering the menu
+
+            # Print the title
+            print(f"\033[1;34m{prompt}\033[0m\n")  # Bold Blue
+
+            # Print the lettered menu options
+            for i, option in enumerate(options):
+                letter = chr(ord("A") + i)
+                print(f"  {letter}. {option}")
+
+            print("\n" + "=" * 40)  # Simple separator
+
+            # Prompt the user to enter a letter
+            choice_letter = (
+                input("\033[1;33mEnter the letter of your choice: \033[0m")
+                .strip()
+                .upper()
+            )
+
+            if not choice_letter:
+                print(
+                    "\033[0;31mNo input received. Please enter a letter.\033[0m"
+                )  # Red text
+                input("Press Enter to continue...")  # Pause for user to read message
+                continue
+
+            # Generate valid letter choices (e.g., ['A', 'B', 'C'])
+            valid_choices = [chr(ord("A") + i) for i in range(num_options)]
+
+            if choice_letter in valid_choices:
+                # Convert the chosen letter back to a 0-based index
+                selected_index = ord(choice_letter) - ord("A")
+                choice = options[selected_index]
+            else:
+                print(
+                    f"\033[0;31mInvalid input. Please enter one of the following: {', '.join(valid_choices)}\033[0m"
+                )
+                input("Press Enter to continue...")  # Pause for user to read message
+        return choice
+
+    @classmethod
+    def prompt_and_retry(cls, prompt: str, min_length: int = 2) -> str:
+        last_name = None
+        while last_name is None:
+            last_name = input(cls.indent(f"{prompt}: ")).strip()
+            if len(last_name) < min_length:
+                print(
+                    cls.indent(
+                        f"Field is required. Please enter at least {min_length} characters."
+                    )
+                )
+                last_name = None
+        return last_name
+
+    @classmethod
     def prompt_add_user_information(cls) -> dict:
         print(cls.indent("\nPlease provide your name:"))
 
@@ -250,16 +316,22 @@ class PromptAgent:
             break
 
         print(
-            cls.indent(
-                "\nTo help us tailor our support and services to your needs, we have a few optional questions. "
-                "Feel free to skip any question by leaving it blank."
-            )
+            cls.indent("\nPlease help us tailor our support and services to your needs")
             + "\n"
         )
 
-        company = input(cls.indent("Where do you work? "))
-        role = input(cls.indent("What is your role? "))
-        use_case = input(cls.indent("What do you want to use TabPFN for? "))
+        company = cls.prompt_and_retry("Where do you work?")
+
+        role = cls.prompt_multi_select(
+            ["Field practitioner", "Researcher", "Student", "Other"],
+            "What is your current role?",
+        )
+        if role == "Other":
+            role = cls.prompt_and_retry("Please specify your role")
+
+        use_case = cls.prompt_and_retry(
+            "What do you want to use TabPFN for? Minimum 10 characters.", min_length=10
+        )
 
         choice_contact = cls._choice_with_retries(
             "Can we reach out to you via email to support you? (y/n):", ["y", "n"]
