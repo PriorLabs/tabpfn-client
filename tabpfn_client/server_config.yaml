@@ -1,12 +1,18 @@
-## testing
-# protocol: "http"
-# host: "localhost"
-# port: "8080"
+# local
+protocol: "http"
+host: "localhost"
+port: "8080"
+
+# preprod
+# protocol: "https"
+# host: "tabpfn-server-preprod-1039906307296.europe-west4.run.app"
+# port: "443"
 
 # production
-protocol: "https"
-host: "tabpfn-server-wjedmz7r5a-ez.a.run.app"
-port: "443"
+# protocol: "https"
+# host: "tabpfn-server-wjedmz7r5a-ez.a.run.app"
+# port: "443"
+
 gui_url: "https://ux.priorlabs.ai"
 endpoints:
   root:
