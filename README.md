@@ -105,7 +105,7 @@ We're building the future of tabular machine learning and would love your involv
 Each API request consumes usage credits based on the following formula:
 
 ```python
-api_cost = (num_train_rows + num_test_rows) * num_cols * n_estimators
+api_cost = max((num_train_rows + num_test_rows) * num_cols * n_estimators, 5000)
 ```
 
 Where `n_estimators` defaults to:
@@ -113,7 +113,7 @@ Where `n_estimators` defaults to:
 - 4 for classification tasks
 - 8 for regression tasks
 
-Per day the current prediction allowance is 5,000,000 cells. We will adjust this limit based on usage patterns.
+Per day the current prediction allowance is 10,000,000 credits. We will adjust this limit based on usage patterns. If you require further credits, please fill out [this form](https://forms.gle/2xbHnkxbpb7BtpE47).
 
 ### Monitoring Usage
 
@@ -179,7 +179,7 @@ print(UserDataClient.get_data_summary())
 
 ## 🤝 License
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE.txt](LICENSE.txt) file for details.
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
 ## Development
 
