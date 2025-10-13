@@ -18,17 +18,13 @@ TabPFN is a foundation model for tabular data that outperforms traditional metho
 >
 > [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/PriorLabs/TabPFN/blob/main/examples/notebooks/TabPFN_Demo_Local.ipynb)
 
-## ⚠️ Alpha Release Note
+## ✅ Stable Release
 
-This is an alpha release. While we've tested it thoroughly in our use cases, you may encounter occasional issues. We appreciate your understanding and feedback as we continue to improve the service.
+This API is now in a stable release. It has been extensively tested and is used across multiple use cases. While we continue to make improvements, the core service is reliable for day-to-day use. Please reach out to us if you encounter any stability issues.
 
-This is a cloud-based service. Your data will be sent to our servers for processing.
+This is a cloud-based service: your data will be sent to our servers for processing. 
 
-- Do NOT upload any Personally Identifiable Information (PII)
-- Do NOT upload any sensitive or confidential data
-- Do NOT upload any data you don't have permission to share
-- Consider anonymizing or pseudonymizing your data before upload
-- Review your organization's data sharing policies before use
+Please only upload data you have permission to share, and avoid sensitive, confidential, or personally identifiable information. Consider anonymizing or pseudonymizing your data in line with your organization’s policies.
 
 ## 🌐 TabPFN Ecosystem
 
@@ -109,7 +105,7 @@ We're building the future of tabular machine learning and would love your involv
 Each API request consumes usage credits based on the following formula:
 
 ```python
-api_cost = (num_train_rows + num_test_rows) * num_cols * n_estimators
+api_cost = max((num_train_rows + num_test_rows) * num_cols * n_estimators, 5000)
 ```
 
 Where `n_estimators` defaults to:
@@ -117,7 +113,7 @@ Where `n_estimators` defaults to:
 - 4 for classification tasks
 - 8 for regression tasks
 
-Per day the current prediction allowance is 5,000,000 cells. We will adjust this limit based on usage patterns.
+Per day the current prediction allowance is 10,000,000 credits. We will adjust this limit based on usage patterns. If you require further credits, please fill out [this form](https://forms.gle/2xbHnkxbpb7BtpE47).
 
 ### Monitoring Usage
 
@@ -183,7 +179,7 @@ print(UserDataClient.get_data_summary())
 
 ## 🤝 License
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE.txt](LICENSE.txt) file for details.
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
 ## Development
 
