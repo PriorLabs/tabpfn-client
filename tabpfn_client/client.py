@@ -20,6 +20,7 @@ import sseclient
 import threading
 import time
 from tqdm import tqdm
+import backoff
 
 from tabpfn_client.tabpfn_common_utils import utils as common_utils
 from tabpfn_client.constants import CACHE_DIR
@@ -31,6 +32,26 @@ logger = logging.getLogger(__name__)
 # avoid logging of httpx and httpcore on client side
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
+
+
+def _on_backoff(details):
+    """Callback function for retry attempts."""
+    function_name = details["target"].__name__
+    message = (
+        f"Exception occurred during {function_name}, retrying in {details['wait']} seconds... "
+        f"attempt {details['tries']}: {details['exception']}"
+    )
+    logger.warning(message)
+
+
+def _on_giveup(details):
+    """Callback function when retries are exhausted."""
+    function_name: str = details["target"].__name__.title()
+    message = (
+        f"{function_name} method failed after {details['tries']} attempts. "
+        f"Giving up. Exception: {details['exception']}"
+    )
+    logger.error(message)
 
 
 class GCPOverloaded(Exception):
@@ -184,6 +205,23 @@ class ServiceClient(Singleton):
         cls.httpx_client.headers.pop("Authorization", None)
 
     @classmethod
+    @backoff.on_exception(
+        backoff.expo,
+        (
+            httpx.ConnectError,
+            httpx.TimeoutException,
+            httpx.ReadTimeout,
+            httpx.WriteTimeout,
+            httpx.RemoteProtocolError,
+            GCPOverloaded,
+        ),
+        max_tries=3,
+        base=2,
+        max_value=30,
+        logger=logger,
+        on_backoff=_on_backoff,
+        on_giveup=_on_giveup,
+    )
     def fit(cls, X, y, config=None) -> str:
         """
         Upload a train set to server and return the train set UID if successful.
@@ -242,6 +280,23 @@ class ServiceClient(Singleton):
         return train_set_uid
 
     @classmethod
+    @backoff.on_exception(
+        backoff.expo,
+        (
+            httpx.ConnectError,
+            httpx.TimeoutException,
+            httpx.ReadTimeout,
+            httpx.WriteTimeout,
+            httpx.RemoteProtocolError,
+            GCPOverloaded,
+        ),
+        max_tries=3,
+        base=2,
+        max_value=30,
+        logger=logger,
+        on_backoff=_on_backoff,
+        on_giveup=_on_giveup,
+    )
     def predict(
         cls,
         train_set_uid: str,
