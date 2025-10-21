@@ -12,7 +12,7 @@ from importlib.metadata import version, PackageNotFoundError
 import numpy as np
 from omegaconf import OmegaConf
 import json
-from typing import Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional, Union
 import xxhash
 import os
 from collections import OrderedDict
@@ -34,7 +34,7 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
 
 
-def _on_backoff(details):
+def _on_backoff(details: Dict[str, Any]):
     """Callback function for retry attempts."""
     function_name = details["target"].__name__
     message = (
@@ -44,7 +44,7 @@ def _on_backoff(details):
     logger.warning(message)
 
 
-def _on_giveup(details):
+def _on_giveup(details: Dict[str, Any]):
     """Callback function when retries are exhausted."""
     function_name: str = details["target"].__name__.title()
     message = (
