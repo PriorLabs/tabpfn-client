@@ -9,7 +9,7 @@ jobs:
     name: Ruff Linting & Formatting
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: chartboost/ruff-action@v1
         with:
           src: "./"
@@ -42,10 +42,10 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           architecture: x64
@@ -111,7 +111,7 @@ jobs:
       # REFER: https://github.com/actions/setup-python#caching-packages-dependencies
       - name: Setup pip cache
         id: pip-cache
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ matrix.dependency-set }}-${{ hashFiles('requirements-test.txt', 'requirements-generated.txt')}}
