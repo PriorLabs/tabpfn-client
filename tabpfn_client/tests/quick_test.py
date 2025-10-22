@@ -15,7 +15,7 @@ from sklearn.model_selection import train_test_split
 # from tabpfn_client import UserDataClient
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 
 if __name__ == "__main__":
