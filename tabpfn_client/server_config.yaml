@@ -9,15 +9,14 @@
 # port: "443"
 
 # development
-protocol: "https"
-host: "api-813747016009.europe-west4.run.app"
-port: "443"
-
-# production
 # protocol: "https"
-# host: "tabpfn-server-wjedmz7r5a-ez.a.run.app"
+# host: "api-813747016009.europe-west4.run.app"
 # port: "443"
 
+# production
+protocol: "https"
+host: "tabpfn-server-wjedmz7r5a-ez.a.run.app"
+port: "443"
 gui_url: "https://ux.priorlabs.ai"
 endpoints:
   root:
