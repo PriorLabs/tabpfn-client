@@ -16,7 +16,7 @@ from tabpfn_client.service_wrapper import InferenceClient
 
 logger = logging.getLogger(__name__)
 
-MAX_ROWS = 50_000
+MAX_ROWS = 10_000
 MAX_COLS = 500
 MAX_NUMBER_OF_CLASSES = 10
 
