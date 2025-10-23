@@ -3,16 +3,6 @@
 # host: "localhost"
 # port: "8080"
 
-# preprod
-# protocol: "https"
-# host: "tabpfn-server-preprod-1039906307296.europe-west4.run.app"
-# port: "443"
-
-# development
-# protocol: "https"
-# host: "api-813747016009.europe-west4.run.app"
-# port: "443"
-
 # production
 protocol: "https"
 host: "tabpfn-server-wjedmz7r5a-ez.a.run.app"
