@@ -323,8 +323,8 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             tabpfn.fit(X, y)
 
     def test_data_size_check_on_train_with_oversized_data_raise_error(self):
-        X = np.random.randn(10001, 501)
-        y = np.random.randn(10001)
+        X = np.random.randn(50_001, 401)
+        y = np.random.randn(50_001)
 
         tabpfn = TabPFNRegressor()
 
@@ -337,7 +337,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             tabpfn.fit(X[:, :10], y)
 
     def test_data_size_check_on_predict_with_oversized_data_raise_error(self):
-        test_X = np.random.randn(10001, 5)
+        test_X = np.random.randn(50_001, 5)
         tabpfn = TabPFNRegressor()
 
         # skip fitting

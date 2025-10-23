@@ -161,6 +161,7 @@ class ServiceClient(Singleton):
         base_url=base_url,
         timeout=httpx_timeout_s,
         headers={"client-version": get_client_version()},
+        http2=True,
     )
 
     _access_token = None
