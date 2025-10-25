@@ -7,6 +7,7 @@ import getpass
 from password_strength import PasswordPolicy
 
 from tabpfn_client.service_wrapper import UserAuthenticationClient
+from tabpfn_client.ui import console, success, warn, fail, info
 
 
 class PromptAgent:
@@ -47,14 +48,14 @@ class PromptAgent:
             ]
         )
 
-        print(cls.indent(prompt))
+        console.print(cls.indent(prompt))
 
     @classmethod
     def prompt_and_set_token(cls):
         # Try browser login first
-        success, message = UserAuthenticationClient.try_browser_login()
-        if success:
-            print(cls.indent("Login via browser successful!"))
+        success_login, message = UserAuthenticationClient.try_browser_login()
+        if success_login:
+            success("Login via browser successful!")
             return
 
         # Rest of the existing CLI login code
@@ -87,7 +88,7 @@ class PromptAgent:
                 if is_valid:
                     break
                 else:
-                    print(cls.indent(message + "\n"))
+                    warn(cls.indent(message))
 
             password_req = UserAuthenticationClient.get_password_policy()
             password_policy = cls.password_req_to_policy(password_req)
@@ -104,7 +105,7 @@ class PromptAgent:
                 password = getpass.getpass(cls.indent(password_req_prompt))
                 password_req_prompt = "Please enter your password: "
                 if len(password_policy.test(password)) != 0:
-                    print(cls.indent("Password requirements not satisfied.\n"))
+                    warn(cls.indent("Password requirements not satisfied."))
                     continue
 
                 password_confirm = getpass.getpass(
@@ -113,9 +114,9 @@ class PromptAgent:
                 if password == password_confirm:
                     break
                 else:
-                    print(
+                    warn(
                         cls.indent(
-                            "Entered password and confirmation password do not match, please try again.\n"
+                            "Entered password and confirmation password do not match, please try again."
                         )
                     )
             agreed_personally_identifiable_information = (
@@ -139,11 +140,10 @@ class PromptAgent:
             if not is_created:
                 raise RuntimeError("User registration failed: " + str(message) + "\n")
 
-            print(
+            success(
                 cls.indent(
                     "Account created successfully! To start using TabPFN please enter the verification code we sent you by mail."
                 )
-                + "\n"
             )
             # verify token from email
             cls._verify_user_email(access_token=access_token)
@@ -162,7 +162,7 @@ class PromptAgent:
                 ) = UserAuthenticationClient.set_token_by_login(email, password)
                 if status_code == 200 and access_token is not None:
                     break
-                print(cls.indent("Login failed: " + str(message)) + "\n")
+                fail(cls.indent("Login failed: " + str(message)))
                 if status_code == 403:
                     # 403 implies that the email is not verified
                     cls._verify_user_email(access_token=access_token)
@@ -184,10 +184,9 @@ class PromptAgent:
                     continue
                 elif choice == "2":
                     sent = False
-                    print(
+                    info(
                         cls.indent(
-                            "We will send you an email with a link "
-                            "that allows you to reset your password. \n"
+                            "We will send you an email with a link that allows you to reset your password."
                         )
                     )
                     while True:
@@ -195,17 +194,17 @@ class PromptAgent:
                             sent,
                             message,
                         ) = UserAuthenticationClient.send_reset_password_email(email)
-                        print("\n" + cls.indent(message))
+                        info(cls.indent(message))
                         if sent:
                             break
                         email = input(cls.indent("Please enter your email address: "))
-                    print(
+                    info(
                         cls.indent(
                             "Once you have reset your password, you will be able to login here: "
                         )
                     )
 
-            print(cls.indent("Login successful!") + "\n")
+            success(cls.indent("Login successful!"))
 
     @classmethod
     def prompt_terms_and_cond(cls) -> bool:
@@ -398,7 +397,7 @@ class PromptAgent:
 
     @classmethod
     def prompt_confirm_password_for_user_account_deletion(cls) -> str:
-        print(cls.indent("You are about to delete your account."))
+        warn(cls.indent("You are about to delete your account."))
         confirm_pass = getpass.getpass(
             cls.indent("Please confirm by entering your password: ")
         )
@@ -407,7 +406,7 @@ class PromptAgent:
 
     @classmethod
     def prompt_account_deleted(cls):
-        print(cls.indent("Your account has been deleted."))
+        success(cls.indent("Your account has been deleted."))
 
     @classmethod
     def _choice_with_retries(cls, prompt: str, choices: list) -> str:
@@ -446,8 +445,8 @@ class PromptAgent:
                 token, access_token
             )
             if not verified:
-                print("\n" + cls.indent(str(message) + "Please try again!") + "\n")
+                warn(cls.indent(str(message) + " Please try again!"))
             else:
-                print(cls.indent("Email verified successfully!") + "\n")
+                success(cls.indent("Email verified successfully!"))
                 break
         return

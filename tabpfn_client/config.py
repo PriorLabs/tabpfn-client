@@ -7,6 +7,7 @@ from tabpfn_client.client import ServiceClient
 from tabpfn_client.service_wrapper import UserAuthenticationClient
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client.prompt_agent import PromptAgent
+from tabpfn_client.ui import warn
 
 
 class Config:
@@ -45,7 +46,7 @@ def init(use_server=True):
             PromptAgent.prompt_reusing_existing_token()
         elif access_token is not None:
             # token holds invalid due to user email verification
-            print("Your email is not verified. Please verify your email to continue...")
+            warn("Your email is not verified. Please verify your email to continue...")
             PromptAgent.reverify_email(access_token)
         else:
             PromptAgent.prompt_welcome()
