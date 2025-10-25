@@ -8,6 +8,4 @@ sseclient-py>=1.8.0,<=1.8.0
 tqdm>=4.63.0,<=4.67.1
 typing_extensions>=4.12.2,<=4.15.0
 xxhash>=1.1.0,<=3.6.0
-
-# UI styling for interactive prompts
 rich>=13.0.0,<=13.9.4
