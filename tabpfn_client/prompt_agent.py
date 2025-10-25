@@ -1,12 +1,12 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
-import os
 import textwrap
 import getpass
 
 from password_strength import PasswordPolicy
 
 from tabpfn_client.service_wrapper import UserAuthenticationClient
+from tabpfn_client.ui import console, fail, header, status, success, warn
 
 
 class PromptAgent:
@@ -16,10 +16,14 @@ class PromptAgent:
         )
 
     @staticmethod
-    def indent(text: str):
+    def indent(text: str) -> str:
         indent_factor = 2
         indent_str = " " * indent_factor
         return textwrap.indent(text, indent_str)
+
+    @classmethod
+    def _print(cls, message: str, *, style: str | None = None) -> None:
+        console.print(cls.indent(message), style=style)
 
     @staticmethod
     def password_req_to_policy(password_req: list[str]):
@@ -37,27 +41,29 @@ class PromptAgent:
 
     @classmethod
     def prompt_welcome(cls):
-        prompt = "\n".join(
-            [
-                "Welcome to TabPFN!",
-                "",
-                "TabPFN is still under active development, and we are working hard to make it better.",
-                "Please bear with us if you encounter any issues.",
-                "",
-            ]
+        header("Welcome to TabPFN", "Thanks for being part of the journey")
+        cls._print(
+            "\n".join(
+                [
+                    "TabPFN is still under active development, and we are working hard to make it better.",
+                    "Please bear with us if you encounter any issues.",
+                    "",
+                ]
+            )
         )
-
-        print(cls.indent(prompt))
 
     @classmethod
     def prompt_and_set_token(cls):
-        # Try browser login first
-        success, message = UserAuthenticationClient.try_browser_login()
-        if success:
-            print(cls.indent("Login via browser successful!"))
-            return
+        header("Account Access", "Sign in or register to continue")
 
-        # Rest of the existing CLI login code
+        with status("Attempting browser login"):
+            success_browser_login, message = UserAuthenticationClient.try_browser_login()
+        if success_browser_login:
+            success("Login via browser successful!")
+            return
+        if message:
+            warn(cls.indent(message))
+
         prompt = "\n".join(
             [
                 "Please choose one of the following options:",
@@ -82,14 +88,14 @@ class PromptAgent:
 
             while True:
                 email = input(cls.indent("Please enter your email: "))
-                # Send request to server to check if email is valid and not already taken.
-                is_valid, message = UserAuthenticationClient.validate_email(email)
+                with status("Validating email"):
+                    is_valid, message = UserAuthenticationClient.validate_email(email)
                 if is_valid:
                     break
-                else:
-                    print(cls.indent(message + "\n"))
+                warn(cls.indent(message + "\n"))
 
-            password_req = UserAuthenticationClient.get_password_policy()
+            with status("Retrieving password policy"):
+                password_req = UserAuthenticationClient.get_password_policy()
             password_policy = cls.password_req_to_policy(password_req)
             password_req_prompt = "\n".join(
                 [
@@ -104,7 +110,7 @@ class PromptAgent:
                 password = getpass.getpass(cls.indent(password_req_prompt))
                 password_req_prompt = "Please enter your password: "
                 if len(password_policy.test(password)) != 0:
-                    print(cls.indent("Password requirements not satisfied.\n"))
+                    warn(cls.indent("Password requirements not satisfied.\n"))
                     continue
 
                 password_confirm = getpass.getpass(
@@ -113,7 +119,7 @@ class PromptAgent:
                 if password == password_confirm:
                     break
                 else:
-                    print(
+                    fail(
                         cls.indent(
                             "Entered password and confirmation password do not match, please try again.\n"
                         )
@@ -129,21 +135,20 @@ class PromptAgent:
             additional_info["agreed_personally_identifiable_information"] = (
                 agreed_personally_identifiable_information
             )
-            (
-                is_created,
-                message,
-                access_token,
-            ) = UserAuthenticationClient.set_token_by_registration(
-                email, password, password_confirm, validation_link, additional_info
-            )
+            with status("Creating account"):
+                (
+                    is_created,
+                    message,
+                    access_token,
+                ) = UserAuthenticationClient.set_token_by_registration(
+                    email, password, password_confirm, validation_link, additional_info
+                )
             if not is_created:
                 raise RuntimeError("User registration failed: " + str(message) + "\n")
 
-            print(
-                cls.indent(
-                    "Account created successfully! To start using TabPFN please enter the verification code we sent you by mail."
-                )
-                + "\n"
+            success("Account created successfully!")
+            cls._print(
+                "To start using TabPFN please enter the verification code we sent you by mail.\n"
             )
             # verify token from email
             cls._verify_user_email(access_token=access_token)
@@ -155,14 +160,16 @@ class PromptAgent:
                 email = input(cls.indent("Please enter your email: "))
                 password = getpass.getpass(cls.indent("Please enter your password: "))
 
-                (
-                    access_token,
-                    message,
-                    status_code,
-                ) = UserAuthenticationClient.set_token_by_login(email, password)
+                with status("Authenticating"):
+                    (
+                        access_token,
+                        message,
+                        status_code,
+                    ) = UserAuthenticationClient.set_token_by_login(email, password)
                 if status_code == 200 and access_token is not None:
+                    success("Login successful!")
                     break
-                print(cls.indent("Login failed: " + str(message)) + "\n")
+                fail(cls.indent("Login failed: " + str(message)) + "\n")
                 if status_code == 403:
                     # 403 implies that the email is not verified
                     cls._verify_user_email(access_token=access_token)
@@ -184,28 +191,22 @@ class PromptAgent:
                     continue
                 elif choice == "2":
                     sent = False
-                    print(
-                        cls.indent(
-                            "We will send you an email with a link "
-                            "that allows you to reset your password. \n"
-                        )
+                    cls._print(
+                        "We will send you an email with a link that allows you to reset your password. \n"
                     )
                     while True:
-                        (
-                            sent,
-                            message,
-                        ) = UserAuthenticationClient.send_reset_password_email(email)
-                        print("\n" + cls.indent(message))
+                        with status("Sending password reset email"):
+                            (
+                                sent,
+                                message,
+                            ) = UserAuthenticationClient.send_reset_password_email(email)
+                        cls._print("\n" + message)
                         if sent:
                             break
                         email = input(cls.indent("Please enter your email address: "))
-                    print(
-                        cls.indent(
-                            "Once you have reset your password, you will be able to login here: "
-                        )
+                    cls._print(
+                        "Once you have reset your password, you will be able to login here: "
                     )
-
-            print(cls.indent("Login successful!") + "\n")
 
     @classmethod
     def prompt_terms_and_cond(cls) -> bool:
@@ -231,7 +232,7 @@ class PromptAgent:
 
     @classmethod
     def clear_console(cls) -> None:
-        os.system("cls" if os.name == "nt" else "clear")
+        console.clear()
 
     @classmethod
     def prompt_multi_select(cls, options: list[str], prompt: str) -> str:
@@ -243,26 +244,20 @@ class PromptAgent:
             cls.clear_console()  # Clear the console before re-rendering the menu
 
             # Print the title
-            print(f"\033[1;34m{prompt}\033[0m\n")  # Bold Blue
+            console.print(f"[bold blue]{prompt}[/bold blue]\n")
 
             # Print the lettered menu options
             for i, option in enumerate(options):
                 letter = chr(ord("A") + i)
-                print(f"  {letter}. {option}")
+                cls._print(f"[bold]{letter}[/bold]. {option}")
 
-            print("\n" + "=" * 40)  # Simple separator
+            console.rule(style="dim")
 
             # Prompt the user to enter a letter
-            choice_letter = (
-                input("\033[1;33mEnter the letter of your choice: \033[0m")
-                .strip()
-                .upper()
-            )
+            choice_letter = input(cls.indent("Enter the letter of your choice: ")).strip().upper()
 
             if not choice_letter:
-                print(
-                    "\033[0;31mNo input received. Please enter a letter.\033[0m"
-                )  # Red text
+                warn("No input received. Please enter a letter.")
                 input("Press Enter to continue...")  # Pause for user to read message
                 continue
 
@@ -274,8 +269,8 @@ class PromptAgent:
                 selected_index = ord(choice_letter) - ord("A")
                 choice = options[selected_index]
             else:
-                print(
-                    f"\033[0;31mInvalid input. Please enter one of the following: {', '.join(valid_choices)}\033[0m"
+                fail(
+                    f"Invalid input. Please enter one of the following: {', '.join(valid_choices)}"
                 )
                 input("Press Enter to continue...")  # Pause for user to read message
         return choice
@@ -286,7 +281,7 @@ class PromptAgent:
         while last_name is None:
             last_name = input(cls.indent(f"{prompt}: ")).strip()
             if len(last_name) < min_length:
-                print(
+                warn(
                     cls.indent(
                         f"Field is required. Please enter at least {min_length} characters."
                     )
@@ -296,13 +291,13 @@ class PromptAgent:
 
     @classmethod
     def prompt_add_user_information(cls) -> dict:
-        print(cls.indent("\nPlease provide your name:"))
+        cls._print("\nPlease provide your name:")
 
         # Required fields
         while True:
             first_name = input(cls.indent("First Name: ")).strip()
             if not first_name:
-                print(
+                warn(
                     cls.indent("First name is required. Please enter your first name.")
                 )
                 continue
@@ -311,13 +306,12 @@ class PromptAgent:
         while True:
             last_name = input(cls.indent("Last Name: ")).strip()
             if not last_name:
-                print(cls.indent("Last name is required. Please enter your last name."))
+                warn(cls.indent("Last name is required. Please enter your last name."))
                 continue
             break
 
-        print(
-            cls.indent("\nPlease help us tailor our support and services to your needs")
-            + "\n"
+        cls._print(
+            "\nPlease help us tailor our support and services to your needs\n"
         )
 
         company = cls.prompt_and_retry("Where do you work?")
@@ -349,13 +343,7 @@ class PromptAgent:
 
     @classmethod
     def prompt_reusing_existing_token(cls):
-        prompt = "\n".join(
-            [
-                "Welcome Back! Found existing access token, reusing it for authentication."
-            ]
-        )
-
-        print(cls.indent(prompt))
+        success("Found existing access token, reusing it for authentication.")
 
     @classmethod
     def reverify_email(cls, access_token):
@@ -365,7 +353,7 @@ class PromptAgent:
                 "Note: The email might be in your spam folder or could have expired.",
             ]
         )
-        print(cls.indent(prompt))
+        cls._print(prompt)
         retry_verification = "\n".join(
             [
                 "Do you want to resend email verification link? (y/n): ",
@@ -378,13 +366,12 @@ class PromptAgent:
                 access_token
             )
             if not sent:
-                print(cls.indent("Failed to send verification email: " + message))
+                fail(cls.indent("Failed to send verification email: " + message))
             else:
-                print(
+                success(
                     cls.indent(
                         "A verification email has been sent, provided the details are correct!"
                     )
-                    + "\n"
                 )
         # verify token from email
         cls._verify_user_email(access_token=access_token)
@@ -394,11 +381,11 @@ class PromptAgent:
     @classmethod
     def prompt_retrieved_greeting_messages(cls, greeting_messages: list[str]):
         for message in greeting_messages:
-            print(cls.indent(message))
+            cls._print(message)
 
     @classmethod
     def prompt_confirm_password_for_user_account_deletion(cls) -> str:
-        print(cls.indent("You are about to delete your account."))
+        warn(cls.indent("You are about to delete your account."))
         confirm_pass = getpass.getpass(
             cls.indent("Please confirm by entering your password: ")
         )
@@ -407,7 +394,7 @@ class PromptAgent:
 
     @classmethod
     def prompt_account_deleted(cls):
-        print(cls.indent("Your account has been deleted."))
+        success(cls.indent("Your account has been deleted."))
 
     @classmethod
     def _choice_with_retries(cls, prompt: str, choices: list) -> str:
@@ -446,8 +433,12 @@ class PromptAgent:
                 token, access_token
             )
             if not verified:
-                print("\n" + cls.indent(str(message) + "Please try again!") + "\n")
+                warn(
+                    "\n"
+                    + cls.indent(str(message) + " Please try again!")
+                    + "\n"
+                )
             else:
-                print(cls.indent("Email verified successfully!") + "\n")
+                success(cls.indent("Email verified successfully!") + "\n")
                 break
         return
