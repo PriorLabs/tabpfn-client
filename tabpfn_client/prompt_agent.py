@@ -97,6 +97,7 @@ class PromptAgent:
                 "[blue]Report issues: https://github.com/priorlabs/tabpfn-client/issues[/blue]"
             )
         )
+        console.print(cls.indent("[blue]Press Ctrl+C anytime to exit[/blue]"))
 
     @classmethod
     def prompt_and_set_token(cls) -> bool:
@@ -146,7 +147,7 @@ class PromptAgent:
                 state_mgr.clear()
 
         # Account access section — compact UI
-        console.print()
+        console.print(cls.indent("\n"))
         table = Table(box=None, show_header=False, pad_edge=False, show_edge=False)
         table.add_column("#", style="bold blue", width=5)
         table.add_column("Action")
@@ -156,7 +157,6 @@ class PromptAgent:
         console.print(table)
 
         # Prompt for a valid choice using Rich input
-        console.print("\n  [blue]Press Ctrl+C anytime to exit[/blue]")
         valid_choices = {"1", "2", "q", "b"}
         while True:
             choice = (
