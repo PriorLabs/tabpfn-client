@@ -330,16 +330,16 @@ class PromptAgent:
 
                 # Login failed - show options
                 fail(f"Login failed: {message}")
-                console.print()
-                console.print(
-                    "[bold blue]\\[1][/bold blue] Try password again [blue](default)[/blue]"
-                )
-                console.print("[bold blue]\\[2][/bold blue] Reset password")
-                console.print("[bold blue]\\[3][/bold blue] Change email")
+                console.print("\n[bold]What would you like to do?[/bold]")
+                console.print("[bold blue]\\[1][/bold blue] Try password again")
+                console.print("[bold blue]\\[2][/bold blue] Reset password via email")
+                console.print("[bold blue]\\[3][/bold blue] Use a different email")
                 console.print("[bold blue]\\[q][/bold blue] Quit")
 
                 retry_choice = (
-                    console.input("\n[bold blue]→[/bold blue] Choose (1/2/3/q) [1]: ")
+                    console.input(
+                        "\n[bold blue]→[/bold blue] Choose (1/2/3/q) [default: 1]: "
+                    )
                     .strip()
                     .lower()
                     or "1"
