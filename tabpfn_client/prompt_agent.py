@@ -1,15 +1,10 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
 import getpass
-import os
 import textwrap
-from rich.panel import Panel
 from rich.table import Table
-from rich.align import Align
-from rich.rule import Rule
-from rich import box
 
-from password_strength import PasswordPolicy, PasswordStats
+from password_strength import PasswordPolicy
 
 from tabpfn_client.service_wrapper import UserAuthenticationClient
 from tabpfn_client.state_manager import RegistrationState, check_internet_connection
@@ -18,11 +13,10 @@ from tabpfn_client.ui import (
     success,
     warn,
     fail,
-    info,
     status,
     print_logo,
-    print_logo_small,
 )
+
 
 class PromptAgent:
     def __new__(cls):
@@ -57,33 +51,27 @@ class PromptAgent:
         """Show which password requirements are met/unmet. Returns list of failed tests."""
         if not password:
             return []
-        
+
         failed_tests = password_policy.test(password)
         return failed_tests
-    
+
     @staticmethod
-    def display_requirement_status(password: str, password_req: list[str], password_policy) -> None:
+    def display_requirement_status(
+        password: str, password_req: list[str], password_policy
+    ) -> None:
         """Display check marks for met/unmet requirements."""
         if not password:
             return
-        
+
         failed_tests = password_policy.test(password)
         failed_names = {test.name() for test in failed_tests}
-        
-        # Map requirement strings to test names
-        req_mapping = {
-            "length": "Length",
-            "uppercase": "Uppercase",
-            "numbers": "Numbers",
-            "special": "Special"
-        }
-        
+
         console.print("  Requirements:")
         for req in password_req:
             # Parse requirement like "Length(8)" -> ("length", "8")
             word_part, number_part = req.split("(")
             req_key = word_part.lower()
-            
+
             # Check if this requirement is in failed tests
             is_met = req_key not in failed_names
             if is_met:
@@ -92,7 +80,7 @@ class PromptAgent:
             else:
                 icon = "[bright_black]•[/bright_black]"
                 text = f"[bright_black]{req}[/bright_black]"
-            
+
             console.print(f"    {icon} {text}")
 
     @classmethod
@@ -104,7 +92,11 @@ class PromptAgent:
                 "TabPFN is still under active development, please help us improve and report any bugs/ideas you find."
             )
         )
-        console.print(cls.indent("[blue]Report issues: https://github.com/priorlabs/tabpfn-client/issues[/blue]"))
+        console.print(
+            cls.indent(
+                "[blue]Report issues: https://github.com/priorlabs/tabpfn-client/issues[/blue]"
+            )
+        )
 
     @classmethod
     def prompt_and_set_token(cls) -> bool:
@@ -124,18 +116,27 @@ class PromptAgent:
     def _prompt_and_set_token_impl(cls):
         # Check internet connection
         if not check_internet_connection():
-            warn("No internet connection detected. TabPFN client requires Internet access.")
+            warn(
+                "No internet connection detected. TabPFN client requires Internet access."
+            )
             console.print("  [blue]Please check your connection and try again.[/blue]")
             return False
-        
+
         # Check for interrupted registration
         state_mgr = RegistrationState()
         saved_state = state_mgr.load()
-        
+
         if saved_state and saved_state.get("email"):
-            console.print(f"\n[yellow]Found interrupted registration for: {saved_state['email']}[/yellow]")
-            resume = console.input("  [bold blue]→[/bold blue] Resume? (y/n) [y]: ").strip().lower() or "y"
-            
+            console.print(
+                f"\n[yellow]Found interrupted registration for: {saved_state['email']}[/yellow]"
+            )
+            resume = (
+                console.input("  [bold blue]→[/bold blue] Resume? (y/n) [y]: ")
+                .strip()
+                .lower()
+                or "y"
+            )
+
             if resume in ["y", "yes"]:
                 console.print("  [blue]Resuming registration...[/blue]")
                 # Continue with saved email
@@ -143,7 +144,7 @@ class PromptAgent:
                 return resume_result
             else:
                 state_mgr.clear()
-        
+
         # Account access section — compact UI
         console.print()
         table = Table(box=None, show_header=False, pad_edge=False, show_edge=False)
@@ -158,7 +159,11 @@ class PromptAgent:
         console.print("\n  [blue]Press Ctrl+C anytime to exit[/blue]")
         valid_choices = {"1", "2", "q", "b"}
         while True:
-            choice = console.input("\n[bold blue]→[/bold blue] Choose (1/2/q): ").strip().lower()
+            choice = (
+                console.input("\n[bold blue]→[/bold blue] Choose (1/2/q): ")
+                .strip()
+                .lower()
+            )
             if choice in valid_choices:
                 break
             if choice == "b":
@@ -197,45 +202,49 @@ class PromptAgent:
                 if not email:
                     warn("  Email is required.")
                     continue
-                
+
                 # Save state in case of interruption
                 state_mgr.save({"email": email, "step": "email_validation"})
-                
+
                 with status("Validating email"):
                     is_valid, message = UserAuthenticationClient.validate_email(email)
                 if is_valid:
                     break
                 warn(f"  {message}")
-                console.print("  [blue]Please try a different email or contact support if this seems incorrect.[/blue]")
+                console.print(
+                    "  [blue]Please try a different email or contact support if this seems incorrect.[/blue]"
+                )
 
             # Step 3: Password
             console.print("\n[bold blue]Step 3/6[/bold blue] - Create Password")
-            
+
             with status("Retrieving password policy"):
                 password_req = UserAuthenticationClient.get_password_policy()
             password_policy = cls.password_req_to_policy(password_req)
-            
+
             # Show requirements upfront
             console.print("\n  Requirements:")
             for req in password_req:
                 console.print(f"    [bright_black]•[/bright_black] {req}")
-            
+
             password = None
             while True:
                 password = getpass.getpass(cls.indent("\n  Password: "))
-                
+
                 # Validate password requirements
                 failed_tests = password_policy.test(password)
                 if len(failed_tests) != 0:
                     console.print()
-                    cls.display_requirement_status(password, password_req, password_policy)
-                    console.print("  [blue]Enter a password that meets all requirements.[/blue]")
+                    cls.display_requirement_status(
+                        password, password_req, password_policy
+                    )
+                    console.print(
+                        "  [blue]Enter a password that meets all requirements.[/blue]"
+                    )
                     continue
 
                 # Confirm password
-                password_confirm = getpass.getpass(
-                    cls.indent("  Confirm password: ")
-                )
+                password_confirm = getpass.getpass(cls.indent("  Confirm password: "))
                 if password == password_confirm:
                     break
                 else:
@@ -268,7 +277,9 @@ class PromptAgent:
 
             console.print()
             success("Account created successfully!")
-            console.print("  [blue]Almost done! Check your email for a verification code.[/blue]\n")
+            console.print(
+                "  [blue]Almost done! Check your email for a verification code.[/blue]\n"
+            )
             # Clear saved state on success
             state_mgr.clear()
             # verify token from email
@@ -282,7 +293,7 @@ class PromptAgent:
         elif choice == "2":
             console.print("\n[bold]Login[/bold]")
             email = input(cls.indent("  Email: "))
-            
+
             while True:
                 password = getpass.getpass(cls.indent("  Password: "))
 
@@ -292,11 +303,11 @@ class PromptAgent:
                         message,
                         status_code,
                     ) = UserAuthenticationClient.set_token_by_login(email, password)
-                
+
                 if status_code == 200 and access_token is not None:
                     success("Login successful!")
                     return True
-                
+
                 if status_code == 403:
                     # 403 implies that the email is not verified
                     warn("Email not verified.")
@@ -316,17 +327,24 @@ class PromptAgent:
                         return True
                     # If still failing, show error and continue loop
                     continue
-                
+
                 # Login failed - show options
                 fail(f"Login failed: {message}")
                 console.print()
-                console.print("  [bold blue][1][/bold blue] Try password again [blue](default)[/blue]")
+                console.print(
+                    "  [bold blue][1][/bold blue] Try password again [blue](default)[/blue]"
+                )
                 console.print("  [bold blue][2][/bold blue] Reset password")
                 console.print("  [bold blue][3][/bold blue] Change email")
                 console.print("  [bold blue][q][/bold blue] Quit")
-                
-                retry_choice = console.input("\n  [bold blue]→[/bold blue] Choose (1/2/3/q) [1]: ").strip().lower() or "1"
-                
+
+                retry_choice = (
+                    console.input("\n  [bold blue]→[/bold blue] Choose (1/2/3/q) [1]: ")
+                    .strip()
+                    .lower()
+                    or "1"
+                )
+
                 if retry_choice == "1":
                     console.print(f"  [blue]Logging in as: {email}[/blue]")
                     continue
@@ -334,11 +352,15 @@ class PromptAgent:
                     console.print("\n[bold]Password Reset[/bold]")
                     console.print("  We'll send a reset link to your email.")
                     with status("Sending password reset email"):
-                        sent, reset_msg = UserAuthenticationClient.send_reset_password_email(email)
-                    
+                        sent, reset_msg = (
+                            UserAuthenticationClient.send_reset_password_email(email)
+                        )
+
                     if sent:
                         success(f"Password reset email sent to {email}")
-                        console.print("  [blue]Please check your email and return here after resetting.[/blue]")
+                        console.print(
+                            "  [blue]Please check your email and return here after resetting.[/blue]"
+                        )
                     else:
                         fail(f"Failed to send reset email: {reset_msg}")
                     return False
@@ -357,11 +379,17 @@ class PromptAgent:
     @classmethod
     def prompt_terms_and_cond(cls) -> bool:
         console.print("\n[bold]Terms & Conditions[/bold]")
-        console.print(f"  Please review: [link=https://www.priorlabs.ai/terms]https://www.priorlabs.ai/terms[/link]")
+        console.print(
+            "  Please review: [link=https://www.priorlabs.ai/terms]https://www.priorlabs.ai/terms[/link]"
+        )
         console.print("  By using TabPFN, you agree to our terms and conditions.")
-        
+
         while True:
-            choice = console.input("\n  [bold blue]→[/bold blue] Do you agree? (y/n): ").strip().lower()
+            choice = (
+                console.input("\n  [bold blue]→[/bold blue] Do you agree? (y/n): ")
+                .strip()
+                .lower()
+            )
             if choice in ["y", "yes"]:
                 return True
             elif choice in ["n", "no"]:
@@ -372,10 +400,16 @@ class PromptAgent:
     @classmethod
     def prompt_terms_and_cond_simple(cls) -> bool:
         """Simplified terms prompt for registration flow."""
-        console.print(f"  By using TabPFN, you agree to the terms and conditions at [link=https://www.priorlabs.ai/terms]https://www.priorlabs.ai/terms[/link]")
-        
+        console.print(
+            "  By using TabPFN, you agree to the terms and conditions at [link=https://www.priorlabs.ai/terms]https://www.priorlabs.ai/terms[/link]"
+        )
+
         while True:
-            choice = console.input("  [bold blue]→[/bold blue] Agree to terms? (y/n): ").strip().lower()
+            choice = (
+                console.input("  [bold blue]→[/bold blue] Agree to terms? (y/n): ")
+                .strip()
+                .lower()
+            )
             if choice in ["y", "yes"]:
                 return True
             elif choice in ["n", "no"]:
@@ -386,10 +420,16 @@ class PromptAgent:
     @classmethod
     def prompt_personally_identifiable_information(cls) -> bool:
         console.print("\n[bold]Data Privacy[/bold]")
-        console.print("  Please do not upload personal, sensitive, or confidential data.")
-        
+        console.print(
+            "  Please do not upload personal, sensitive, or confidential data."
+        )
+
         while True:
-            choice = console.input("  [bold blue]→[/bold blue] Do you agree? (y/n): ").strip().lower()
+            choice = (
+                console.input("  [bold blue]→[/bold blue] Do you agree? (y/n): ")
+                .strip()
+                .lower()
+            )
             if choice in ["y", "yes"]:
                 return True
             elif choice in ["n", "no"]:
@@ -401,9 +441,13 @@ class PromptAgent:
     def prompt_personally_identifiable_information_simple(cls) -> bool:
         """Simplified data privacy prompt for registration flow."""
         console.print("  Do not upload personal/sensitive data.")
-        
+
         while True:
-            choice = console.input("  [bold blue]→[/bold blue] I understand (y/n): ").strip().lower()
+            choice = (
+                console.input("  [bold blue]→[/bold blue] I understand (y/n): ")
+                .strip()
+                .lower()
+            )
             if choice in ["y", "yes"]:
                 return True
             elif choice in ["n", "no"]:
@@ -416,53 +460,67 @@ class PromptAgent:
         console.clear()
 
     @classmethod
-    def prompt_multi_select(cls, options: list[str], prompt: str, allow_back: bool = False) -> str:
+    def prompt_multi_select(
+        cls, options: list[str], prompt: str, allow_back: bool = False
+    ) -> str:
         """Creates an interactive multi select"""
         num_options = len(options)
-        
+
         console.print(f"\n[bold]{prompt}[/bold]")
-        
+
         # Print the lettered menu options
         for i, option in enumerate(options):
             letter = chr(ord("a") + i)
             console.print(f"  [bold blue]\[{letter}][/bold blue] {option}")
-        
+
         if allow_back:
-            console.print(f"  [bold blue]\[b][/bold blue] Back to previous menu")
-        
+            console.print("  [bold blue]\[b][/bold blue] Back to previous menu")
+
         # Generate valid letter choices
         valid_choices = [chr(ord("a") + i) for i in range(num_options)]
         if allow_back:
             valid_choices.append("b")
-        
+
         while True:
-            choice_letter = console.input(f"\n  [bold blue]→[/bold blue] Choose ({'/'.join(valid_choices)}): ").strip().lower()
-            
+            choice_letter = (
+                console.input(
+                    f"\n  [bold blue]→[/bold blue] Choose ({'/'.join(valid_choices)}): "
+                )
+                .strip()
+                .lower()
+            )
+
             if not choice_letter:
                 console.print("  [blue]Please choose one of the options above[/blue]")
                 continue
-            
+
             if choice_letter == "b" and allow_back:
                 return "__BACK__"
-            
+
             if choice_letter in valid_choices:
                 selected_index = ord(choice_letter) - ord("a")
                 return options[selected_index]
             else:
-                console.print(f"  [blue]Hmm, that's not one of the options. Try {', '.join(valid_choices)}[/blue]")
+                console.print(
+                    f"  [blue]Hmm, that's not one of the options. Try {', '.join(valid_choices)}[/blue]"
+                )
 
     @classmethod
-    def prompt_and_retry(cls, prompt: str, min_length: int = 2, example: str = None) -> str:
+    def prompt_and_retry(
+        cls, prompt: str, min_length: int = 2, example: str = None
+    ) -> str:
         """Prompt with validation and optional example."""
         console.print(f"\n  {prompt}:")
         if example:
             console.print(f"  [blue]Example: {example}[/blue]")
-        
+
         while True:
             value = input(cls.indent("  → ")).strip()
             if len(value) >= min_length:
                 return value
-            console.print(f"  [blue]Could you add a bit more? We need at least {min_length} characters.[/blue]")
+            console.print(
+                f"  [blue]Could you add a bit more? We need at least {min_length} characters.[/blue]"
+            )
 
     @classmethod
     def prompt_add_user_information(cls) -> dict:
@@ -476,7 +534,7 @@ class PromptAgent:
             if name:
                 break
             console.print("  [blue]We'd love to know what to call you![/blue]")
-        
+
         # Split name for backward compatibility
         name_parts = name.split(None, 1)  # Split on first space
         first_name = name_parts[0]
@@ -497,12 +555,19 @@ class PromptAgent:
         use_case = cls.prompt_and_retry(
             "What do you want to use TabPFN for?",
             min_length=10,
-            example="Predicting customer churn in a SaaS application"
+            example="Predicting customer churn in a SaaS application",
         )
 
         console.print()
         while True:
-            choice = console.input("  [bold blue]→[/bold blue] Can we contact you via email for support? (y/n) [y]: ").strip().lower() or "y"
+            choice = (
+                console.input(
+                    "  [bold blue]→[/bold blue] Can we contact you via email for support? (y/n) [y]: "
+                )
+                .strip()
+                .lower()
+                or "y"
+            )
             if choice in ["y", "yes"]:
                 contact_via_email = True
                 break
@@ -534,9 +599,13 @@ class PromptAgent:
         console.print("  [bold blue][1][/bold blue] Verify email now")
         console.print("  [bold blue][2][/bold blue] Start over (login/register)")
         console.print("  [bold blue][q][/bold blue] Quit")
-        
+
         while True:
-            choice = console.input("\n  [bold blue]→[/bold blue] Choose (1/2/q): ").strip().lower()
+            choice = (
+                console.input("\n  [bold blue]→[/bold blue] Choose (1/2/q): ")
+                .strip()
+                .lower()
+            )
             if choice in ["1"]:
                 break
             elif choice in ["2"]:
@@ -547,7 +616,7 @@ class PromptAgent:
                 return False  # Signal to quit without showing menu
             else:
                 warn("  Please enter 1, 2, or q.")
-        
+
         # Go directly to verification - the prompt already has resend option
         # verify token from email
         verified = cls._verify_user_email(access_token=access_token)
@@ -602,15 +671,17 @@ class PromptAgent:
     def _verify_user_email(cls, access_token: str):
         console.print("\n[bold]Email Verification[/bold]")
         console.print("  Enter the verification code sent to your email.")
-        console.print("  [blue]Type 'resend' to get a new code, or 'quit' to exit.[/blue]")
-        
+        console.print(
+            "  [blue]Type 'resend' to get a new code, or 'quit' to exit.[/blue]"
+        )
+
         while True:
             token = input(cls.indent("\n  Verification code: ")).strip()
-            
+
             if not token:
                 warn("Please enter a verification code.")
                 continue
-            
+
             # Handle special commands
             if token.lower() == "resend":
                 with status("Sending new verification code"):
@@ -623,71 +694,75 @@ class PromptAgent:
                 else:
                     fail(f"Failed to resend: {resend_msg}")
                 continue
-            
+
             if token.lower() == "quit":
                 console.print("\n[yellow]Verification cancelled.[/yellow]")
-                console.print("  [blue]You can verify your email later by logging in again.[/blue]")
+                console.print(
+                    "  [blue]You can verify your email later by logging in again.[/blue]"
+                )
                 return False
-            
+
             # Verify the code
             with status("Verifying"):
                 verified, message = UserAuthenticationClient.verify_email(
                     token, access_token
                 )
-            
+
             if verified:
                 success("Email verified successfully!")
                 return True
             else:
                 warn(f"{message}")
-                console.print("  [blue]Try again, type 'resend' for a new code, or 'quit' to exit.[/blue]")
+                console.print(
+                    "  [blue]Try again, type 'resend' for a new code, or 'quit' to exit.[/blue]"
+                )
 
     @classmethod
     def _resume_registration(cls, saved_state: dict) -> bool:
         """Resume an interrupted registration. Returns True if successful."""
         email = saved_state.get("email")
         state_mgr = RegistrationState()
-        
-        console.print(f"\n[bold]Resuming Registration[/bold]")
+
+        console.print("\n[bold]Resuming Registration[/bold]")
         console.print(f"  Email: {email}")
-        
+
         validation_link = "tabpfn-2023"
-        
+
         # Skip terms if already agreed (we're resuming)
         agreed_terms_and_cond = True
-        
+
         # Continue with password setup
         with status("Retrieving password policy"):
             password_req = UserAuthenticationClient.get_password_policy()
         password_policy = cls.password_req_to_policy(password_req)
-        
+
         # Show requirements upfront
         console.print("\n[bold]Password Requirements[/bold]")
         console.print("\n  Requirements:")
         for req in password_req:
             console.print(f"    [bright_black]•[/bright_black] {req}")
-        
+
         password = None
         while True:
             password = getpass.getpass(cls.indent("\n  Password: "))
-            
+
             # Validate password requirements
             failed_tests = password_policy.test(password)
             if len(failed_tests) != 0:
                 console.print()
                 cls.display_requirement_status(password, password_req, password_policy)
-                console.print("  [blue]Enter a password that meets all requirements.[/blue]")
+                console.print(
+                    "  [blue]Enter a password that meets all requirements.[/blue]"
+                )
                 continue
 
-            password_confirm = getpass.getpass(
-                cls.indent("  Confirm password: ")
-            )
+            password_confirm = getpass.getpass(cls.indent("  Confirm password: "))
             if password == password_confirm:
                 break
             else:
                 warn("  Passwords do not match.")
                 console.print("  [blue]Please re-enter your password.[/blue]")
-        
+
         agreed_personally_identifiable_information = (
             cls.prompt_personally_identifiable_information()
         )
@@ -700,7 +775,7 @@ class PromptAgent:
         additional_info["agreed_personally_identifiable_information"] = (
             agreed_personally_identifiable_information
         )
-        
+
         with status("Creating account"):
             (
                 is_created,
@@ -709,7 +784,7 @@ class PromptAgent:
             ) = UserAuthenticationClient.set_token_by_registration(
                 email, password, password_confirm, validation_link, additional_info
             )
-        
+
         if not is_created:
             raise RuntimeError("User registration failed: " + str(message) + "\n")
 

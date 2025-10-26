@@ -1,4 +1,5 @@
 """Utilities for consistent terminal output across the TabPFN client."""
+
 from __future__ import annotations
 
 import logging
