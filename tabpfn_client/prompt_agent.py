@@ -525,18 +525,20 @@ class PromptAgent:
         console.print("\n[bold blue]Step 5/6[/bold blue] - Your Information")
         console.print("[blue]This helps us personalize your experience[/blue]")
 
-        # Name field - required but combined for better UX
-        name = ""
+        # Name fields - ask separately to ensure both are provided
+        first_name = ""
         while True:
-            name = input("\nYour name: ").strip()
-            if name:
+            first_name = input("\nFirst name: ").strip()
+            if first_name:
                 break
             console.print("[blue]We'd love to know what to call you![/blue]")
 
-        # Split name for backward compatibility
-        name_parts = name.split(None, 1)  # Split on first space
-        first_name = name_parts[0]
-        last_name = name_parts[1] if len(name_parts) > 1 else ""
+        last_name = ""
+        while True:
+            last_name = input("Last name: ").strip()
+            if last_name:
+                break
+            console.print("[blue]And your last name too![/blue]")
 
         console.print("\n[bold blue]Step 6/6[/bold blue] - Help Us Serve You Better")
         console.print("[blue]Just a few quick questions to get you started[/blue]")
