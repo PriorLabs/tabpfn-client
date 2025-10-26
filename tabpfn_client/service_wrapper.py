@@ -2,6 +2,7 @@
 #  Licensed under the Apache License, Version 2.0
 
 import logging
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -142,6 +143,17 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
     @classmethod
     def try_browser_login(cls) -> tuple[bool, str]:
         """Try to authenticate using browser-based login"""
+        # Allow disabling browser login via environment variables
+        # - TABPFN_NO_BROWSER=1/true/yes/on
+        # - TABPFN_CLIENT_NO_BROWSER=1/true/yes/on (backward-compatible alias)
+        def _truthy(val: str | None) -> bool:
+            return bool(val) and val.strip().lower() in {"1", "true", "yes", "on"}
+
+        if _truthy(os.environ.get("TABPFN_NO_BROWSER")) or _truthy(
+            os.environ.get("TABPFN_CLIENT_NO_BROWSER")
+        ):
+            return False, "Browser login disabled by environment variable"
+
         success, token_or_message = ServiceClient.try_browser_login()
         if success:
             cls.set_token(token_or_message)

@@ -77,15 +77,19 @@ def header(title: str, subtitle: str | None = None) -> None:
 
 
 def success(message: str) -> None:
-    console.print(f":white_check_mark: [bold green]{message}[/bold green]")
+    console.print(f"[bold green]{message}[/bold green]")
 
 
 def warn(message: str) -> None:
-    console.print(f":warning: [yellow]{message}[/yellow]")
+    console.print(f"[yellow]{message}[/yellow]")
 
 
 def fail(message: str) -> None:
-    console.print(f":x: [bold red]{message}[/bold red]")
+    console.print(f"[bold red]{message}[/bold red]")
+
+
+def info(message: str) -> None:
+    console.print(f"[blue]{message}[/blue]")
 
 
 @contextmanager
@@ -106,13 +110,47 @@ def progress_bar(description: str = "Working...") -> Progress:
     )
 
 
+# =============================
+# Branding: Prior Labs ASCII
+# =============================
+
+_PRIOR_LABS_ASCII = r"""
+########  ########   ###  #########  #########       ###         #####     ########  ########
+     ###        ##   ###  ###   ###        ###       ###        ###  ###   ##   ###  ###     
+########  #######    ###  ###   ###  #######         ###        ########   ######    ########
+###       ###   ##   ###  ###   ###  ###   ###       ###        ###  ###   ##   ###       ###
+###       ###   ##   ###  #########  ###   ###       ########   ###  ###   ########  ########                                                     
+"""
+
+_PRIOR_LABS_ASCII_SMALL = r"""
+[ PRIOR LABS ]
+"""
+
+
+def print_logo(subtitle: str | None = None) -> None:
+    """Print the large Prior Labs ASCII logo with optional subtitle."""
+    console.print(_PRIOR_LABS_ASCII, style="bold blue")
+    if subtitle:
+        console.print(f"[dim]{subtitle}[/dim]", end="\n\n")
+
+
+def print_logo_small(subtitle: str | None = None) -> None:
+    """Print a small Prior Labs ASCII banner with optional subtitle."""
+    console.print(_PRIOR_LABS_ASCII_SMALL, style="bold blue")
+    if subtitle:
+        console.print(f"[dim]{subtitle}[/dim]")
+
+
 __all__ = [
     "console",
     "fail",
     "header",
+    "print_logo",
+    "print_logo_small",
     "progress_bar",
     "setup_logging",
     "status",
     "success",
+    "info",
     "warn",
 ]

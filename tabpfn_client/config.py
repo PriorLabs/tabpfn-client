@@ -7,6 +7,7 @@ from tabpfn_client.client import ServiceClient
 from tabpfn_client.service_wrapper import UserAuthenticationClient
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client.prompt_agent import PromptAgent
+from tabpfn_client.ui import console, warn
 
 
 class Config:
@@ -45,12 +46,28 @@ def init(use_server=True):
             PromptAgent.prompt_reusing_existing_token()
         elif access_token is not None:
             # token holds invalid due to user email verification
-            print("Your email is not verified. Please verify your email to continue...")
-            PromptAgent.reverify_email(access_token)
+            console.print()
+            warn("Email not verified")
+            console.print("  [blue]You need to verify your email before continuing.[/blue]")
+            result = PromptAgent.reverify_email(access_token)
+            
+            if result == "restart":
+                # User chose to start over - show main menu
+                PromptAgent.prompt_welcome()
+                success = PromptAgent.prompt_and_set_token()
+                if not success:
+                    return
+            elif result is False:
+                # User chose to quit - exit without showing menu
+                return
+            # else: result is True, verification successful, continue to greeting messages
         else:
             PromptAgent.prompt_welcome()
             # prompt for login / register
-            PromptAgent.prompt_and_set_token()
+            success = PromptAgent.prompt_and_set_token()
+            if not success:
+                # User interrupted or quit - don't mark as initialized
+                return
 
         # Print new greeting messages. If there are no new messages, nothing will be printed.
         PromptAgent.prompt_retrieved_greeting_messages(
