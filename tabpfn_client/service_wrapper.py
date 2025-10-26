@@ -143,6 +143,7 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
     @classmethod
     def try_browser_login(cls) -> tuple[bool, str]:
         """Try to authenticate using browser-based login"""
+
         # Allow disabling browser login via environment variables
         # - TABPFN_NO_BROWSER=1/true/yes/on
         # - TABPFN_CLIENT_NO_BROWSER=1/true/yes/on (backward-compatible alias)

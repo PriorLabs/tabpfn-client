@@ -48,9 +48,11 @@ def init(use_server=True):
             # token holds invalid due to user email verification
             console.print()
             warn("Email not verified")
-            console.print("  [blue]You need to verify your email before continuing.[/blue]")
+            console.print(
+                "  [blue]You need to verify your email before continuing.[/blue]"
+            )
             result = PromptAgent.reverify_email(access_token)
-            
+
             if result == "restart":
                 # User chose to start over - show main menu
                 PromptAgent.prompt_welcome()
