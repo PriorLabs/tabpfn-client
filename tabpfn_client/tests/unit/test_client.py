@@ -202,7 +202,7 @@ class TestServiceClient(unittest.TestCase):
         dummy_result = {"test_set_uid": "dummy_uid", "classification": [1, 2, 3]}
         mock_server.router.post(mock_server.endpoints.predict.path).respond(
             200,
-            content=f'data: {json.dumps({"event": "result", "data": dummy_result})}\n\n',
+            content=f"data: {json.dumps({'event': 'result', 'data': dummy_result})}\n\n",
             headers={"Content-Type": "text/event-stream"},
         )
 

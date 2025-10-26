@@ -48,6 +48,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
 
         # mock server connection
         mock_server.router.get(mock_server.endpoints.root.path).respond(200)
+        mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
         mock_server.router.post(mock_server.endpoints.fit.path).respond(
             200, json={"train_set_uid": "5"}
         )
@@ -60,7 +61,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         predict_route = mock_server.router.post(mock_server.endpoints.predict.path)
         predict_route.respond(
             200,
-            content=f'data: {json.dumps({"event": "result", "data": {"classification": mock_predict_response, "test_set_uid": "6"}})}\n\n',
+            content=f"data: {json.dumps({'event': 'result', 'data': {'classification': mock_predict_response, 'test_set_uid': '6'}})}\n\n",
             headers={"Content-Type": "text/event-stream"},
         )
 
@@ -146,11 +147,11 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         self.assertFalse(config.Config.is_initialized)
 
     @patch(
-        "tabpfn_client.prompt_agent.PromptAgent.prompt_terms_and_cond",
+        "tabpfn_client.prompt_agent.PromptAgent.prompt_terms_and_cond_simple",
         return_value=False,
     )
     @patch("tabpfn_client.browser_auth.webbrowser.open", return_value=False)
-    @patch("builtins.input", side_effect=["1"])
+    @patch("rich.console.Console.input", side_effect=["1"])
     @with_mock_server()  # TODO (leo): investigate why this needs to be the last decorator
     def test_decline_terms_and_cond(
         self,
@@ -185,6 +186,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
 
         # mock server connection
         mock_server.router.get(mock_server.endpoints.root.path).respond(200)
+        mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
         fit_route = mock_server.router.post(mock_server.endpoints.fit.path)
         fit_route.respond(200, json={"train_set_uid": "5"})
 
@@ -196,7 +198,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         predict_route = mock_server.router.post(mock_server.endpoints.predict.path)
         predict_route.respond(
             200,
-            content=f'data: {json.dumps({"event": "result", "data": {"classification": mock_predict_response, "test_set_uid": "6"}})}\n\n',
+            content=f"data: {json.dumps({'event': 'result', 'data': {'classification': mock_predict_response, 'test_set_uid': '6'}})}\n\n",
             headers={"Content-Type": "text/event-stream"},
         )
 
