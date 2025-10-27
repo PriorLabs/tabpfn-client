@@ -40,7 +40,7 @@ Choose the right TabPFN implementation for your needs:
 ### Installation
 
 ```bash
-pip install tabpfn-client
+pip install --upgrade tabpfn-client
 ```
 
 ### Basic Usage
