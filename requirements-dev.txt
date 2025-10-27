@@ -2,5 +2,5 @@
 
 # lint and format checking
 pre-commit==4.2.0
-pytest==8.4.1
+pytest==8.4.2
 ruff==0.11.9
