@@ -20,10 +20,12 @@ class BrowserAuthHandler:
         """
         auth_event = Event()
         received_token = None
+        gui_url = self.gui_url
 
         class CallbackHandler(http.server.SimpleHTTPRequestHandler):
             def do_GET(self):
                 nonlocal received_token
+                nonlocal gui_url
 
                 parsed = urllib.parse.urlparse(self.path)
                 query = urllib.parse.parse_qs(parsed.query)
@@ -34,11 +36,14 @@ class BrowserAuthHandler:
                 self.send_response(200)
                 self.send_header("Content-type", "text/html")
                 self.end_headers()
-                success_html = """
+                success_html = f"""
                 <html>
                     <body style="text-align: center; font-family: Arial, sans-serif; padding: 50px;">
                         <h2>Login successful!</h2>
                         <p>You can close this window and return to your application.</p>
+                        <script>
+                            window.location.href = "{gui_url}/redirect-success";
+                        </script>
                     </body>
                 </html>
                 """
