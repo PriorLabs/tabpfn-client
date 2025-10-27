@@ -42,11 +42,12 @@ class TabPFNModelSelection:
     @classmethod
     def _model_name_to_path(
         cls, task: Literal["classification", "regression"], model_name: str
-    ) -> str:
+    ) -> Optional[str]:
         cls._validate_model_name(model_name)
         model_name_task = "classifier" if task == "classification" else "regressor"
+        # Let the server handle the default model. This enables v2.5 as well.
         if model_name == "default":
-            return f"tabpfn-v2-{model_name_task}.ckpt"
+            return None
         return f"tabpfn-v2-{model_name_task}-{model_name}.ckpt"
 
 

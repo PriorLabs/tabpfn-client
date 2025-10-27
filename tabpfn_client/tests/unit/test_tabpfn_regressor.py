@@ -662,8 +662,8 @@ class TestTabPFNModelSelection(unittest.TestCase):
             TabPFNRegressor._validate_model_name("invalid_model")
 
     def test_model_name_to_path_returns_expected_path(self):
-        # Test default model path
-        expected_default_path = "tabpfn-v2-regressor.ckpt"
+        # Test default model path. Server decides.
+        expected_default_path = None
         self.assertEqual(
             TabPFNRegressor._model_name_to_path("regression", "default"),
             expected_default_path,
