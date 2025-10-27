@@ -771,8 +771,8 @@ class TestTabPFNModelSelection(unittest.TestCase):
             TabPFNClassifier._validate_model_name("invalid_model")
 
     def test_model_name_to_path_returns_expected_path(self):
-        # Test default model path
-        expected_default_path = "tabpfn-v2-classifier.ckpt"
+        # Test default model path. Server decides.
+        expected_default_path = None
         self.assertEqual(
             TabPFNClassifier._model_name_to_path("classification", "default"),
             expected_default_path,
