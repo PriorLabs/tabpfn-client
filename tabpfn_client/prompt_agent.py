@@ -89,7 +89,7 @@ class PromptAgent:
         print_logo("Thanks for being part of the journey")
         console.print(
             cls.indent(
-                "TabPFN is still under active development, please help us improve and report any bugs/ideas you find."
+                "TabPFN is under active development, please help us improve and report any bugs/ideas you find."
             )
         )
         console.print(
