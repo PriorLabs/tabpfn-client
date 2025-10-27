@@ -27,9 +27,6 @@ classifiers = [
   'Programming Language :: Python :: 3.13',
 ]
 license = { file = "LICENSE" }
-dependencies = [
-    "httpx[http2]",
-]
 
 [project.urls]
 documentation = "https://priorlabs.ai/docs"
