@@ -64,7 +64,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     def __init__(
         self,
         model_path: str = "default",
-        n_estimators: int = 4,
+        n_estimators: int = 8,
         softmax_temperature: float = 0.9,
         balance_probabilities: bool = False,
         average_before_softmax: bool = False,
@@ -82,7 +82,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         ----------
         model_path: str, default="default"
             The name of the model to use.
-        n_estimators: int, default=4
+        n_estimators: int, default=8
             The number of estimators in the TabPFN ensemble. We aggregate the
              predictions of `n_estimators`-many forward passes of TabPFN. Each forward
              pass has (slightly) different input data. Think of this as an ensemble of
