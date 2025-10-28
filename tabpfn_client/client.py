@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import traceback
 import re
 from pathlib import Path
@@ -322,6 +323,7 @@ class ServiceClient(Singleton):
         y_pred : array-like of shape (n_samples,)
             The predicted class labels.
         """
+        tabpfn_config = deepcopy(tabpfn_config)
 
         x_test_serialized = common_utils.serialize_to_csv_formatted_bytes(x_test)
 
