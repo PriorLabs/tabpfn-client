@@ -214,27 +214,33 @@ pip install -e ".[dev]"
 
 2. Build, upload to the test PyPI, install and run a quick test.
 
+Note: Assumes a working uv install + venv.
+
 ```bash
-rm -rf .venv_test dist
-python3 -m pip install --upgrade build && python3 -m build
-python3 -m pip install --upgrade twine && python3 -m twine upload --repository testpypi dist/*
-python3 -m venv .venv_test && source .venv_test/bin/activate
-python3 -m pip install --pre --index-url https://test.pypi.org/simple/ --no-deps tabpfn-client
-pip install -r requirements.txt
-python tabpfn_client/tests/quick_test.py
-deactivate
+rm -rf ~/tabpfn-client-test.tmp dist
+uv pip install --upgrade build && python -m build
+uv pip install --upgrade twine && python -m twine upload --repository testpypi dist/*
+# Use a separate directory for testing so we don't accidentally run the local code
+mkdir ~/tabpfn-client-test.tmp && cp tabpfn_client/tests/quick_test.py ~/tabpfn-client-test.tmp && cp requirements.txt ~/tabpfn-client-test.tmp && cd ~/tabpfn-client-test.tmp
+uv venv && source .venv/bin/activate
+# We use --pre for the rc version and --no-deps because TestPyPI dependencies are unreliable.
+uv pip install --pre --index-url https://test.pypi.org/simple/ --no-deps tabpfn-client
+uv pip install -r requirements.txt
+python quick_test.py
 ```
 
-3. Correct the version. Ideally this should be what is in main. It shouldn't have an rc suffix unless we're doing broader pre-release testing.
+3. Return to this repo. Correct the version. Ideally this should be what is in main. It shouldn't have an rc suffix unless we're doing broader pre-release testing.
 
 4. Build, upload to the real PyPI, install and run a quick test.
 
 ```bash
-rm -rf .venv_test dist
-python3 -m pip install --upgrade build && python3 -m build
-python3 -m pip install --upgrade twine && python3 -m twine upload --repository pypi dist/*
-python3 -m venv .venv_test && source .venv_test/bin/activate
-python3 -m pip install --pre tabpfn-client
-python tabpfn_client/tests/quick_test.py
-deactivate
+rm -rf ~/tabpfn-client-test.tmp dist
+uv pip install --upgrade build && python -m build
+uv pip install --upgrade twine && python -m twine upload --repository pypi dist/*
+# Use a separate directory for testing so we don't accidentally run the local code
+mkdir ~/tabpfn-client-test.tmp && cp tabpfn_client/tests/quick_test.py ~/tabpfn-client-test.tmp && cp requirements.txt ~/tabpfn-client-test.tmp && cd ~/tabpfn-client-test.tmp
+uv venv && source .venv/bin/activate
+# We use --pre in case you intend to push an rc version.
+uv pip install --pre tabpfn-client
+python quick_test.py
 ```
