@@ -68,7 +68,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         softmax_temperature: float = 0.9,
         balance_probabilities: bool = False,
         average_before_softmax: bool = False,
-        ignore_pretraining_limits: bool = False,
+        ignore_pretraining_limits: bool = True,
         inference_precision: Literal["autocast", "auto"] = "auto",
         random_state: Optional[
             Union[int, np.random.RandomState, np.random.Generator]
