@@ -241,6 +241,6 @@ uv pip install --upgrade twine && python -m twine upload --repository pypi dist/
 mkdir ~/tabpfn-client-test.tmp && cp tabpfn_client/tests/quick_test.py ~/tabpfn-client-test.tmp && cp requirements.txt ~/tabpfn-client-test.tmp && cd ~/tabpfn-client-test.tmp
 uv venv && source .venv/bin/activate
 # We use --pre in case you intend to push an rc version.
-uv pip install --pre tabpfn-client
+uv pip install -U --pre tabpfn-client
 python quick_test.py
 ```

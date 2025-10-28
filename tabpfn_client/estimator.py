@@ -68,7 +68,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         softmax_temperature: float = 0.9,
         balance_probabilities: bool = False,
         average_before_softmax: bool = False,
-        ignore_pretraining_limits: bool = False,
+        ignore_pretraining_limits: bool = True,
         inference_precision: Literal["autocast", "auto"] = "auto",
         random_state: Optional[
             Union[int, np.random.RandomState, np.random.Generator]
@@ -103,7 +103,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
              predictive performance when there are many classes or when calibrating the
              model's confidence. This is only applied when predicting during a
              post-processing.
-        ignore_pretraining_limits: bool, default=False
+        ignore_pretraining_limits: bool, default=True
             Whether to ignore the pre-training limits of the model. The TabPFN models
             have been pre-trained on a specific range of input data. If the input data
             is outside of this range, the model may not perform well. You may ignore
