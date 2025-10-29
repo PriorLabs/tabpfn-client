@@ -197,13 +197,13 @@ class ServiceClient(Singleton):
     httpx_timeout_s = (
         4 * 5 * 60 + 15  # temporary workaround for slow computation on server side
     )
+    fit_path = SERVER_CONFIG["endpoints"]["fit"]["path"]
     httpx_client = httpx.Client(
         base_url=base_url,
         timeout=httpx_timeout_s,
         headers={"client-version": get_client_version()},
-        transport=SelectiveHTTP2Transport(http2_paths=["/fit/"]),
-        transport=SelectiveHTTP2Transport(http2_paths=[SERVER_CONFIG["endpoints"]["fit"]["path"]]),
-
+        transport=SelectiveHTTP2Transport(http2_paths=[fit_path]),
+    )
     _access_token = None
     dataset_uid_cache_manager = DatasetUIDCacheManager()
 
