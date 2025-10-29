@@ -3,30 +3,31 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
-import traceback
-import re
-from pathlib import Path
-import httpx
-import logging
-from importlib.metadata import version, PackageNotFoundError
-import numpy as np
-from omegaconf import OmegaConf
 import json
-from typing import Any, Dict, Literal, Optional, Union
-import xxhash
+import logging
 import os
-from collections import OrderedDict
-import sseclient
+import re
 import threading
 import time
-from tqdm import tqdm
-import backoff
-from httpx._transports.default import HTTPTransport
+import traceback
+from collections import OrderedDict
+from copy import deepcopy
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
+from typing import Any, Dict, Literal, Optional, Union
 
-from tabpfn_client.tabpfn_common_utils import utils as common_utils
-from tabpfn_client.constants import CACHE_DIR
+import backoff
+import httpx
+import numpy as np
+import sseclient
+import xxhash
+from httpx._transports.default import HTTPTransport
+from omegaconf import OmegaConf
+from tqdm import tqdm
+
 from tabpfn_client.browser_auth import BrowserAuthHandler
+from tabpfn_client.constants import CACHE_DIR
+from tabpfn_client.tabpfn_common_utils import utils as common_utils
 from tabpfn_client.tabpfn_common_utils.utils import Singleton
 
 logger = logging.getLogger(__name__)
@@ -173,7 +174,7 @@ class SelectiveHTTP2Transport(HTTPTransport):
         self.http2_paths = http2_paths or []
         self.http1 = HTTPTransport(http2=False, *args, **kwargs)
         self.http2 = HTTPTransport(http2=True, *args, **kwargs)
-    
+
     def handle_request(self, request):
         if request.url.path in self.http2_paths:
             return self.http2.handle_request(request)
