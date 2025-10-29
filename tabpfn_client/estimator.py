@@ -1,7 +1,7 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
 
-from typing import Optional, Literal, Dict, Union
+from typing import Any, Optional, Literal, Dict, Union
 import logging
 import numpy as np
 import pandas as pd
@@ -134,6 +134,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.last_train_set_uid = None
         self.last_train_X = None
         self.last_train_y = None
+
+    @property
+    def last_meta(self) -> Dict[str, Any]:
+        return InferenceClient.get_last_meta()
 
     def fit(self, X, y):
         # assert init() is called
@@ -296,6 +300,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.last_train_set_uid = None
         self.last_train_X = None
         self.last_train_y = None
+
+    @property
+    def last_meta(self) -> Dict[str, Any]:
+        return InferenceClient.get_last_meta()
 
     def fit(self, X, y):
         # assert init() is called

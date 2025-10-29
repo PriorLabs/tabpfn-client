@@ -188,6 +188,11 @@ class ServiceClient(Singleton):
 
     _access_token = None
     dataset_uid_cache_manager = DatasetUIDCacheManager()
+    _last_meta: Dict[str, Any] = {}
+
+    @classmethod
+    def get_last_meta(cls) -> Dict[str, Any]:
+        return cls._last_meta
 
     @classmethod
     def get_access_token(cls):
@@ -391,6 +396,8 @@ class ServiceClient(Singleton):
                             progress_thread.start()
                         elif data["event"] == "result":
                             results = data["data"]
+                            # Extract metadata from the response
+                            cls._last_meta = data["metadata"]
                             if progress_bar:
                                 progress_bar.n = progress_bar.total
                                 progress_bar.refresh()
@@ -440,6 +447,7 @@ class ServiceClient(Singleton):
         # That is why below we use the task as the key to access the response.
         result = results[task]
         test_set_uid = results["test_set_uid"]
+
         if cached_test_set_uid is None:
             cls.dataset_uid_cache_manager.add_dataset_uid(dataset_hash, test_set_uid)
 
