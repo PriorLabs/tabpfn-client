@@ -397,7 +397,7 @@ class ServiceClient(Singleton):
                         elif data["event"] == "result":
                             results = data["data"]
                             # Extract metadata from the response
-                            cls._last_meta = data["metadata"]
+                            cls._last_meta = data.get("metadata", {})
                             if progress_bar:
                                 progress_bar.n = progress_bar.total
                                 progress_bar.refresh()
