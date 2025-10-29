@@ -75,6 +75,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         ] = None,
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
+        use_skrub_preprocessing: bool = True,
+        use_text_features: bool = True,
     ):
         """Initialize TabPFNClassifier.
 
@@ -120,6 +122,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
+        use_skrub_preprocessing: bool, default=True
+            Whether to use the preprocessing step of skrub.
+        use_text_features: bool, default=True
+            Whether to use the text features of TabPFN.
         """
         self.model_path = model_path
         self.n_estimators = n_estimators
@@ -131,6 +137,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.random_state = random_state
         self.inference_config = inference_config
         self.paper_version = paper_version
+        self.use_skrub_preprocessing = use_skrub_preprocessing
+        self.use_text_features = use_text_features
         self.last_train_set_uid = None
         self.last_train_X = None
         self.last_train_y = None
@@ -244,6 +252,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         ] = None,
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
+        use_skrub_preprocessing: bool = True,
+        use_text_features: bool = True,
     ):
         """Initialize TabPFNRegressor.
 
@@ -283,6 +293,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
+        use_skrub_preprocessing: bool, default=True
+            Whether to use the preprocessing step of skrub.
+        use_text_features: bool, default=True
+            Whether to use the text features of TabPFN.
         """
         self.model_path = model_path
         self.n_estimators = n_estimators

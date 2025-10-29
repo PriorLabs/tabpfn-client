@@ -352,12 +352,24 @@ class ServiceClient(Singleton):
         }
         if tabpfn_config is not None:
             paper_version = tabpfn_config.pop("paper_version")
+            use_skrub_preprocessing = bool(tabpfn_config.pop("use_skrub_preprocessing", False))
+            use_text = bool(tabpfn_config.pop("use_text", False))
             params["tabpfn_config"] = json.dumps(
                 tabpfn_config, default=lambda x: x.to_dict()
             )
         else:
             paper_version = False
-        tabpfn_systems = [] if paper_version else ["preprocessing", "text"]
+            use_skrub_preprocessing = False
+            use_text = False
+        if paper_version:
+            tabpfn_systems = []
+        else:
+            tabpfn_systems = []
+            if use_skrub_preprocessing:
+                tabpfn_systems.append("preprocessing")
+            if use_text:
+                tabpfn_systems.append("text")
+
         params["tabpfn_systems"] = json.dumps(tabpfn_systems)
 
         # In the arguments for hashing, include train_set_uid for the case that the same test set was previously used
