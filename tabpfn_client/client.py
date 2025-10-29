@@ -202,7 +202,7 @@ class ServiceClient(Singleton):
         timeout=httpx_timeout_s,
         headers={"client-version": get_client_version()},
         transport=SelectiveHTTP2Transport(http2_paths=["/fit/"]),
-    )
+        transport=SelectiveHTTP2Transport(http2_paths=[SERVER_CONFIG["endpoints"]["fit"]["path"]]),
 
     _access_token = None
     dataset_uid_cache_manager = DatasetUIDCacheManager()
