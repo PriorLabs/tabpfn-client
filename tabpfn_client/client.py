@@ -180,6 +180,10 @@ class SelectiveHTTP2Transport(HTTPTransport):
             return self.http2.handle_request(request)
         return self.http1.handle_request(request)
 
+    def close(self) -> None:
+        self.http1.close()
+        self.http2.close()
+
 
 class ServiceClient(Singleton):
     """
