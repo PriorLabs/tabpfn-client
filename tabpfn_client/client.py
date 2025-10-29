@@ -271,6 +271,22 @@ class ServiceClient(Singleton):
                 [] if config["paper_version"] else ["preprocessing", "text"]
             )
 
+        if config is not None:
+            paper_version = config["paper_version"]
+            use_skrub_preprocessing = bool(config["use_skrub_preprocessing"])
+            use_text = bool(config["use_text"])
+        else:
+            paper_version = False
+            use_skrub_preprocessing = False
+            use_text = False
+        if paper_version:
+            tabpfn_systems = []
+        else:
+            if use_skrub_preprocessing:
+                tabpfn_systems.append("preprocessing")
+            if use_text:
+                tabpfn_systems.append("text")
+
         # Get hash for dataset. Include access token for the case that one user uses different accounts.
         (
             cached_dataset_uid,
