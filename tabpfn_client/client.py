@@ -175,7 +175,6 @@ class SelectiveHTTP2Transport(HTTPTransport):
         self.http2 = HTTPTransport(http2=True, *args, **kwargs)
     
     def handle_request(self, request):
-        import code; code.interact(local=dict(globals(), **locals()))
         if request.url.path in self.http2_paths:
             return self.http2.handle_request(request)
         return self.http1.handle_request(request)
