@@ -274,17 +274,17 @@ class ServiceClient(Singleton):
         if config is not None:
             paper_version = config["paper_version"]
             use_skrub_preprocessing = bool(config["use_skrub_preprocessing"])
-            use_text = bool(config["use_text"])
+            use_text_features = bool(config["use_text_features"])
         else:
             paper_version = False
             use_skrub_preprocessing = False
-            use_text = False
+            use_text_features = False
         if paper_version:
             tabpfn_systems = []
         else:
             if use_skrub_preprocessing:
                 tabpfn_systems.append("preprocessing")
-            if use_text:
+            if use_text_features:
                 tabpfn_systems.append("text")
 
         # Get hash for dataset. Include access token for the case that one user uses different accounts.
