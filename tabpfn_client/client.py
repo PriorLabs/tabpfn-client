@@ -22,6 +22,7 @@ import threading
 import time
 from tqdm import tqdm
 import backoff
+from httpx._transports.default import HTTPTransport
 
 from tabpfn_client.tabpfn_common_utils import utils as common_utils
 from tabpfn_client.constants import CACHE_DIR
@@ -167,6 +168,19 @@ def get_client_version() -> str:
         return "5.5.5"
 
 
+class SelectiveHTTP2Transport(HTTPTransport):
+    def __init__(self, http2_paths=None, *args, **kwargs):
+        self.http2_paths = http2_paths or []
+        self.http1 = HTTPTransport(http2=False, *args, **kwargs)
+        self.http2 = HTTPTransport(http2=True, *args, **kwargs)
+    
+    def handle_request(self, request):
+        import code; code.interact(local=dict(globals(), **locals()))
+        if request.url.path in self.http2_paths:
+            return self.http2.handle_request(request)
+        return self.http1.handle_request(request)
+
+
 class ServiceClient(Singleton):
     """
     Singleton class for handling communication with the server.
@@ -183,7 +197,7 @@ class ServiceClient(Singleton):
         base_url=base_url,
         timeout=httpx_timeout_s,
         headers={"client-version": get_client_version()},
-        http2=True,
+        transport=SelectiveHTTP2Transport(http2_paths=["/fit/"]),
     )
 
     _access_token = None
