@@ -78,6 +78,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         ] = None,
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
+        tabpfn_systems: Optional[list[str]] = ["preprocessing", "text"],
     ):
         """Initialize TabPFNClassifier.
 
@@ -138,6 +139,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.last_train_X = None
         self.last_train_y = None
         self.last_meta = {}
+        self.tabpfn_systems = tabpfn_systems
 
     def fit(self, X, y):
         # assert init() is called
@@ -252,6 +254,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         ] = None,
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
+        tabpfn_systems: Optional[list[str]] = ["preprocessing", "text"],
     ):
         """Initialize TabPFNRegressor.
 
@@ -301,6 +304,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.random_state = random_state
         self.inference_config = inference_config
         self.paper_version = paper_version
+        self.tabpfn_systems = tabpfn_systems
         self.last_train_set_uid = None
         self.last_train_X = None
         self.last_train_y = None

@@ -283,10 +283,10 @@ class ServiceClient(Singleton):
         y_serialized = common_utils.serialize_to_csv_formatted_bytes(y)
 
         if config is None:
-            tabpfn_systems = ["preprocessing", "text"]
+            tabpfn_systems = config["tabpfn_systems"]
         else:
             tabpfn_systems = (
-                [] if config["paper_version"] else ["preprocessing", "text"]
+                [] if config["paper_version"] else config["tabpfn_systems"]
             )
 
         # Get hash for dataset. Include access token for the case that one user uses different accounts.
@@ -370,12 +370,13 @@ class ServiceClient(Singleton):
         }
         if tabpfn_config is not None:
             paper_version = tabpfn_config.pop("paper_version")
+            tabpfn_systems = tabpfn_config.pop("tabpfn_systems")
             params["tabpfn_config"] = json.dumps(
                 tabpfn_config, default=lambda x: x.to_dict()
             )
         else:
             paper_version = False
-        tabpfn_systems = [] if paper_version else ["preprocessing", "text"]
+        tabpfn_systems = [] if paper_version else tabpfn_systems
         params["tabpfn_systems"] = json.dumps(tabpfn_systems)
 
         # In the arguments for hashing, include train_set_uid for the case that the same test set was previously used
