@@ -14,19 +14,30 @@ from importlib.metadata import version, PackageNotFoundError
 import numpy as np
 from omegaconf import OmegaConf
 import json
-from typing import Any, Dict, Literal, Optional, Union
-import xxhash
+import logging
 import os
-from collections import OrderedDict
-import sseclient
+import re
 import threading
 import time
-from tqdm import tqdm
-import backoff
+import traceback
+from collections import OrderedDict
+from copy import deepcopy
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
+from typing import Any, Dict, Literal, Optional, Union
 
-from tabpfn_client.tabpfn_common_utils import utils as common_utils
-from tabpfn_client.constants import CACHE_DIR
+import backoff
+import httpx
+import numpy as np
+import sseclient
+import xxhash
+from httpx._transports.default import HTTPTransport
+from omegaconf import OmegaConf
+from tqdm import tqdm
+
 from tabpfn_client.browser_auth import BrowserAuthHandler
+from tabpfn_client.constants import CACHE_DIR
+from tabpfn_client.tabpfn_common_utils import utils as common_utils
 from tabpfn_client.tabpfn_common_utils.utils import Singleton
 
 logger = logging.getLogger(__name__)
@@ -174,6 +185,22 @@ class PredictionResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+class SelectiveHTTP2Transport(HTTPTransport):
+    def __init__(self, http2_paths=None, *args, **kwargs):
+        self.http2_paths = http2_paths or []
+        self.http1 = HTTPTransport(http2=False, *args, **kwargs)
+        self.http2 = HTTPTransport(http2=True, *args, **kwargs)
+
+    def handle_request(self, request):
+        if request.url.path in self.http2_paths:
+            return self.http2.handle_request(request)
+        return self.http1.handle_request(request)
+
+    def close(self) -> None:
+        self.http1.close()
+        self.http2.close()
+
+
 class ServiceClient(Singleton):
     """
     Singleton class for handling communication with the server.
@@ -186,13 +213,13 @@ class ServiceClient(Singleton):
     httpx_timeout_s = (
         4 * 5 * 60 + 15  # temporary workaround for slow computation on server side
     )
+    fit_path = SERVER_CONFIG["endpoints"]["fit"]["path"]
     httpx_client = httpx.Client(
         base_url=base_url,
         timeout=httpx_timeout_s,
         headers={"client-version": get_client_version()},
-        http2=True,
+        transport=SelectiveHTTP2Transport(http2_paths=[fit_path]),
     )
-
     _access_token = None
     dataset_uid_cache_manager = DatasetUIDCacheManager()
 
