@@ -57,6 +57,7 @@ def _on_giveup(details: Dict[str, Any]):
     )
     logger.error(message)
 
+
 def _caching_disabled() -> bool:
     val = os.getenv("DISABLE_DS_CACHING", "")
     disabled = str(val).lower() in {"1", "true", "yes", "on"}
@@ -285,9 +286,7 @@ class ServiceClient(Singleton):
         if config is None:
             tabpfn_systems = config["tabpfn_systems"]
         else:
-            tabpfn_systems = (
-                [] if config["paper_version"] else config["tabpfn_systems"]
-            )
+            tabpfn_systems = [] if config["paper_version"] else config["tabpfn_systems"]
 
         # Get hash for dataset. Include access token for the case that one user uses different accounts.
         (
