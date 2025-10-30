@@ -124,6 +124,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
+        tabpfn_systems: list, default=["preprocessing", "text"]
+            List of TabPFN systems to use. "preprocessing", "text" and
+            ["preprocessing", "text"] are the only valid values to use at the moment.
         """
         self.model_path = model_path
         self.n_estimators = n_estimators
@@ -149,6 +152,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         X = _clean_text_features(X)
         self._validate_targets_and_classes(y)
         _check_paper_version(self.paper_version, X)
+        _check_tabpfn_systems(self.tabpfn_systems, X)
 
         estimator_param = self.get_params()
         estimator_param["model_path"] = TabPFNClassifier._model_name_to_path(
@@ -191,6 +195,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         check_is_fitted(self)
         validate_data_size(X)
         _check_paper_version(self.paper_version, X)
+        _check_tabpfn_systems(self.tabpfn_systems, X)
         X = _clean_text_features(X)
 
         estimator_param = self.get_params()
@@ -294,6 +299,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
+        tabpfn_systems: list, default=["preprocessing", "text"]
+            List of TabPFN systems to use. "preprocessing", "text" and
+            ["preprocessing", "text"] are the only valid values to use at the moment.
         """
         self.model_path = model_path
         self.n_estimators = n_estimators
@@ -318,6 +326,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self._validate_targets(y)
         X = _clean_text_features(X)
         _check_paper_version(self.paper_version, X)
+        _check_tabpfn_systems(self.tabpfn_systems, X)
 
         estimator_param = self.get_params()
         estimator_param["model_path"] = TabPFNRegressor._model_name_to_path(
@@ -370,6 +379,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         validate_data_size(X)
         X = _clean_text_features(X)
         _check_paper_version(self.paper_version, X)
+        _check_tabpfn_systems(self.tabpfn_systems, X)
 
         # Add new parameters
         predict_params = {
@@ -426,6 +436,13 @@ def validate_data_size(X: np.ndarray, y: Union[np.ndarray, None] = None):
 
 def _check_paper_version(paper_version, X):
     pass
+
+def _check_tabpfn_systems(tabpfn_system, X):
+    for i in tabpfn_system:
+        if not isinstance(i, str):
+            raise ValueError("tabpfn_system must be a list of strings")
+        if i not in ["text", "preprocessing"]:
+            raise ValueError("unsupported string entry to tabpfn_systems")
 
 
 def _clean_text_features(X):
