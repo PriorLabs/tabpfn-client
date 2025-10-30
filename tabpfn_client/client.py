@@ -14,25 +14,16 @@ from importlib.metadata import version, PackageNotFoundError
 import numpy as np
 from omegaconf import OmegaConf
 import json
-import logging
 import os
-import re
 import threading
 import time
-import traceback
 from collections import OrderedDict
-from copy import deepcopy
-from importlib.metadata import PackageNotFoundError, version
-from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Union
 
 import backoff
-import httpx
-import numpy as np
 import sseclient
 import xxhash
 from httpx._transports.default import HTTPTransport
-from omegaconf import OmegaConf
 from tqdm import tqdm
 
 from tabpfn_client.browser_auth import BrowserAuthHandler
