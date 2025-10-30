@@ -375,7 +375,9 @@ class ServiceClient(Singleton):
             )
         else:
             paper_version = False
-        tabpfn_systems = [] if paper_version else tabpfn_systems
+            tabpfn_systems = ["preprocessing", "text"]
+        if paper_version:
+            tabpfn_systems = []
         params["tabpfn_systems"] = json.dumps(tabpfn_systems)
 
         # In the arguments for hashing, include train_set_uid for the case that the same test set was previously used
