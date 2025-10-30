@@ -16,6 +16,7 @@ from tabpfn_client.service_wrapper import UserAuthenticationClient, InferenceCli
 from tabpfn_client.tests.mock_tabpfn_server import with_mock_server
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client import config
+from tabpfn_client.client import PredictionResult
 
 
 class TestTabPFNClassifierInit(unittest.TestCase):
@@ -60,7 +61,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         predict_route = mock_server.router.post(mock_server.endpoints.predict.path)
         predict_route.respond(
             200,
-            content=f'data: {json.dumps({"event": "result", "data": {"classification": mock_predict_response, "test_set_uid": "6"}})}\n\n',
+            content=f"data: {json.dumps({'event': 'result', 'data': {'classification': mock_predict_response, 'test_set_uid': '6'}})}\n\n",
             headers={"Content-Type": "text/event-stream"},
         )
 
@@ -71,8 +72,9 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         self.assertRaises(NotFittedError, tabpfn.predict, self.X_test)
         tabpfn.fit(self.X_train, self.y_train)
         self.assertTrue(mock_prompt_and_set_token.called)
-        y_pred = tabpfn.predict(self.X_test)
-        self.assertTrue(np.all(mock_predict_response == y_pred))
+        result = tabpfn.predict(self.X_test)
+        print(f"result: {type(result)} {result}")
+        self.assertTrue(np.all(mock_predict_response == result))
         # Checking for both %20 and + enconding of spaces
         # since httpx was inconsistent with its spacen encoding scheme
         self.assertTrue(
@@ -196,7 +198,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         predict_route = mock_server.router.post(mock_server.endpoints.predict.path)
         predict_route.respond(
             200,
-            content=f'data: {json.dumps({"event": "result", "data": {"classification": mock_predict_response, "test_set_uid": "6"}})}\n\n',
+            content=f"data: {json.dumps({'event': 'result', 'data': {'classification': mock_predict_response, 'test_set_uid': '6'}})}\n\n",
             headers={"Content-Type": "text/event-stream"},
         )
 
@@ -355,7 +357,9 @@ class TestTabPFNClassifierInference(unittest.TestCase):
 
         # mock prediction
         with patch.object(InferenceClient, "predict") as mock_predict:
-            mock_predict.return_value = {"probas": np.random.rand(10, 2)}
+            mock_predict.return_value = PredictionResult(
+                y_pred={"probas": np.random.rand(10, 2)}, metadata={}
+            )
             tabpfn.predict(test_X)
 
     def test_only_allowed_parameters_passed_to_config(self):
@@ -392,7 +396,9 @@ class TestTabPFNClassifierInference(unittest.TestCase):
 
         # Mock predict and capture config
         with patch.object(InferenceClient, "predict") as mock_predict:
-            mock_predict.return_value = np.random.rand(10, 2)
+            mock_predict.return_value = PredictionResult(
+                y_pred=np.random.rand(10, 2), metadata={}
+            )
             classifier.predict(test_X)
 
             # Get the config that was passed to predict
@@ -422,7 +428,9 @@ class TestTabPFNClassifierInference(unittest.TestCase):
 
         # Test predict() sets output_type to "preds"
         with patch.object(InferenceClient, "predict") as mock_predict:
-            mock_predict.return_value = np.random.rand(10)
+            mock_predict.return_value = PredictionResult(
+                y_pred=np.random.rand(10), metadata={}
+            )
             classifier.predict(test_X)
 
             predict_params = mock_predict.call_args[1]["predict_params"]
@@ -430,7 +438,9 @@ class TestTabPFNClassifierInference(unittest.TestCase):
 
         # Test predict_proba() sets output_type to "probas"
         with patch.object(InferenceClient, "predict") as mock_predict:
-            mock_predict.return_value = np.random.rand(10, 2)
+            mock_predict.return_value = PredictionResult(
+                y_pred=np.random.rand(10, 2), metadata={}
+            )
             classifier.predict_proba(test_X)
 
             predict_params = mock_predict.call_args[1]["predict_params"]
@@ -451,7 +461,9 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             clf_str.fit(X, y_str)
 
             with patch.object(InferenceClient, "predict") as mock_predict:
-                mock_predict.return_value = np.array(["cat", "dog"] * 5)
+                mock_predict.return_value = PredictionResult(
+                    y_pred=np.array(["cat", "dog"] * 5), metadata={}
+                )
                 y_pred = clf_str.predict(test_X)
 
                 self.assertTrue(np.all(np.isin(y_pred, ["cat", "dog"])))
@@ -468,7 +480,9 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             clf_num_str.fit(X, y_num_str)
 
             with patch.object(InferenceClient, "predict") as mock_predict:
-                mock_predict.return_value = np.array(["0", "1"] * 5)
+                mock_predict.return_value = PredictionResult(
+                    y_pred=np.array(["0", "1"] * 5), metadata={}
+                )
                 y_pred = clf_num_str.predict(test_X)
 
                 self.assertTrue(np.all(np.isin(y_pred, ["0", "1"])))
@@ -527,7 +541,9 @@ class TestTabPFNClassifierInference(unittest.TestCase):
 
         with patch.object(InferenceClient, "predict") as mock_predict:
             # Test predict()
-            mock_predict.return_value = expected_predictions
+            mock_predict.return_value = PredictionResult(
+                y_pred=expected_predictions, metadata={}
+            )
 
             # Test predictions for each variation
             pred_normal = tabpfn.predict(X_normal_array)
@@ -567,7 +583,9 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             np.testing.assert_array_equal(pred_normal, pred_long)
 
             # Test predict_proba()
-            mock_predict.return_value = expected_probas
+            mock_predict.return_value = PredictionResult(
+                y_pred=expected_probas, metadata={}
+            )
 
             # Test probability predictions for each variation
             proba_normal = tabpfn.predict_proba(X_normal_array)
@@ -642,7 +660,9 @@ class TestTabPFNClassifierInference(unittest.TestCase):
 
         with patch.object(InferenceClient, "predict") as mock_predict:
             # Test predict()
-            mock_predict.return_value = expected_predictions
+            mock_predict.return_value = PredictionResult(
+                y_pred=expected_predictions, metadata={}
+            )
             pred = tabpfn.predict(df)
 
             # Verify DataFrame wasn't modified
@@ -654,7 +674,9 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             np.testing.assert_array_equal(pred, expected_predictions)
 
             # Test predict_proba()
-            mock_predict.return_value = expected_probas
+            mock_predict.return_value = PredictionResult(
+                y_pred=expected_probas, metadata={}
+            )
             proba = tabpfn.predict_proba(df)
 
             # Verify DataFrame wasn't modified during predict_proba
@@ -677,7 +699,9 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             df_shuffled_copy = df_shuffled.copy()
 
             # Test predict with shuffled columns
-            mock_predict.return_value = expected_predictions
+            mock_predict.return_value = PredictionResult(
+                y_pred=expected_predictions, metadata={}
+            )
             pred_shuffled = tabpfn.predict(df_shuffled)
 
             # Verify shuffled DataFrame wasn't modified
@@ -798,7 +822,9 @@ class TestTabPFNModelSelection(unittest.TestCase):
 
         # Mock the inference client
         with patch.object(InferenceClient, "predict") as mock_predict:
-            mock_predict.return_value = {"probas": np.random.rand(10, 2)}
+            mock_predict.return_value = PredictionResult(
+                y_pred={"probas": np.random.rand(10, 2)}, metadata={}
+            )
 
             with patch.object(InferenceClient, "fit") as mock_fit:
                 mock_fit.return_value = "dummy_uid"
@@ -817,7 +843,11 @@ class TestTabPFNModelSelection(unittest.TestCase):
 
     @patch.object(InferenceClient, "fit", return_value="dummy_uid")
     @patch.object(
-        InferenceClient, "predict", return_value={"probas": np.random.rand(10, 2)}
+        InferenceClient,
+        "predict",
+        return_value=PredictionResult(
+            y_pred={"probas": np.random.rand(10, 2)}, metadata={}
+        ),
     )
     def test_paper_version_behavior(self, mock_predict, mock_fit):
         # this just test that it doesn't break,
@@ -839,7 +869,11 @@ class TestTabPFNModelSelection(unittest.TestCase):
         y_pred_false = tabpfn_false.predict(test_X)
         self.assertIsNotNone(y_pred_false)
 
-    @patch.object(InferenceClient, "predict", return_value=np.random.rand(20, 2))
+    @patch.object(
+        InferenceClient,
+        "predict",
+        return_value=PredictionResult(y_pred=np.random.rand(20, 2), metadata={}),
+    )
     @patch.object(InferenceClient, "fit", return_value="dummy_uid")
     def test_cross_validation(self, mock_fit, mock_predict):
         """Test that TabPFNClassifier works with sklearn's cross_val_score,

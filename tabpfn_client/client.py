@@ -3,26 +3,27 @@
 
 from __future__ import annotations
 
-import json
-import logging
-import os
+from copy import deepcopy
+import traceback
 import re
+from dataclasses import dataclass, field
+from pathlib import Path
+import httpx
+import logging
+from importlib.metadata import version, PackageNotFoundError
+import numpy as np
+from omegaconf import OmegaConf
+import json
+import os
 import threading
 import time
-import traceback
 from collections import OrderedDict
-from copy import deepcopy
-from importlib.metadata import PackageNotFoundError, version
-from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Union
 
 import backoff
-import httpx
-import numpy as np
 import sseclient
 import xxhash
 from httpx._transports.default import HTTPTransport
-from omegaconf import OmegaConf
 from tqdm import tqdm
 
 from tabpfn_client.browser_auth import BrowserAuthHandler
@@ -167,6 +168,12 @@ def get_client_version() -> str:
         # Package not found, should only happen during development. Execute 'pip install -e .' to use the actual
         # version number during development. Otherwise, simply return a version number that is large enough.
         return "5.5.5"
+
+
+@dataclass(frozen=True)
+class PredictionResult:
+    y_pred: Union[np.ndarray, list[np.ndarray], dict[str, np.ndarray]]
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class SelectiveHTTP2Transport(HTTPTransport):
@@ -325,7 +332,7 @@ class ServiceClient(Singleton):
         tabpfn_config: Union[dict, None] = None,
         X_train=None,
         y_train=None,
-    ) -> dict[str, np.ndarray]:
+    ) -> PredictionResult:
         """
         Predict the class labels for the provided data (test set).
 
@@ -375,6 +382,10 @@ class ServiceClient(Singleton):
         # Send prediction request. Loop two times, such that if anything cached is not correct
         # anymore, there is a second iteration where the datasets are uploaded.
         results = None
+
+        # Store metadata about the prediction including TabPFN model version
+        metadata = {}
+
         max_attempts = 2
         for attempt in range(max_attempts):
             try:
@@ -409,6 +420,8 @@ class ServiceClient(Singleton):
                             progress_thread.start()
                         elif data["event"] == "result":
                             results = data["data"]
+                            # Extract metadata from the response
+                            metadata = data.get("metadata", {})
                             if progress_bar:
                                 progress_bar.n = progress_bar.total
                                 progress_bar.refresh()
@@ -458,6 +471,7 @@ class ServiceClient(Singleton):
         # That is why below we use the task as the key to access the response.
         result = results[task]
         test_set_uid = results["test_set_uid"]
+
         if cached_test_set_uid is None:
             cls.dataset_uid_cache_manager.add_dataset_uid(dataset_hash, test_set_uid)
 
@@ -468,7 +482,7 @@ class ServiceClient(Singleton):
                 if isinstance(result[k], list):
                     result[k] = np.array(result[k])
 
-        return result
+        return PredictionResult(result, metadata)
 
     @classmethod
     def _make_prediction_request(cls, test_set_uid, x_test_serialized, params):
