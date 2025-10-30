@@ -284,7 +284,7 @@ class ServiceClient(Singleton):
         y_serialized = common_utils.serialize_to_csv_formatted_bytes(y)
 
         if config is None:
-            tabpfn_systems = config["tabpfn_systems"]
+            tabpfn_systems = ["preprocessing", "text"]
         else:
             tabpfn_systems = [] if config["paper_version"] else config["tabpfn_systems"]
 
