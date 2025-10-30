@@ -3,7 +3,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Literal
+from typing import Literal
 
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.constants import CACHE_DIR
@@ -229,10 +229,6 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         raise TypeError(
             "This class should not be instantiated. Use classmethods instead."
         )
-
-    @classmethod
-    def get_last_meta(cls) -> Dict[str, Any]:
-        return ServiceClient.get_last_meta()
 
     @classmethod
     def fit(cls, X, y, config=None) -> str:

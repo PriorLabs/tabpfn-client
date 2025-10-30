@@ -6,6 +6,7 @@ from __future__ import annotations
 from copy import deepcopy
 import traceback
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 import httpx
 import logging
@@ -167,6 +168,12 @@ def get_client_version() -> str:
         return "5.5.5"
 
 
+@dataclass(frozen=True)
+class PredictionResult:
+    y_pred: Union[np.ndarray, list[np.ndarray], dict[str, np.ndarray]]
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
 class ServiceClient(Singleton):
     """
     Singleton class for handling communication with the server.
@@ -188,11 +195,6 @@ class ServiceClient(Singleton):
 
     _access_token = None
     dataset_uid_cache_manager = DatasetUIDCacheManager()
-    _last_meta: Dict[str, Any] = {}
-
-    @classmethod
-    def get_last_meta(cls) -> Dict[str, Any]:
-        return cls._last_meta
 
     @classmethod
     def get_access_token(cls):
@@ -312,7 +314,7 @@ class ServiceClient(Singleton):
         tabpfn_config: Union[dict, None] = None,
         X_train=None,
         y_train=None,
-    ) -> dict[str, np.ndarray]:
+    ) -> PredictionResult:
         """
         Predict the class labels for the provided data (test set).
 
@@ -362,6 +364,10 @@ class ServiceClient(Singleton):
         # Send prediction request. Loop two times, such that if anything cached is not correct
         # anymore, there is a second iteration where the datasets are uploaded.
         results = None
+
+        # Store metadata about the prediction including TabPFN model version
+        metadata = {}
+
         max_attempts = 2
         for attempt in range(max_attempts):
             try:
@@ -397,7 +403,7 @@ class ServiceClient(Singleton):
                         elif data["event"] == "result":
                             results = data["data"]
                             # Extract metadata from the response
-                            cls._last_meta = data.get("metadata", {})
+                            metadata = data.get("metadata", {})
                             if progress_bar:
                                 progress_bar.n = progress_bar.total
                                 progress_bar.refresh()
@@ -458,7 +464,7 @@ class ServiceClient(Singleton):
                 if isinstance(result[k], list):
                     result[k] = np.array(result[k])
 
-        return result
+        return PredictionResult(result, metadata)
 
     @classmethod
     def _make_prediction_request(cls, test_set_uid, x_test_serialized, params):
