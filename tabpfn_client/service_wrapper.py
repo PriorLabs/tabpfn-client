@@ -7,7 +7,7 @@ from typing import Literal
 
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.constants import CACHE_DIR
-from tabpfn_client.tabpfn_common_utils.utils import Singleton
+from tabpfn_common_utils.utils import Singleton
 
 logger = logging.getLogger(__name__)
 
