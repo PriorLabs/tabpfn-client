@@ -134,6 +134,7 @@ class DatasetUIDCacheManager:
         self.cache.move_to_end(hash)
         if len(self.cache) > self.cache_limit:
             self.cache.popitem(last=False)
+
         if not self.disable_ds_caching:
             self.save_cache()
 
