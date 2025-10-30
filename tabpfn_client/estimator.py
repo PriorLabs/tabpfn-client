@@ -277,7 +277,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         random_state: int or RandomState or RandomGenerator or None, default=None
             Controls the randomness of the model. Pass an int for reproducible results.
         inference_config: dict or None, default=None
-            Additional advanced arguments for model interface. See the doc of ModelInterfaceConfig
+            Additional advanced arguments for model interface. See the doc of InferenceConfig
             in the tabpfn package for more details. For the client, the inference_config and the
             preprocess transforms need to be dictionaries.
         paper_version: bool, default=False
