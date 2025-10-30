@@ -57,6 +57,13 @@ def _on_giveup(details: Dict[str, Any]):
     )
     logger.error(message)
 
+def _caching_disabled() -> bool:
+    val = os.getenv("DISABLE_DS_CACHING", "")
+    disabled = str(val).lower() in {"1", "true", "yes", "on"}
+    if disabled:
+        logger.warning("Dataset caching is disabled.")
+    return disabled
+
 
 class GCPOverloaded(Exception):
     """
@@ -85,8 +92,10 @@ class DatasetUIDCacheManager:
 
     def __init__(self):
         self.file_path = CACHE_DIR / "dataset_cache"
-        self.cache = self.load_cache()
         self.cache_limit = 50
+        self.disable_ds_caching = _caching_disabled()
+
+        self.cache = self.load_cache() if not self.disable_ds_caching else OrderedDict()
 
     def load_cache(self):
         """
@@ -109,7 +118,7 @@ class DatasetUIDCacheManager:
         Generates hash by all received arguments and returns cached dataset uid if in cache, otherwise None.
         """
         dataset_hash = self._compute_hash(*args)
-        if str(dataset_hash) in self.cache:
+        if str(dataset_hash) in self.cache and not self.disable_ds_caching:
             self.cache.move_to_end(dataset_hash)
             return self.cache[dataset_hash], dataset_hash
         else:
@@ -125,7 +134,8 @@ class DatasetUIDCacheManager:
         self.cache.move_to_end(hash)
         if len(self.cache) > self.cache_limit:
             self.cache.popitem(last=False)
-        self.save_cache()
+        if not self.disable_ds_caching:
+            self.save_cache()
 
     def save_cache(self):
         """
