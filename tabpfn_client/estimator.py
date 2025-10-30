@@ -1,6 +1,8 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
 
+from __future__ import annotations
+
 from typing import Optional, Literal, Dict, Union
 import logging
 import numpy as np
@@ -12,6 +14,7 @@ from sklearn.utils.multiclass import check_classification_targets
 from sklearn.utils.validation import check_is_fitted
 
 from tabpfn_client.config import Config
+from tabpfn_client.client import PredictionResult
 from tabpfn_client.service_wrapper import InferenceClient
 
 logger = logging.getLogger(__name__)
@@ -114,7 +117,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         random_state: int or RandomState or RandomGenerator or None, default=None
             Controls the randomness of the model. Pass an int for reproducible results.
         inference_config: dict or None, default=None
-            Additional advanced arguments for model interface. See the doc of ModelInterfaceConfig
+            Additional advanced arguments for model interface. See the doc of InferenceConfig
             in the tabpfn package for more details. For the client, the inference_config and the
             preprocess transforms need to be dictionaries.
         paper_version: bool, default=False
@@ -134,6 +137,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.last_train_set_uid = None
         self.last_train_X = None
         self.last_train_y = None
+        self.last_meta = {}
 
     def fit(self, X, y):
         # assert init() is called
@@ -192,7 +196,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             "classification", self.model_path
         )
 
-        res = InferenceClient.predict(
+        result: PredictionResult = InferenceClient.predict(
             X,
             task="classification",
             train_set_uid=self.last_train_set_uid,
@@ -201,7 +205,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             X_train=self.last_train_X,
             y_train=self.last_train_y,
         )
-        return res
+
+        # Unpack and store metadata
+        self.last_meta = result.metadata
+
+        return result.y_pred
 
     def _validate_targets_and_classes(self, y) -> np.ndarray:
         y_ = column_or_1d(y, warn=True)
@@ -277,7 +285,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         random_state: int or RandomState or RandomGenerator or None, default=None
             Controls the randomness of the model. Pass an int for reproducible results.
         inference_config: dict or None, default=None
-            Additional advanced arguments for model interface. See the doc of ModelInterfaceConfig
+            Additional advanced arguments for model interface. See the doc of InferenceConfig
             in the tabpfn package for more details. For the client, the inference_config and the
             preprocess transforms need to be dictionaries.
         paper_version: bool, default=False
@@ -296,6 +304,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.last_train_set_uid = None
         self.last_train_X = None
         self.last_train_y = None
+        self.last_meta = {}
 
     def fit(self, X, y):
         # assert init() is called
@@ -369,7 +378,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             "regression", self.model_path
         )
 
-        return InferenceClient.predict(
+        result: PredictionResult = InferenceClient.predict(
             X,
             task="regression",
             train_set_uid=self.last_train_set_uid,
@@ -378,6 +387,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             X_train=self.last_train_X,
             y_train=self.last_train_y,
         )
+
+        # Unpack and store metadata
+        self.last_meta = result.metadata
+
+        return result.y_pred
 
     def _validate_targets(self, y) -> np.ndarray:
         y_ = column_or_1d(y, warn=True)
