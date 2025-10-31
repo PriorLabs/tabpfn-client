@@ -14,20 +14,18 @@ class TestPromptAgent(unittest.TestCase):
     @patch(
         "builtins.input",
         side_effect=[
-            "1",
-            "y",
             "user@example.com",
-            "y",
             "first",
             "last",
             "cool company",
-            "A",
             "my awesome usecase! bla",
-            "y",
             "test",
         ],
     )
-    def test_prompt_and_set_token_registration(self, mock_input, mock_getpass):
+    @patch("rich.console.Console.input", side_effect=["1", "y", "y", "a", "y"])
+    def test_prompt_and_set_token_registration(
+        self, mock_console_input, mock_input, mock_getpass
+    ):
         # for some reason, it needs to be patched with a with-statement instead of a decorator
         with patch(
             "tabpfn_client.prompt_agent.UserAuthenticationClient"
@@ -71,12 +69,14 @@ class TestPromptAgent(unittest.TestCase):
             )
 
     @patch("getpass.getpass", side_effect=["password123"])
-    @patch("builtins.input", side_effect=["2", "user@gmail.com"])
-    def test_prompt_and_set_token_login(self, mock_input, mock_getpass):
+    @patch("builtins.input", side_effect=["user@gmail.com"])
+    @patch("rich.console.Console.input", side_effect=["2"])
+    def test_prompt_and_set_token_login(
+        self, mock_console_input, mock_input, mock_getpass
+    ):
         with patch(
             "tabpfn_client.prompt_agent.UserAuthenticationClient"
         ) as mock_auth_client:
-            mock_auth_client.try_browser_login.return_value = (False, None)
             mock_auth_client.set_token_by_login.return_value = (
                 True,
                 "Login successful",
@@ -84,14 +84,13 @@ class TestPromptAgent(unittest.TestCase):
             )
             PromptAgent.prompt_and_set_token()
             mock_auth_client.set_token_by_login.assert_called_once()
-            mock_auth_client.try_browser_login.assert_called_once()
 
-    @patch("builtins.input", return_value="y")
+    @patch("rich.console.Console.input", return_value="y")
     def test_prompt_terms_and_cond_returns_true(self, mock_input):
         result = PromptAgent.prompt_terms_and_cond()
         self.assertTrue(result)
 
-    @patch("builtins.input", return_value="n")
+    @patch("rich.console.Console.input", return_value="n")
     def test_prompt_terms_and_cond_returns_false(self, mock_input):
         result = PromptAgent.prompt_terms_and_cond()
         self.assertFalse(result)
