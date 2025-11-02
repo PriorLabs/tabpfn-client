@@ -368,7 +368,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             "regression", self.model_path
         )
 
-        return InferenceClient.predict(
+        output = InferenceClient.predict(
             X,
             task="regression",
             train_set_uid=self.last_train_set_uid,
@@ -377,6 +377,16 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             X_train=self.last_train_X,
             y_train=self.last_train_y,
         )
+
+        if output_type == "full":
+            try:
+                from tabpfn.regressor import FullSupportBarDistribution
+                import torch
+                output["criterion"] = FullSupportBarDistribution(borders=torch.tensor(output["borders"]))
+            except ImportError:
+                pass
+
+        return output
 
     def _validate_targets(self, y) -> np.ndarray:
         y_ = column_or_1d(y, warn=True)
