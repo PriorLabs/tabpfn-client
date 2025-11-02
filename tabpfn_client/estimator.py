@@ -388,18 +388,19 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             y_train=self.last_train_y,
         )
 
+        # Unpack and store metadata
+        self.last_meta = result.metadata
+
+        output = result.y_pred
         if output_type == "full":
             try:
                 from tabpfn.regressor import FullSupportBarDistribution
                 import torch
-                result["criterion"] = FullSupportBarDistribution(borders=torch.tensor(output["borders"]))
+                output["criterion"] = FullSupportBarDistribution(borders=torch.tensor(output["borders"]))
             except ImportError:
                 pass
 
-        # Unpack and store metadata
-        self.last_meta = result.metadata
-
-        return result.y_pred
+        return output
 
     def _validate_targets(self, y) -> np.ndarray:
         y_ = column_or_1d(y, warn=True)
