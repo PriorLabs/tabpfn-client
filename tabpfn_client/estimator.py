@@ -396,7 +396,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             try:
                 from tabpfn.regressor import FullSupportBarDistribution
                 import torch
-                output["criterion"] = FullSupportBarDistribution(borders=torch.tensor(output["borders"]))
+
+                output["criterion"] = FullSupportBarDistribution(
+                    borders=torch.tensor(output["borders"])
+                )
             except ImportError:
                 pass
 
