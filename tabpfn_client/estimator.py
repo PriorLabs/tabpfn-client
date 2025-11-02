@@ -1,6 +1,8 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
 
+from __future__ import annotations
+
 from typing import Optional, Literal, Dict, Union
 import logging
 import numpy as np
@@ -12,6 +14,7 @@ from sklearn.utils.multiclass import check_classification_targets
 from sklearn.utils.validation import check_is_fitted
 
 from tabpfn_client.config import Config
+from tabpfn_client.client import PredictionResult
 from tabpfn_client.service_wrapper import InferenceClient
 
 logger = logging.getLogger(__name__)
@@ -42,11 +45,12 @@ class TabPFNModelSelection:
     @classmethod
     def _model_name_to_path(
         cls, task: Literal["classification", "regression"], model_name: str
-    ) -> str:
+    ) -> Optional[str]:
         cls._validate_model_name(model_name)
         model_name_task = "classifier" if task == "classification" else "regressor"
+        # Let the server handle the default model. This enables v2.5 as well.
         if model_name == "default":
-            return f"tabpfn-v2-{model_name_task}.ckpt"
+            return None
         return f"tabpfn-v2-{model_name_task}-{model_name}.ckpt"
 
 
@@ -63,11 +67,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     def __init__(
         self,
         model_path: str = "default",
-        n_estimators: int = 4,
+        n_estimators: int = 8,
         softmax_temperature: float = 0.9,
         balance_probabilities: bool = False,
         average_before_softmax: bool = False,
-        ignore_pretraining_limits: bool = False,
+        ignore_pretraining_limits: bool = True,
         inference_precision: Literal["autocast", "auto"] = "auto",
         random_state: Optional[
             Union[int, np.random.RandomState, np.random.Generator]
@@ -81,7 +85,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         ----------
         model_path: str, default="default"
             The name of the model to use.
-        n_estimators: int, default=4
+        n_estimators: int, default=8
             The number of estimators in the TabPFN ensemble. We aggregate the
              predictions of `n_estimators`-many forward passes of TabPFN. Each forward
              pass has (slightly) different input data. Think of this as an ensemble of
@@ -102,7 +106,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
              predictive performance when there are many classes or when calibrating the
              model's confidence. This is only applied when predicting during a
              post-processing.
-        ignore_pretraining_limits: bool, default=False
+        ignore_pretraining_limits: bool, default=True
             Whether to ignore the pre-training limits of the model. The TabPFN models
             have been pre-trained on a specific range of input data. If the input data
             is outside of this range, the model may not perform well. You may ignore
@@ -113,7 +117,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         random_state: int or RandomState or RandomGenerator or None, default=None
             Controls the randomness of the model. Pass an int for reproducible results.
         inference_config: dict or None, default=None
-            Additional advanced arguments for model interface. See the doc of ModelInterfaceConfig
+            Additional advanced arguments for model interface. See the doc of InferenceConfig
             in the tabpfn package for more details. For the client, the inference_config and the
             preprocess transforms need to be dictionaries.
         paper_version: bool, default=False
@@ -133,6 +137,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.last_train_set_uid = None
         self.last_train_X = None
         self.last_train_y = None
+        self.last_meta = {}
 
     def fit(self, X, y):
         # assert init() is called
@@ -191,7 +196,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             "classification", self.model_path
         )
 
-        res = InferenceClient.predict(
+        result: PredictionResult = InferenceClient.predict(
             X,
             task="classification",
             train_set_uid=self.last_train_set_uid,
@@ -200,7 +205,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             X_train=self.last_train_X,
             y_train=self.last_train_y,
         )
-        return res
+
+        # Unpack and store metadata
+        self.last_meta = result.metadata
+
+        return result.y_pred
 
     def _validate_targets_and_classes(self, y) -> np.ndarray:
         y_ = column_or_1d(y, warn=True)
@@ -276,7 +285,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         random_state: int or RandomState or RandomGenerator or None, default=None
             Controls the randomness of the model. Pass an int for reproducible results.
         inference_config: dict or None, default=None
-            Additional advanced arguments for model interface. See the doc of ModelInterfaceConfig
+            Additional advanced arguments for model interface. See the doc of InferenceConfig
             in the tabpfn package for more details. For the client, the inference_config and the
             preprocess transforms need to be dictionaries.
         paper_version: bool, default=False
@@ -295,6 +304,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.last_train_set_uid = None
         self.last_train_X = None
         self.last_train_y = None
+        self.last_meta = {}
 
     def fit(self, X, y):
         # assert init() is called
@@ -368,7 +378,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             "regression", self.model_path
         )
 
-        output = InferenceClient.predict(
+        result: PredictionResult = InferenceClient.predict(
             X,
             task="regression",
             train_set_uid=self.last_train_set_uid,
@@ -382,11 +392,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             try:
                 from tabpfn.regressor import FullSupportBarDistribution
                 import torch
-                output["criterion"] = FullSupportBarDistribution(borders=torch.tensor(output["borders"]))
+                result["criterion"] = FullSupportBarDistribution(borders=torch.tensor(output["borders"]))
             except ImportError:
                 pass
 
-        return output
+        # Unpack and store metadata
+        self.last_meta = result.metadata
+
+        return result.y_pred
 
     def _validate_targets(self, y) -> np.ndarray:
         y_ = column_or_1d(y, warn=True)

@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import traceback
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 import httpx
 import logging
@@ -12,18 +14,21 @@ from importlib.metadata import version, PackageNotFoundError
 import numpy as np
 from omegaconf import OmegaConf
 import json
-from typing import Literal, Optional, Union
-import xxhash
 import os
-from collections import OrderedDict
-import sseclient
 import threading
 import time
+from collections import OrderedDict
+from typing import Any, Dict, Literal, Optional, Union
+
+import backoff
+import sseclient
+import xxhash
+from httpx._transports.default import HTTPTransport
 from tqdm import tqdm
 
-from tabpfn_client.tabpfn_common_utils import utils as common_utils
-from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client.browser_auth import BrowserAuthHandler
+from tabpfn_client.constants import CACHE_DIR
+from tabpfn_client.tabpfn_common_utils import utils as common_utils
 from tabpfn_client.tabpfn_common_utils.utils import Singleton
 
 logger = logging.getLogger(__name__)
@@ -31,6 +36,26 @@ logger = logging.getLogger(__name__)
 # avoid logging of httpx and httpcore on client side
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
+
+
+def _on_backoff(details: Dict[str, Any]):
+    """Callback function for retry attempts."""
+    function_name = details["target"].__name__
+    message = (
+        f"Exception occurred during {function_name}, retrying in {details['wait']} seconds... "
+        f"attempt {details['tries']}: {details['exception']}"
+    )
+    logger.warning(message)
+
+
+def _on_giveup(details: Dict[str, Any]):
+    """Callback function when retries are exhausted."""
+    function_name: str = details["target"].__name__.title()
+    message = (
+        f"{function_name} method failed after {details['tries']} attempts. "
+        f"Giving up. Exception: {details['exception']}"
+    )
+    logger.error(message)
 
 
 class GCPOverloaded(Exception):
@@ -145,6 +170,28 @@ def get_client_version() -> str:
         return "5.5.5"
 
 
+@dataclass(frozen=True)
+class PredictionResult:
+    y_pred: Union[np.ndarray, list[np.ndarray], dict[str, np.ndarray]]
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+class SelectiveHTTP2Transport(HTTPTransport):
+    def __init__(self, http2_paths=None, *args, **kwargs):
+        self.http2_paths = http2_paths or []
+        self.http1 = HTTPTransport(http2=False, *args, **kwargs)
+        self.http2 = HTTPTransport(http2=True, *args, **kwargs)
+
+    def handle_request(self, request):
+        if request.url.path in self.http2_paths:
+            return self.http2.handle_request(request)
+        return self.http1.handle_request(request)
+
+    def close(self) -> None:
+        self.http1.close()
+        self.http2.close()
+
+
 class ServiceClient(Singleton):
     """
     Singleton class for handling communication with the server.
@@ -157,13 +204,13 @@ class ServiceClient(Singleton):
     httpx_timeout_s = (
         4 * 5 * 60 + 15  # temporary workaround for slow computation on server side
     )
+    fit_path = SERVER_CONFIG["endpoints"]["fit"]["path"]
     httpx_client = httpx.Client(
         base_url=base_url,
         timeout=httpx_timeout_s,
         headers={"client-version": get_client_version()},
-        http2=True,
+        transport=SelectiveHTTP2Transport(http2_paths=[fit_path]),
     )
-
     _access_token = None
     dataset_uid_cache_manager = DatasetUIDCacheManager()
 
@@ -184,6 +231,23 @@ class ServiceClient(Singleton):
         cls.httpx_client.headers.pop("Authorization", None)
 
     @classmethod
+    @backoff.on_exception(
+        backoff.expo,
+        (
+            httpx.ConnectError,
+            httpx.TimeoutException,
+            httpx.ReadTimeout,
+            httpx.WriteTimeout,
+            httpx.RemoteProtocolError,
+            GCPOverloaded,
+        ),
+        max_tries=3,
+        base=2,
+        max_value=30,
+        logger=logger,
+        on_backoff=_on_backoff,
+        on_giveup=_on_giveup,
+    )
     def fit(cls, X, y, config=None) -> str:
         """
         Upload a train set to server and return the train set UID if successful.
@@ -242,6 +306,23 @@ class ServiceClient(Singleton):
         return train_set_uid
 
     @classmethod
+    @backoff.on_exception(
+        backoff.expo,
+        (
+            httpx.ConnectError,
+            httpx.TimeoutException,
+            httpx.ReadTimeout,
+            httpx.WriteTimeout,
+            httpx.RemoteProtocolError,
+            GCPOverloaded,
+        ),
+        max_tries=3,
+        base=2,
+        max_value=30,
+        logger=logger,
+        on_backoff=_on_backoff,
+        on_giveup=_on_giveup,
+    )
     def predict(
         cls,
         train_set_uid: str,
@@ -251,7 +332,7 @@ class ServiceClient(Singleton):
         tabpfn_config: Union[dict, None] = None,
         X_train=None,
         y_train=None,
-    ) -> dict[str, np.ndarray]:
+    ) -> PredictionResult:
         """
         Predict the class labels for the provided data (test set).
 
@@ -267,6 +348,7 @@ class ServiceClient(Singleton):
         y_pred : array-like of shape (n_samples,)
             The predicted class labels.
         """
+        tabpfn_config = deepcopy(tabpfn_config)
 
         x_test_serialized = common_utils.serialize_to_csv_formatted_bytes(x_test)
 
@@ -300,6 +382,10 @@ class ServiceClient(Singleton):
         # Send prediction request. Loop two times, such that if anything cached is not correct
         # anymore, there is a second iteration where the datasets are uploaded.
         results = None
+
+        # Store metadata about the prediction including TabPFN model version
+        metadata = {}
+
         max_attempts = 2
         for attempt in range(max_attempts):
             try:
@@ -334,6 +420,8 @@ class ServiceClient(Singleton):
                             progress_thread.start()
                         elif data["event"] == "result":
                             results = data["data"]
+                            # Extract metadata from the response
+                            metadata = data.get("metadata", {})
                             if progress_bar:
                                 progress_bar.n = progress_bar.total
                                 progress_bar.refresh()
@@ -383,6 +471,7 @@ class ServiceClient(Singleton):
         # That is why below we use the task as the key to access the response.
         result = results[task]
         test_set_uid = results["test_set_uid"]
+
         if cached_test_set_uid is None:
             cls.dataset_uid_cache_manager.add_dataset_uid(dataset_hash, test_set_uid)
 
@@ -393,7 +482,7 @@ class ServiceClient(Singleton):
                 if isinstance(result[k], list):
                     result[k] = np.array(result[k])
 
-        return result
+        return PredictionResult(result, metadata)
 
     @classmethod
     def _make_prediction_request(cls, test_set_uid, x_test_serialized, params):

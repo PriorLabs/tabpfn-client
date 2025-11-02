@@ -202,7 +202,7 @@ class TestServiceClient(unittest.TestCase):
         dummy_result = {"test_set_uid": "dummy_uid", "classification": [1, 2, 3]}
         mock_server.router.post(mock_server.endpoints.predict.path).respond(
             200,
-            content=f'data: {json.dumps({"event": "result", "data": dummy_result})}\n\n',
+            content=f"data: {json.dumps({'event': 'result', 'data': dummy_result})}\n\n",
             headers={"Content-Type": "text/event-stream"},
         )
 
@@ -211,7 +211,7 @@ class TestServiceClient(unittest.TestCase):
             x_test=self.X_test,
             task="classification",
         )
-        self.assertTrue(np.array_equal(pred, dummy_result["classification"]))
+        self.assertTrue(np.array_equal(pred.y_pred, dummy_result["classification"]))
 
     def test_validate_response_no_error(self):
         response = Mock()
@@ -343,7 +343,7 @@ class TestServiceClient(unittest.TestCase):
             )
 
             # The predictions should be the same
-            self.assertTrue(np.array_equal(pred1, pred2))
+            self.assertTrue(np.array_equal(pred1.y_pred, pred2.y_pred))
 
             # The predict endpoint should have been called twice
             self.assertEqual(
@@ -436,7 +436,7 @@ class TestServiceClient(unittest.TestCase):
             )
 
             # The predictions should be as expected
-            self.assertTrue(np.array_equal(pred, [1, 2, 3]))
+            self.assertTrue(np.array_equal(pred.y_pred, [1, 2, 3]))
 
             # The predict endpoint should have been called twice due to retry
             self.assertEqual(
