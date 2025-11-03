@@ -14,6 +14,7 @@ from tabpfn_client.tests.mock_tabpfn_server import with_mock_server
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client import config
 import json
+from tabpfn_client.client import PredictionResult
 
 
 class TestTabPFNRegressorInit(unittest.TestCase):
@@ -358,7 +359,9 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
         # mock prediction
         with patch.object(InferenceClient, "predict") as mock_predict:
-            mock_predict.return_value = {"mean": np.random.randn(10)}
+            mock_predict.return_value = PredictionResult(
+                y_pred={"mean": np.random.randn(10)}, metadata={}
+            )
             tabpfn.predict(test_X)
 
     def test_only_allowed_parameters_passed_to_config(self):
@@ -393,7 +396,9 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
         # Mock predict and capture config
         with patch.object(InferenceClient, "predict") as mock_predict:
-            mock_predict.return_value = {"mean": np.random.randn(10)}
+            mock_predict.return_value = PredictionResult(
+                y_pred={"mean": np.random.randn(10)}, metadata={}
+            )
             regressor.predict(test_X)
 
             # Get the config that was passed to predict
@@ -423,7 +428,9 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
         # Test default predict() sets output_type to "mean"
         with patch.object(InferenceClient, "predict") as mock_predict:
-            mock_predict.return_value = {"mean": np.random.randn(10)}
+            mock_predict.return_value = PredictionResult(
+                y_pred={"mean": np.random.randn(10)}, metadata={}
+            )
             regressor.predict(test_X)
 
             predict_params = mock_predict.call_args[1]["predict_params"]
@@ -431,7 +438,9 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
         # Test predict() with quantiles
         with patch.object(InferenceClient, "predict") as mock_predict:
-            mock_predict.return_value = {"quantiles": np.random.randn(10, 3)}
+            mock_predict.return_value = PredictionResult(
+                y_pred={"quantiles": np.random.randn(10, 3)}, metadata={}
+            )
             quantiles = [0.1, 0.5, 0.9]
             regressor.predict(test_X, output_type="quantiles", quantiles=quantiles)
 
@@ -484,7 +493,9 @@ class TestTabPFNRegressorInference(unittest.TestCase):
         # Mock predictions
         expected_predictions = np.random.randn(n_samples)
         with patch.object(InferenceClient, "predict") as mock_predict:
-            mock_predict.return_value = expected_predictions
+            mock_predict.return_value = PredictionResult(
+                y_pred=expected_predictions, metadata={}
+            )
 
             # Test predictions for each variation
             pred_normal = tabpfn.predict(X_normal_array)
@@ -553,7 +564,9 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
         with patch.object(InferenceClient, "predict") as mock_predict:
             # Test predict()
-            mock_predict.return_value = expected_predictions
+            mock_predict.return_value = PredictionResult(
+                y_pred=expected_predictions, metadata={}
+            )
             pred = tabpfn.predict(df)
 
             # Verify DataFrame wasn't modified
@@ -571,7 +584,9 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             df_shuffled_copy = df_shuffled.copy()
 
             # Test predict with shuffled columns
-            mock_predict.return_value = expected_predictions
+            mock_predict.return_value = PredictionResult(
+                y_pred=expected_predictions, metadata={}
+            )
             pred_shuffled = tabpfn.predict(df_shuffled)
 
             # Verify shuffled DataFrame wasn't modified
@@ -612,7 +627,11 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             tabpfn.fit(X, y_pd_na)
         self.assertIn("contains NaN.", str(cm.exception))
 
-    @patch.object(InferenceClient, "predict", return_value=np.random.rand(20))
+    @patch.object(
+        InferenceClient,
+        "predict",
+        return_value=PredictionResult(y_pred=np.random.rand(20), metadata={}),
+    )
     @patch.object(InferenceClient, "fit", return_value="dummy_uid")
     def test_cross_validation(self, mock_fit, mock_predict):
         """Test that TabPFNRegressor works with sklearn's cross_val_score."""
@@ -664,8 +683,8 @@ class TestTabPFNModelSelection(unittest.TestCase):
             TabPFNRegressor._validate_model_name("invalid_model")
 
     def test_model_name_to_path_returns_expected_path(self):
-        # Test default model path
-        expected_default_path = "tabpfn-v2-regressor.ckpt"
+        # Test default model path. Server decides.
+        expected_default_path = None
         self.assertEqual(
             TabPFNRegressor._model_name_to_path("regression", "default"),
             expected_default_path,
@@ -695,7 +714,9 @@ class TestTabPFNModelSelection(unittest.TestCase):
 
         # Mock the inference client
         with patch.object(InferenceClient, "predict") as mock_predict:
-            mock_predict.return_value = {"mean": np.random.rand(10)}
+            mock_predict.return_value = PredictionResult(
+                y_pred={"mean": np.random.rand(10)}, metadata={}
+            )
             with patch.object(InferenceClient, "fit") as mock_fit:
                 mock_fit.return_value = "dummy_uid"
 
@@ -712,7 +733,11 @@ class TestTabPFNModelSelection(unittest.TestCase):
                 )
 
     @patch.object(InferenceClient, "fit", return_value="dummy_uid")
-    @patch.object(InferenceClient, "predict", return_value={"mean": np.random.rand(10)})
+    @patch.object(
+        InferenceClient,
+        "predict",
+        return_value=PredictionResult(y_pred={"mean": np.random.rand(10)}, metadata={}),
+    )
     def test_paper_version_behavior(self, mock_predict, mock_fit):
         # this just tests that it doesn't break,
         # but the actual behavior is easier to test
