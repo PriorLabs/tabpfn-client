@@ -401,7 +401,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     borders=torch.tensor(output["borders"])
                 )
             except ImportError:
-                pass
+                logger.warning(
+                    "Optional dependencies 'tabpfn' and 'torch' are required to "
+                    "construct the criterion when output_type='full'. Skipping criterion."
+                )
 
         return output
 

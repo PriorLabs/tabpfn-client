@@ -1,5 +1,8 @@
 import unittest
 from unittest.mock import patch
+import sys
+import types
+import builtins
 
 import shutil
 import numpy as np
@@ -446,6 +449,79 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             self.assertEqual(
                 predict_params, {"output_type": "quantiles", "quantiles": quantiles}
             )
+
+    def test_predict_full_adds_criterion_with_optional_dependencies(self):
+        regressor = TabPFNRegressor()
+        regressor.fitted_ = True
+        regressor.last_train_set_uid = "dummy_uid"
+        regressor.last_train_X = np.random.randn(5, 2)
+        regressor.last_train_y = np.random.randn(5)
+
+        test_X = np.random.randn(3, 2)
+        dummy_output = {"borders": [0.0, 1.0], "mean": np.random.randn(3)}
+
+        class DummyFullSupportBarDistribution:
+            def __init__(self, borders):
+                self.borders = borders
+
+        module_tabpfn = types.ModuleType("tabpfn")
+        module_regressor = types.ModuleType("tabpfn.regressor")
+        module_regressor.FullSupportBarDistribution = DummyFullSupportBarDistribution
+        module_tabpfn.regressor = module_regressor
+
+        module_torch = types.ModuleType("torch")
+        module_torch.tensor = lambda borders: borders
+
+        with patch.dict(
+            sys.modules,
+            {
+                "tabpfn": module_tabpfn,
+                "tabpfn.regressor": module_regressor,
+                "torch": module_torch,
+            },
+        ):
+            with patch.object(InferenceClient, "predict") as mock_predict:
+                mock_predict.return_value = PredictionResult(
+                    y_pred=dummy_output.copy(), metadata={}
+                )
+                output = regressor.predict(test_X, output_type="full")
+
+        self.assertIn("criterion", output)
+        self.assertIsInstance(output["criterion"], DummyFullSupportBarDistribution)
+        self.assertEqual(output["criterion"].borders, dummy_output["borders"])
+
+    def test_predict_full_missing_optional_dependencies_logs_warning(self):
+        regressor = TabPFNRegressor()
+        regressor.fitted_ = True
+        regressor.last_train_set_uid = "dummy_uid"
+        regressor.last_train_X = np.random.randn(5, 2)
+        regressor.last_train_y = np.random.randn(5)
+
+        test_X = np.random.randn(3, 2)
+        dummy_output = {"borders": [0.0, 1.0], "mean": np.random.randn(3)}
+
+        with patch.object(InferenceClient, "predict") as mock_predict:
+            mock_predict.return_value = PredictionResult(
+                y_pred=dummy_output.copy(), metadata={}
+            )
+
+            original_import = builtins.__import__
+
+            def import_side_effect(name, *args, **kwargs):
+                if name in {"tabpfn", "tabpfn.regressor", "torch"}:
+                    raise ImportError(f"No module named {name}")
+                return original_import(name, *args, **kwargs)
+
+            with patch("builtins.__import__", side_effect=import_side_effect):
+                with self.assertLogs(
+                    "tabpfn_client.estimator", level="WARNING"
+                ) as captured_logs:
+                    output = regressor.predict(test_X, output_type="full")
+
+        self.assertNotIn("criterion", output)
+        self.assertTrue(
+            any("Optional dependencies" in message for message in captured_logs.output)
+        )
 
     def test_predict_with_long_and_comma_text(self):
         """Test predictions with long text (>2500 chars) and text containing commas."""
