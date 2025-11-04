@@ -19,6 +19,7 @@ from tabpfn_client.service_wrapper import InferenceClient
 
 try:
     from torch import Tensor
+
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
@@ -443,7 +444,7 @@ def _clean_text_features(X):
             X = X.detach()
         if X.is_cuda:
             X = X.cpu()
-        
+
         X = X.numpy()
 
     if isinstance(X, np.ndarray):
