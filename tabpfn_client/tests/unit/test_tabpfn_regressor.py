@@ -675,7 +675,7 @@ class TestTabPFNModelSelection(unittest.TestCase):
             "2noar4o2",
             "5wof9ojf",
             "09gpqh39",
-            "wyl4o83o"
+            "wyl4o83o",
         ]
         self.assertEqual(TabPFNRegressor.list_available_models(), expected_models)
 

@@ -832,7 +832,6 @@ class TestTabPFNModelSelection(unittest.TestCase):
             expected_specific_path,
         )
 
-
     def test_model_name_to_path_with_invalid_model_raises_error(self):
         with self.assertRaises(ValueError):
             TabPFNClassifier._model_name_to_path("classification", "invalid_model")
