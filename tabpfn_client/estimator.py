@@ -8,7 +8,6 @@ import logging
 import numpy as np
 import pandas as pd
 from tabpfn_client.config import init
-from torch import Tensor
 from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.utils import column_or_1d
 from sklearn.utils.multiclass import check_classification_targets
@@ -17,6 +16,12 @@ from sklearn.utils.validation import check_is_fitted
 from tabpfn_client.config import Config
 from tabpfn_client.client import PredictionResult
 from tabpfn_client.service_wrapper import InferenceClient
+
+try:
+    from torch import Tensor
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -433,13 +438,19 @@ def _clean_text_features(X):
     """
     # Convert numpy array to pandas DataFrame if necessary
     # not necessary if numpy array of numbers
+    if TORCH_AVAILABLE and isinstance(X, Tensor):
+        if X.requires_grad:
+            X = X.detach()
+        if X.is_cuda:
+            X = X.cpu()
+        
+        X = X.numpy()
+
     if isinstance(X, np.ndarray):
         if np.issubdtype(X.dtype, np.number):
             return X
         else:
             X_ = pd.DataFrame(X.copy())
-    elif isinstance(X, Tensor):
-        X_ = pd.DataFrame(X.numpy())
     else:
         X_ = X.copy()
 
@@ -458,7 +469,7 @@ def _clean_text_features(X):
                     .str.slice(0, 2500)
                 )
 
-    # Convert back to numpy if input was numpy
+    # Convert back to numpy if input was numpy (or tensor that was converted to numpy)
     if isinstance(X, np.ndarray):
         return X_.to_numpy()
     return X_
