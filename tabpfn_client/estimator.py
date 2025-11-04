@@ -8,6 +8,7 @@ import logging
 import numpy as np
 import pandas as pd
 from tabpfn_client.config import init
+from torch import Tensor
 from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.utils import column_or_1d
 from sklearn.utils.multiclass import check_classification_targets
@@ -437,6 +438,8 @@ def _clean_text_features(X):
             return X
         else:
             X_ = pd.DataFrame(X.copy())
+    elif isinstance(X, Tensor):
+        X_ = pd.DataFrame(X.numpy())
     else:
         X_ = X.copy()
 
