@@ -776,6 +776,8 @@ class TestTabPFNModelSelection(unittest.TestCase):
 
     def test_list_available_models_returns_expected_models(self):
         expected_models = [
+            "v2.5_default",
+            "v2_default",
             "default",
             "gn2p4bpt",
             "llderlii",
@@ -784,6 +786,20 @@ class TestTabPFNModelSelection(unittest.TestCase):
             "znskzxi4",
         ]
         self.assertEqual(TabPFNClassifier.list_available_models(), expected_models)
+
+    def test_model_names_that_are_substrings_come_later(self):
+        # Mitigation to ensure that model "parsing" in the tabpfn-time-series
+        # package continues to work. Long-term we should fix that package as
+        # that "parsing" is quite brittle.
+        # https://github.com/PriorLabs/tabpfn-time-series/blob/71c22aed9d3f8ec280ffb753d0e87086be3cb7a4/tabpfn_time_series/worker/model_adapters/tabpfn_adapter.py#L18
+
+        model_names = TabPFNClassifier.list_available_models()
+
+        for i in range(len(model_names)):
+            possible_substring = model_names[i]
+            for j in range(i + 1, len(model_names)):
+                model_name = model_names[j]
+                self.assertNotIn(possible_substring, model_name)
 
     def test_validate_model_name_with_valid_model_passes(self):
         # Should not raise any exception
@@ -808,6 +824,14 @@ class TestTabPFNModelSelection(unittest.TestCase):
             TabPFNClassifier._model_name_to_path("classification", "gn2p4bpt"),
             expected_specific_path,
         )
+
+        # Test specific v2.5 model path
+        expected_specific_path = "tabpfn-v2.5-classifier-v2.5_default.ckpt"
+        self.assertEqual(
+            TabPFNClassifier._model_name_to_path("classification", "v2.5_default"),
+            expected_specific_path,
+        )
+
 
     def test_model_name_to_path_with_invalid_model_raises_error(self):
         with self.assertRaises(ValueError):
