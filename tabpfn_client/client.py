@@ -749,9 +749,6 @@ class ServiceClient(Singleton):
         if response.status_code == 200:
             access_token = response.json()["access_token"]
             message = ""
-        elif response.status_code == 403:
-            access_token = response.headers["access_token"]
-            message = response.json()["detail"]
         else:
             message = response.json()["detail"]
         # status code signifies the success of the login, issues with password, and email verification
