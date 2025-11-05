@@ -407,7 +407,22 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         # Unpack and store metadata
         self.last_meta = result.metadata
 
-        return result.y_pred
+        output = result.y_pred
+        if output_type == "full":
+            try:
+                from tabpfn.regressor import FullSupportBarDistribution
+                import torch
+
+                output["criterion"] = FullSupportBarDistribution(
+                    borders=torch.tensor(output["borders"])
+                )
+            except ImportError:
+                logger.warning(
+                    "Optional dependencies 'tabpfn' and 'torch' are required to "
+                    "construct the criterion when output_type='full'. Skipping criterion."
+                )
+
+        return output
 
     def _validate_targets(self, y) -> np.ndarray:
         y_ = column_or_1d(y, warn=True)
