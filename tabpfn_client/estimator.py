@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import Optional, Literal, Dict, Union
 import logging
+from typing_extensions import Self
 import numpy as np
 import pandas as pd
 from tabpfn_client.config import init
