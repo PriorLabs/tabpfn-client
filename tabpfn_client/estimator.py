@@ -17,6 +17,13 @@ from tabpfn_client.config import Config
 from tabpfn_client.client import PredictionResult
 from tabpfn_client.service_wrapper import InferenceClient
 
+try:
+    from torch import Tensor
+
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 MAX_ROWS = 50_000
@@ -441,6 +448,14 @@ def _clean_text_features(X):
     """
     # Convert numpy array to pandas DataFrame if necessary
     # not necessary if numpy array of numbers
+    if TORCH_AVAILABLE and isinstance(X, Tensor):
+        if X.requires_grad:
+            X = X.detach()
+        if X.is_cuda:
+            X = X.cpu()
+
+        X = X.numpy()
+
     if isinstance(X, np.ndarray):
         if np.issubdtype(X.dtype, np.number):
             return X
@@ -464,7 +479,7 @@ def _clean_text_features(X):
                     .str.slice(0, 2500)
                 )
 
-    # Convert back to numpy if input was numpy
+    # Convert back to numpy if input was numpy (or tensor that was converted to numpy)
     if isinstance(X, np.ndarray):
         return X_.to_numpy()
     return X_
