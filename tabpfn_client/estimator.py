@@ -62,6 +62,7 @@ class TabPFNModelSelection:
 class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
         "v2.5_default",
+        "v2.5_real",
         "v2_default",
         "default",
         "gn2p4bpt",
@@ -240,6 +241,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
         "v2.5_default",
+        "v2.5_real",
         "v2_default",
         "default",
         "2noar4o2",
