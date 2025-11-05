@@ -38,6 +38,7 @@ V_2_5_IDENTIFIER = "v2.5"
 DEFAULT_V2_MODEL_PATH = "v2_default"
 DEFAULT_V2_5_MODEL_PATH = "v2.5_default"
 
+
 class TabPFNModelSelection:
     """Base class for TabPFN model selection and path handling."""
 
