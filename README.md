@@ -110,8 +110,7 @@ api_cost = max((num_train_rows + num_test_rows) * num_cols * n_estimators, 5000)
 
 Where `n_estimators` defaults to:
 
-- 4 for classification tasks
-- 8 for regression tasks
+- 8 for both classification and regression
 
 Per day the current prediction allowance is 10,000,000 credits. We will adjust this limit based on usage patterns. If you require further credits, please fill out [this form](https://forms.gle/2xbHnkxbpb7BtpE47).
 

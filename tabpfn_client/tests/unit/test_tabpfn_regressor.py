@@ -744,8 +744,30 @@ class TestTabPFNModelSelection(unittest.TestCase):
         config.reset()
 
     def test_list_available_models_returns_expected_models(self):
-        expected_models = ["default", "2noar4o2", "5wof9ojf", "09gpqh39", "wyl4o83o"]
+        expected_models = [
+            "v2.5_default",
+            "v2_default",
+            "default",
+            "2noar4o2",
+            "5wof9ojf",
+            "09gpqh39",
+            "wyl4o83o",
+        ]
         self.assertEqual(TabPFNRegressor.list_available_models(), expected_models)
+
+    def test_model_names_that_are_substrings_come_later(self):
+        # Mitigation to ensure that model "parsing" in the tabpfn-time-series
+        # package continues to work. Long-term we should fix that package as
+        # that "parsing" is quite brittle.
+        # https://github.com/PriorLabs/tabpfn-time-series/blob/71c22aed9d3f8ec280ffb753d0e87086be3cb7a4/tabpfn_time_series/worker/model_adapters/tabpfn_adapter.py#L18
+
+        model_names = TabPFNRegressor.list_available_models()
+
+        for i in range(len(model_names)):
+            possible_substring = model_names[i]
+            for j in range(i + 1, len(model_names)):
+                model_name = model_names[j]
+                self.assertNotIn(possible_substring, model_name)
 
     def test_validate_model_name_with_valid_model_passes(self):
         # Should not raise any exception
@@ -771,15 +793,18 @@ class TestTabPFNModelSelection(unittest.TestCase):
             expected_specific_path,
         )
 
+        # Test specific v2.5 model path
+        expected_specific_path = "tabpfn-v2.5-regressor-v2.5_default.ckpt"
+        self.assertEqual(
+            TabPFNRegressor._model_name_to_path("regression", "v2.5_default"),
+            expected_specific_path,
+        )
+
     def test_model_name_to_path_with_invalid_model_raises_error(self):
         with self.assertRaises(ValueError):
             TabPFNRegressor._model_name_to_path("regression", "invalid_model")
 
     def test_predict_uses_correct_model_path(self):
-        # First verify available models are as expected
-        expected_models = ["default", "2noar4o2", "5wof9ojf", "09gpqh39", "wyl4o83o"]
-        self.assertEqual(TabPFNRegressor._AVAILABLE_MODELS, expected_models)
-
         # Setup
         X = np.random.rand(10, 5)
         y = np.random.rand(10)

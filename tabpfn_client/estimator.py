@@ -17,11 +17,21 @@ from tabpfn_client.config import Config
 from tabpfn_client.client import PredictionResult
 from tabpfn_client.service_wrapper import InferenceClient
 
+try:
+    from torch import Tensor
+
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 MAX_ROWS = 50_000
 MAX_COLS = 400
 MAX_NUMBER_OF_CLASSES = 10
+
+# Special string used to identify v2.5 models in model paths.
+V_2_5_IDENTIFIER = "v2.5"
 
 
 class TabPFNModelSelection:
@@ -51,11 +61,15 @@ class TabPFNModelSelection:
         # Let the server handle the default model. This enables v2.5 as well.
         if model_name == "default":
             return None
+        if V_2_5_IDENTIFIER in model_name:
+            return f"tabpfn-{V_2_5_IDENTIFIER}-{model_name_task}-{model_name}.ckpt"
         return f"tabpfn-v2-{model_name_task}-{model_name}.ckpt"
 
 
 class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
+        "v2.5_default",
+        "v2_default",
         "default",
         "gn2p4bpt",
         "llderlii",
@@ -232,6 +246,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
 class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
+        "v2.5_default",
+        "v2_default",
         "default",
         "2noar4o2",
         "5wof9ojf",
@@ -447,6 +463,14 @@ def _clean_text_features(X):
     """
     # Convert numpy array to pandas DataFrame if necessary
     # not necessary if numpy array of numbers
+    if TORCH_AVAILABLE and isinstance(X, Tensor):
+        if X.requires_grad:
+            X = X.detach()
+        if X.is_cuda:
+            X = X.cpu()
+
+        X = X.numpy()
+
     if isinstance(X, np.ndarray):
         if np.issubdtype(X.dtype, np.number):
             return X
@@ -470,7 +494,7 @@ def _clean_text_features(X):
                     .str.slice(0, 2500)
                 )
 
-    # Convert back to numpy if input was numpy
+    # Convert back to numpy if input was numpy (or tensor that was converted to numpy)
     if isinstance(X, np.ndarray):
         return X_.to_numpy()
     return X_
