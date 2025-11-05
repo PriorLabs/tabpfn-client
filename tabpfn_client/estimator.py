@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import Optional, Literal, Dict, Union
 import logging
+from typing_extensions import Self
 import numpy as np
 import pandas as pd
 from tabpfn_client.config import init
@@ -15,6 +16,7 @@ from sklearn.utils.validation import check_is_fitted
 
 from tabpfn_client.config import Config
 from tabpfn_client.client import PredictionResult
+from tabpfn_client.constants import ModelVersion
 from tabpfn_client.service_wrapper import InferenceClient
 
 try:
@@ -32,6 +34,9 @@ MAX_NUMBER_OF_CLASSES = 10
 
 # Special string used to identify v2.5 models in model paths.
 V_2_5_IDENTIFIER = "v2.5"
+
+DEFAULT_V2_MODEL_PATH = "v2_default"
+DEFAULT_V2_5_MODEL_PATH = "v2.5_default"
 
 
 class TabPFNModelSelection:
@@ -65,10 +70,34 @@ class TabPFNModelSelection:
             return f"tabpfn-{V_2_5_IDENTIFIER}-{model_name_task}-{model_name}.ckpt"
         return f"tabpfn-v2-{model_name_task}-{model_name}.ckpt"
 
+    @classmethod
+    def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
+        """Construct an estimator that uses the given version of the model.
+
+        In addition to selecting the model, this also configures the estimator with
+        certain default settings associated with this model version.
+
+        Any kwargs will override the default settings.
+        """
+        options = {
+            "n_estimators": 8,
+            "softmax_temperature": 0.9,
+        }
+        if version == ModelVersion.V2:
+            options["model_path"] = DEFAULT_V2_MODEL_PATH
+        elif version == ModelVersion.V2_5:
+            options["model_path"] = DEFAULT_V2_5_MODEL_PATH
+        else:
+            raise ValueError(f"Unknown version: {version}")
+
+        options.update(overrides)
+
+        return cls(**options)
+
 
 class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
-        "v2.5_default",
+        DEFAULT_V2_5_MODEL_PATH,
         "v2.5_large-features-L",
         "v2.5_large-features-XL",
         "v2.5_large-samples",
@@ -76,7 +105,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         "v2.5_real-large-samples-and-features",
         "v2.5_real",
         "v2.5_variant",
-        "v2_default",
+        DEFAULT_V2_MODEL_PATH,
         "default",
         "gn2p4bpt",
         "llderlii",
@@ -100,7 +129,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
     ):
-        """Initialize TabPFNClassifier.
+        """Construct a TabPFN classifier.
+
+        This constructs a classifier using the latest model and settings. If you would
+        like to use a previous model version, use `create_default_for_version()`
+        instead. You can also use `model_path` to specify a particular model
 
         Parameters
         ----------
@@ -253,14 +286,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
 class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
-        "v2.5_default",
+        DEFAULT_V2_5_MODEL_PATH,
         "v2.5_low-skew",
         "v2.5_quantiles",
         "v2.5_real-variant",
         "v2.5_real",
         "v2.5_small-samples",
         "v2.5_variant",
-        "v2_default",
+        DEFAULT_V2_MODEL_PATH,
         "default",
         "2noar4o2",
         "5wof9ojf",
@@ -282,7 +315,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
     ):
-        """Initialize TabPFNRegressor.
+        """Construct a TabPFN regressor.
+
+        This constructs a regressor using the latest model and settings. If you would
+        like to use a previous model version, use `create_default_for_version()`
+        instead. You can also use `model_path` to specify a particular model.
 
         Parameters
         ----------
