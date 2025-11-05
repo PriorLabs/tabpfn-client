@@ -327,7 +327,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             tabpfn.fit(X, y)
 
     def test_data_size_check_on_train_with_oversized_data_raise_error(self):
-        X = np.random.randn(50_001, 401)
+        X = np.random.randn(50_001, 2001)
         y = np.random.randn(50_001)
 
         tabpfn = TabPFNRegressor()
@@ -746,6 +746,12 @@ class TestTabPFNModelSelection(unittest.TestCase):
     def test_list_available_models_returns_expected_models(self):
         expected_models = [
             "v2.5_default",
+            "v2.5_low-skew",
+            "v2.5_quantiles",
+            "v2.5_real-variant",
+            "v2.5_real",
+            "v2.5_small-samples",
+            "v2.5_variant",
             "v2_default",
             "default",
             "2noar4o2",
