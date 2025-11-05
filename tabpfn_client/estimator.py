@@ -97,8 +97,8 @@ class TabPFNModelSelection:
 
 class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
-        DEFAULT_V2_5_MODEL_PATH,
         "v2.5_default-2",
+        DEFAULT_V2_5_MODEL_PATH,
         "v2.5_large-features-L",
         "v2.5_large-features-XL",
         "v2.5_large-samples",
