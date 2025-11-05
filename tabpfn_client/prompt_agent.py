@@ -634,4 +634,3 @@ class PromptAgent:
                 console.print(
                     "  [blue]Try again, type 'resend' for a new code, or 'quit' to exit.[/blue]"
                 )
-
