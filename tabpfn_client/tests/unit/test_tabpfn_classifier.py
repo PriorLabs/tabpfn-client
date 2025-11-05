@@ -777,6 +777,13 @@ class TestTabPFNModelSelection(unittest.TestCase):
     def test_list_available_models_returns_expected_models(self):
         expected_models = [
             "v2.5_default",
+            "v2.5_large-features-L",
+            "v2.5_large-features-XL",
+            "v2.5_large-samples",
+            "v2.5_real-large-features",
+            "v2.5_real-large-samples-and-features",
+            "v2.5_real",
+            "v2.5_variant",
             "v2_default",
             "default",
             "gn2p4bpt",
