@@ -62,7 +62,13 @@ class TabPFNModelSelection:
 class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
         "v2.5_default",
+        "v2.5_large-features-L",
+        "v2.5_large-features-XL",
+        "v2.5_large-samples",
+        "v2.5_real-large-features",
+        "v2.5_real-large-samples-and-features",
         "v2.5_real",
+        "v2.5_variant",
         "v2_default",
         "default",
         "gn2p4bpt",
@@ -241,7 +247,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
         "v2.5_default",
+        "v2.5_low-skew",
+        "v2.5_quantiles",
+        "v2.5_real-variant",
         "v2.5_real",
+        "v2.5_small-samples",
+        "v2.5_variant",
         "v2_default",
         "default",
         "2noar4o2",
