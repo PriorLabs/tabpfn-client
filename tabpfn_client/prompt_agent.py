@@ -7,7 +7,6 @@ from rich.table import Table
 from password_strength import PasswordPolicy
 
 from tabpfn_client.service_wrapper import UserAuthenticationClient
-from tabpfn_client.state_manager import RegistrationState, check_internet_connection
 from tabpfn_client.ui import (
     console,
     success,
@@ -115,37 +114,6 @@ class PromptAgent:
 
     @classmethod
     def _prompt_and_set_token_impl(cls):
-        # Check internet connection
-        if not check_internet_connection():
-            warn(
-                "No internet connection detected. TabPFN client requires Internet access."
-            )
-            console.print("[blue]Please check your connection and try again.[/blue]")
-            return False
-
-        # Check for interrupted registration
-        state_mgr = RegistrationState()
-        saved_state = state_mgr.load()
-
-        if saved_state and saved_state.get("email"):
-            console.print(
-                f"\n[yellow]Found interrupted registration for: {saved_state['email']}[/yellow]"
-            )
-            resume = (
-                console.input("[bold blue]→[/bold blue] Resume? (y/n) [y]: ")
-                .strip()
-                .lower()
-                or "y"
-            )
-
-            if resume in ["y", "yes"]:
-                console.print("[blue]Resuming registration...[/blue]")
-                # Continue with saved email
-                resume_result = cls._resume_registration(saved_state)
-                return resume_result
-            else:
-                state_mgr.clear()
-
         # Account access section — compact UI
         console.print(cls.indent("\n"))
         table = Table(box=None, show_header=False, pad_edge=False, show_edge=False)
@@ -180,16 +148,14 @@ class PromptAgent:
         # Registration
         if choice == "1":
             validation_link = "tabpfn-2023"
-            state_mgr = RegistrationState()
 
             # Show time estimate
             console.print("\n[blue]Registration: 6 steps (about 2 minutes)[/blue]")
 
             # Step 1: Terms
             console.print("\n[bold blue]Step 1/6[/bold blue] - Terms & Conditions")
-            agreed_terms_and_cond = cls.prompt_terms_and_cond_simple()
+            agreed_terms_and_cond = cls.prompt_terms_and_cond()
             if not agreed_terms_and_cond:
-                state_mgr.clear()
                 raise RuntimeError(
                     "You must agree to the terms and conditions to use TabPFN"
                 )
@@ -202,9 +168,6 @@ class PromptAgent:
                 if not email:
                     warn("Email is required.")
                     continue
-
-                # Save state in case of interruption
-                state_mgr.save({"email": email, "step": "email_validation"})
 
                 with status("Validating email"):
                     is_valid, message = UserAuthenticationClient.validate_email(email)
@@ -253,7 +216,7 @@ class PromptAgent:
             # Step 4: Data Privacy
             console.print("\n[bold blue]Step 4/6[/bold blue] - Data Privacy")
             agreed_personally_identifiable_information = (
-                cls.prompt_personally_identifiable_information_simple()
+                cls.prompt_personally_identifiable_information()
             )
             if not agreed_personally_identifiable_information:
                 raise RuntimeError("You must agree to not upload personal data.")
@@ -280,8 +243,6 @@ class PromptAgent:
             console.print(
                 "  [blue]Almost done! Check your email for a verification code.[/blue]\n"
             )
-            # Clear saved state on success
-            state_mgr.clear()
             # verify token from email
             verified = cls._verify_user_email(access_token=access_token)
             if not verified:
@@ -378,27 +339,6 @@ class PromptAgent:
 
     @classmethod
     def prompt_terms_and_cond(cls) -> bool:
-        console.print("\n[bold]Terms & Conditions[/bold]")
-        console.print(
-            "Please review: [link=https://www.priorlabs.ai/terms]https://www.priorlabs.ai/terms[/link]"
-        )
-        console.print("By using TabPFN, you agree to our terms and conditions.")
-
-        while True:
-            choice = (
-                console.input("\n[bold blue]→[/bold blue] Do you agree? (y/n): ")
-                .strip()
-                .lower()
-            )
-            if choice in ["y", "yes"]:
-                return True
-            elif choice in ["n", "no"]:
-                return False
-            else:
-                warn("Please enter 'y' or 'n'.")
-
-    @classmethod
-    def prompt_terms_and_cond_simple(cls) -> bool:
         """Simplified terms prompt for registration flow."""
         console.print(
             "By using TabPFN, you agree to the terms and conditions at [link=https://www.priorlabs.ai/terms]https://www.priorlabs.ai/terms[/link]"
@@ -406,7 +346,7 @@ class PromptAgent:
 
         while True:
             choice = (
-                console.input("[bold blue]→[/bold blue] Agree to terms? (y/n): ")
+                console.input("[bold blue]→[/bold blue] I agree? (y/n): ")
                 .strip()
                 .lower()
             )
@@ -419,30 +359,12 @@ class PromptAgent:
 
     @classmethod
     def prompt_personally_identifiable_information(cls) -> bool:
-        console.print("\n[bold]Data Privacy[/bold]")
-        console.print("Please do not upload personal, sensitive, or confidential data.")
-
-        while True:
-            choice = (
-                console.input("[bold blue]→[/bold blue] Do you agree? (y/n): ")
-                .strip()
-                .lower()
-            )
-            if choice in ["y", "yes"]:
-                return True
-            elif choice in ["n", "no"]:
-                return False
-            else:
-                warn("Please enter 'y' or 'n'.")
-
-    @classmethod
-    def prompt_personally_identifiable_information_simple(cls) -> bool:
         """Simplified data privacy prompt for registration flow."""
-        console.print("Do not upload personal/sensitive data.")
+        console.print("I agree not to upload personal, confidential or sensitive data.")
 
         while True:
             choice = (
-                console.input("[bold blue]→[/bold blue] I understand (y/n): ")
+                console.input("[bold blue]→[/bold blue] I agree (y/n): ")
                 .strip()
                 .lower()
             )
@@ -713,83 +635,3 @@ class PromptAgent:
                     "  [blue]Try again, type 'resend' for a new code, or 'quit' to exit.[/blue]"
                 )
 
-    @classmethod
-    def _resume_registration(cls, saved_state: dict) -> bool:
-        """Resume an interrupted registration. Returns True if successful."""
-        email = saved_state.get("email")
-        state_mgr = RegistrationState()
-
-        console.print("\n[bold]Resuming Registration[/bold]")
-        console.print(f"Email: {email}")
-
-        validation_link = "tabpfn-2023"
-
-        # Skip terms if already agreed (we're resuming)
-        agreed_terms_and_cond = True
-
-        # Continue with password setup
-        with status("Retrieving password policy"):
-            password_req = UserAuthenticationClient.get_password_policy()
-        password_policy = cls.password_req_to_policy(password_req)
-
-        # Show requirements upfront
-        console.print("\n[bold]Password Requirements[/bold]")
-        console.print("\n  Requirements:")
-        for req in password_req:
-            console.print(f"    [bright_black]•[/bright_black] {req}")
-
-        password = None
-        while True:
-            password = getpass.getpass("\nPassword: ")
-
-            # Validate password requirements
-            failed_tests = password_policy.test(password)
-            if len(failed_tests) != 0:
-                console.print()
-                cls.display_requirement_status(password, password_req, password_policy)
-                console.print(
-                    "  [blue]Enter a password that meets all requirements.[/blue]"
-                )
-                continue
-
-            password_confirm = getpass.getpass("Confirm password: ")
-            if password == password_confirm:
-                break
-            else:
-                warn("Passwords do not match.")
-                console.print("[blue]Please re-enter your password.[/blue]")
-
-        agreed_personally_identifiable_information = (
-            cls.prompt_personally_identifiable_information()
-        )
-        if not agreed_personally_identifiable_information:
-            state_mgr.clear()
-            raise RuntimeError("You must agree to not upload personal data.")
-
-        additional_info = cls.prompt_add_user_information()
-        additional_info["agreed_terms_and_cond"] = agreed_terms_and_cond
-        additional_info["agreed_personally_identifiable_information"] = (
-            agreed_personally_identifiable_information
-        )
-
-        with status("Creating account"):
-            (
-                is_created,
-                message,
-                access_token,
-            ) = UserAuthenticationClient.set_token_by_registration(
-                email, password, password_confirm, validation_link, additional_info
-            )
-
-        if not is_created:
-            raise RuntimeError("User registration failed: " + str(message) + "\n")
-
-        console.print()
-        success("Account created successfully!")
-        console.print("Check your email for a verification code.\n")
-        state_mgr.clear()
-        verified = cls._verify_user_email(access_token=access_token)
-        if not verified:
-            # User quit verification
-            return False
-        return True

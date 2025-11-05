@@ -149,7 +149,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         self.assertFalse(config.Config.is_initialized)
 
     @patch(
-        "tabpfn_client.prompt_agent.PromptAgent.prompt_terms_and_cond_simple",
+        "tabpfn_client.prompt_agent.PromptAgent.prompt_terms_and_cond",
         return_value=False,
     )
     @patch("tabpfn_client.browser_auth.webbrowser.open", return_value=False)
