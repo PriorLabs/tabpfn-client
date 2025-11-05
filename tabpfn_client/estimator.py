@@ -30,6 +30,9 @@ MAX_ROWS = 50_000
 MAX_COLS = 400
 MAX_NUMBER_OF_CLASSES = 10
 
+# Special string used to identify v2.5 models in model paths.
+V_2_5_IDENTIFIER = "v2.5"
+
 
 class TabPFNModelSelection:
     """Base class for TabPFN model selection and path handling."""
@@ -58,11 +61,15 @@ class TabPFNModelSelection:
         # Let the server handle the default model. This enables v2.5 as well.
         if model_name == "default":
             return None
+        if V_2_5_IDENTIFIER in model_name:
+            return f"tabpfn-{V_2_5_IDENTIFIER}-{model_name_task}-{model_name}.ckpt"
         return f"tabpfn-v2-{model_name_task}-{model_name}.ckpt"
 
 
 class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
+        "v2.5_default",
+        "v2_default",
         "default",
         "gn2p4bpt",
         "llderlii",
@@ -239,6 +246,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
 class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
+        "v2.5_default",
+        "v2_default",
         "default",
         "2noar4o2",
         "5wof9ojf",
