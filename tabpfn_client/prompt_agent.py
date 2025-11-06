@@ -514,7 +514,7 @@ class PromptAgent:
         success("Found existing access token, reusing it for authentication.")
 
     @classmethod
-    def reverify_email(cls, access_token) -> bool | str:
+    def reverify_email(cls, access_token):
         """Prompt for email verification. Returns True if successful, 'restart' to show main menu, False to quit."""
         console.print("\n[bold]Email Verification Required[/bold]")
         console.print("Your account exists but email is not verified.")
