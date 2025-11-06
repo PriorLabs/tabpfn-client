@@ -102,6 +102,11 @@ class PromptAgent:
     def prompt_and_set_token(cls) -> bool:
         """Prompt for login/registration. Returns True if successful, False if interrupted."""
         try:
+            success, message = UserAuthenticationClient.try_browser_login()
+            if success:
+                console.print("[green]Login via browser successful![/green]")
+                return True
+
             result = cls._prompt_and_set_token_impl()
             # If _prompt_and_set_token_impl returns False (user quit), propagate it
             # If it returns True or None (success), return True
@@ -164,7 +169,7 @@ class PromptAgent:
             console.print("\n[bold blue]Step 2/6[/bold blue] - Account Details")
             email = ""
             while True:
-                email = input("Email: ").strip()
+                email = console.input("Email: ").strip()
                 if not email:
                     warn("Email is required.")
                     continue
@@ -253,7 +258,7 @@ class PromptAgent:
         # Login
         elif choice == "2":
             console.print("\n[bold]Login[/bold]")
-            email = input("Email: ")
+            email = console.input("Email: ")
 
             while True:
                 password = getpass.getpass("Password: ")
@@ -292,9 +297,9 @@ class PromptAgent:
                 # Login failed - show options
                 fail(f"Login failed: {message}")
                 console.print("\n[bold]What would you like to do?[/bold]")
-                console.print("[bold blue]\\[1][/bold blue] Try password again")
-                console.print("[bold blue]\\[2][/bold blue] Reset password via email")
-                console.print("[bold blue]\\[3][/bold blue] Use a different email")
+                console.print("[bold blue]\\[1][/bold blue] Try again with same email")
+                console.print("[bold blue]\\[2][/bold blue] Login with different email")
+                console.print("[bold blue]\\[3][/bold blue] Reset password via email")
                 console.print("[bold blue]\\[q][/bold blue] Quit")
 
                 retry_choice = (
@@ -309,7 +314,7 @@ class PromptAgent:
                 if retry_choice == "1":
                     console.print(f"[blue]Logging in as: {email}[/blue]")
                     continue
-                elif retry_choice == "2":
+                elif retry_choice == "3":
                     console.print("\n[bold]Password Reset[/bold]")
                     console.print("We'll send a reset link to your email.")
                     with status("Sending password reset email"):
@@ -323,10 +328,10 @@ class PromptAgent:
                             "  [blue]Please check your email and return here after resetting.[/blue]"
                         )
                     else:
-                        fail(f"Failed to send reset email: {reset_msg}")
+                        fail(f"Failed to send reset password: {reset_msg}")
                     return False
-                elif retry_choice == "3":
-                    email = input("\nNew email: ")
+                elif retry_choice == "2":
+                    email = console.input("\nEmail: ")
                     console.print(f"[blue]Switched to: {email}[/blue]")
                     continue
                 elif retry_choice == "q":
@@ -435,7 +440,7 @@ class PromptAgent:
             console.print(f"[blue]Example: {example}[/blue]")
 
         while True:
-            value = input("→ ").strip()
+            value = console.input("→ ").strip()
             if len(value) >= min_length:
                 return value
             console.print(
@@ -450,14 +455,14 @@ class PromptAgent:
         # Name fields - ask separately to ensure both are provided
         first_name = ""
         while True:
-            first_name = input("\nFirst name: ").strip()
+            first_name = console.input("\nFirst name: ").strip()
             if first_name:
                 break
             console.print("[blue]We'd love to know what to call you![/blue]")
 
         last_name = ""
         while True:
-            last_name = input("Last name: ").strip()
+            last_name = console.input("Last name: ").strip()
             if last_name:
                 break
             console.print("[blue]And your last name too![/blue]")
@@ -570,7 +575,7 @@ class PromptAgent:
         is selected, return choice in lowercase.
         """
         assert all(c.lower() == c for c in choices), "Choices need to be lower case."
-        choice = input(prompt)
+        choice = console.input(prompt)
 
         # retry until valid choice is made
         while True:
@@ -579,7 +584,7 @@ class PromptAgent:
                     "', '".join([f"'{choice}'" for choice in choices[:-1]])
                     + f" or '{choices[-1]}'"
                 )
-                choice = input(f"Invalid choice, please enter {choices_str}: ")
+                choice = console.input(f"Invalid choice, please enter {choices_str}: ")
             else:
                 break
 
@@ -594,7 +599,7 @@ class PromptAgent:
         )
 
         while True:
-            token = input("\nVerification code: ").strip()
+            token = console.input("\nVerification code: ").strip()
 
             if not token:
                 warn("Please enter a verification code.")
