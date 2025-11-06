@@ -21,6 +21,7 @@ from tabpfn_client.ui import (
 def maybe_graceful_exit() -> None:
     try:
         from IPython import get_ipython
+
         if get_ipython() is not None:
             return
     except ImportError:
