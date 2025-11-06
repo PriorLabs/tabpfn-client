@@ -8,20 +8,22 @@ from tabpfn_client.tabpfn_common_utils.utils import get_example_dataset
 TARGET_NAME = "target"
 
 
-def call_fit(train_path: str, target_name: str = TARGET_NAME, api_key: Optional[str] = None) -> str:
+def call_fit(
+    train_path: str, target_name: str = TARGET_NAME, api_key: Optional[str] = None
+) -> str:
     """
     Call the /v1/fit endpoint to train a model.
-    
+
     Args:
         train_path: Path to the training CSV file
         target_name: Name of the target column (default: "target")
         api_key: API key for authentication (if None, reads from PRIORLABS_API_KEY env var)
-    
+
     Returns:
         model_id: The model ID returned from the fit endpoint
     """
     headers = {"Authorization": f"Bearer {api_key}"}
-    
+
     payload = {
         "task": "classification",
         "schema": {
@@ -51,14 +53,14 @@ def call_fit(train_path: str, target_name: str = TARGET_NAME, api_key: Optional[
 def call_predict(test_path: str, model_id: str, api_key: Optional[str] = None) -> None:
     """
     Call the /v1/predict endpoint to get predictions.
-    
+
     Args:
         test_path: Path to the test CSV file
         model_id: The model ID from the fit call
         api_key: API key for authentication (if None, reads from PRIORLABS_API_KEY env var)
     """
     headers = {"Authorization": f"Bearer {api_key}"}
-    
+
     payload = {
         "task": "classification",
         "model_id": model_id,
@@ -98,7 +100,7 @@ def main() -> None:
     # Get the API key
     api_key = os.getenv("PRIORLABS_API_KEY")
 
-    #Test /v1/fit
+    # Test /v1/fit
     print("--- Testing /v1/fit ---")
     model_id = call_fit(train_path, api_key=api_key)
 
