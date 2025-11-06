@@ -171,7 +171,9 @@ class PromptAgent:
                     continue
 
                 with status("Validating email"):
-                    is_valid, message = UserAuthenticationClient.validate_email(email)
+                    is_valid, message = UserAuthenticationClient.validate_email(
+                        str(email)
+                    )
                 if is_valid:
                     break
                 warn(f"  {message}")
@@ -234,7 +236,11 @@ class PromptAgent:
                     message,
                     access_token,
                 ) = UserAuthenticationClient.set_token_by_registration(
-                    email, password, password_confirm, validation_link, additional_info
+                    str(email),
+                    str(password),
+                    str(password_confirm),
+                    validation_link,
+                    additional_info,
                 )
             if not is_created:
                 raise RuntimeError("User registration failed: " + str(message) + "\n")
@@ -254,17 +260,24 @@ class PromptAgent:
         # Login
         elif choice == "2":
             console.print("\n[bold]Login[/bold]")
-            email = console.input("Email: ")
+            email = console.input("Email: ").strip()
 
             while True:
                 password = getpass.getpass("Password: ")
+
+                # Ensure both are strings for URL encoding
+                if not password:
+                    warn("Password is required.")
+                    continue
 
                 with status("Authenticating"):
                     (
                         access_token,
                         message,
                         status_code,
-                    ) = UserAuthenticationClient.set_token_by_login(email, password)
+                    ) = UserAuthenticationClient.set_token_by_login(
+                        str(email), str(password)
+                    )
 
                 if status_code == 200 and access_token is not None:
                     success("Login successful!")
@@ -315,7 +328,9 @@ class PromptAgent:
                     console.print("We'll send a reset link to your email.")
                     with status("Sending password reset email"):
                         sent, reset_msg = (
-                            UserAuthenticationClient.send_reset_password_email(email)
+                            UserAuthenticationClient.send_reset_password_email(
+                                str(email)
+                            )
                         )
 
                     if sent:
@@ -327,7 +342,7 @@ class PromptAgent:
                         fail(f"Failed to send reset password: {reset_msg}")
                     return False
                 elif retry_choice == "2":
-                    email = console.input("\nEmail: ")
+                    email = console.input("\nEmail: ").strip()
                     console.print(f"[blue]Switched to: {email}[/blue]")
                     continue
                 elif retry_choice == "q":
