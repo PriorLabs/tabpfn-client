@@ -1,6 +1,5 @@
 import os
 import json
-import pandas as pd
 import requests
 from typing import Optional
 
