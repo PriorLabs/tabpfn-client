@@ -13,8 +13,8 @@ from sklearn.datasets import load_breast_cancer, load_diabetes
 from sklearn.model_selection import train_test_split
 
 # from tabpfn_client import UserDataClient
-from tabpfn_client.constants import ModelVersion
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
+from tabpfn_client.constants import ModelVersion
 
 logging.basicConfig(level=logging.INFO)
 

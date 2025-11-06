@@ -1,6 +1,7 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
 import getpass
+import sys
 import textwrap
 from rich.table import Table
 
@@ -117,7 +118,7 @@ class PromptAgent:
             return True
         except KeyboardInterrupt:
             console.print("\n\n[yellow]Interrupted. Goodbye![/yellow]")
-            return False
+            sys.exit(1)
 
     @classmethod
     def _prompt_and_set_token_impl(cls) -> bool:
@@ -145,7 +146,7 @@ class PromptAgent:
 
         if choice == "q":
             console.print("Goodbye!")
-            return False
+            sys.exit(1)
 
         # Registration
         if choice == "1":
@@ -347,7 +348,7 @@ class PromptAgent:
                     continue
                 elif retry_choice == "q":
                     console.print("Goodbye!")
-                    return False
+                    sys.exit(1)
                 else:
                     # Invalid choice, use default (retry)
                     console.print(f"[blue]Logging in as: {email}[/blue]")
@@ -551,7 +552,7 @@ class PromptAgent:
                 return "restart"  # Signal to show main menu
             elif choice in ["q", "quit"]:
                 console.print("Goodbye!")
-                return False  # Signal to quit without showing menu
+                sys.exit(1)
             else:
                 warn("Please enter 1, 2, or q.")
 

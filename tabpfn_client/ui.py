@@ -33,9 +33,6 @@ def _collect_suppressed_modules() -> List[object]:
     return suppressed
 
 
-traceback.install(show_locals=False, suppress=_collect_suppressed_modules())
-
-
 def _should_use_color() -> bool:
     """Determine whether color output should be used."""
 
