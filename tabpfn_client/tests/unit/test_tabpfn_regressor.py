@@ -50,6 +50,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
 
         # mock server connection
         mock_server.router.get(mock_server.endpoints.root.path).respond(200)
+        mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
         mock_server.router.post(mock_server.endpoints.fit.path).respond(
             200, json={"train_set_uid": "5"}
         )
@@ -157,7 +158,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         return_value=False,
     )
     @patch("tabpfn_client.browser_auth.webbrowser.open", return_value=False)
-    @patch("builtins.input", side_effect=["1"])
+    @patch("rich.console.Console.input", side_effect=["1"])
     @with_mock_server()
     def test_decline_terms_and_cond(
         self,
@@ -187,6 +188,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
 
         # mock server connection
         mock_server.router.get(mock_server.endpoints.root.path).respond(200)
+        mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
         fit_route = mock_server.router.post(mock_server.endpoints.fit.path)
         fit_route.respond(200, json={"train_set_uid": "5"})
 

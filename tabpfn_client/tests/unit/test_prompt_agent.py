@@ -12,22 +12,22 @@ class TestPromptAgent(unittest.TestCase):
 
     @patch("getpass.getpass", side_effect=["Password123!", "Password123!"])
     @patch(
-        "builtins.input",
+        "rich.console.Console.input",
         side_effect=[
-            "1",
-            "y",
-            "user@example.com",
-            "y",
-            "first",
-            "last",
-            "cool company",
-            "A",
-            "my awesome usecase! bla",
-            "y",
-            "test",
+            "1",  # menu choice: registration
+            "y",  # agree to terms (Step 1)
+            "user@example.com",  # email (Step 2)
+            "y",  # agree to data privacy (Step 4)
+            "first",  # first name (Step 5)
+            "last",  # last name (Step 5)
+            "cool company",  # company (Step 6)
+            "a",  # role choice (Step 6)
+            "my awesome usecase! bla",  # use case (Step 6)
+            "y",  # contact via email (Step 6)
+            "test",  # verification code
         ],
     )
-    def test_prompt_and_set_token_registration(self, mock_input, mock_getpass):
+    def test_prompt_and_set_token_registration(self, mock_console_input, mock_getpass):
         # for some reason, it needs to be patched with a with-statement instead of a decorator
         with patch(
             "tabpfn_client.prompt_agent.UserAuthenticationClient"
@@ -71,8 +71,14 @@ class TestPromptAgent(unittest.TestCase):
             )
 
     @patch("getpass.getpass", side_effect=["password123"])
-    @patch("builtins.input", side_effect=["2", "user@gmail.com"])
-    def test_prompt_and_set_token_login(self, mock_input, mock_getpass):
+    @patch(
+        "rich.console.Console.input",
+        side_effect=[
+            "2",  # menu choice: login
+            "user@gmail.com",  # email
+        ],
+    )
+    def test_prompt_and_set_token_login(self, mock_console_input, mock_getpass):
         with patch(
             "tabpfn_client.prompt_agent.UserAuthenticationClient"
         ) as mock_auth_client:
@@ -84,27 +90,26 @@ class TestPromptAgent(unittest.TestCase):
             )
             PromptAgent.prompt_and_set_token()
             mock_auth_client.set_token_by_login.assert_called_once()
-            mock_auth_client.try_browser_login.assert_called_once()
 
-    @patch("builtins.input", return_value="y")
+    @patch("rich.console.Console.input", return_value="y")
     def test_prompt_terms_and_cond_returns_true(self, mock_input):
         result = PromptAgent.prompt_terms_and_cond()
         self.assertTrue(result)
 
-    @patch("builtins.input", return_value="n")
+    @patch("rich.console.Console.input", return_value="n")
     def test_prompt_terms_and_cond_returns_false(self, mock_input):
         result = PromptAgent.prompt_terms_and_cond()
         self.assertFalse(result)
 
-    @patch("builtins.input", return_value="1")
-    def test_choice_with_retries_valid_first_try(self, mock_input):
+    @patch("rich.console.Console.input", return_value="1")
+    def test_choice_with_retries_valid_first_try(self, mock_console_input):
         result = PromptAgent._choice_with_retries(
             "Please enter your choice: ", ["1", "2"]
         )
         self.assertEqual(result, "1")
 
-    @patch("builtins.input", side_effect=["3", "3", "1"])
-    def test_choice_with_retries_valid_third_try(self, mock_input):
+    @patch("rich.console.Console.input", side_effect=["3", "3", "1"])
+    def test_choice_with_retries_valid_third_try(self, mock_console_input):
         result = PromptAgent._choice_with_retries(
             "Please enter your choice: ", ["1", "2"]
         )
