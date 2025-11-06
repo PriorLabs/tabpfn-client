@@ -46,7 +46,9 @@ class PromptAgent:
         return PasswordPolicy.from_names(**requirements)
 
     @staticmethod
-    def show_password_requirements(password: str, password_policy) -> list[str]:
+    def show_password_requirements(
+        password: str, password_policy: PasswordPolicy
+    ) -> list[str]:
         """Show which password requirements are met/unmet. Returns list of failed tests."""
         if not password:
             return []
@@ -56,7 +58,7 @@ class PromptAgent:
 
     @staticmethod
     def display_requirement_status(
-        password: str, password_req: list[str], password_policy
+        password: str, password_req: list[str], password_policy: PasswordPolicy
     ) -> None:
         """Display check marks for met/unmet requirements."""
         if not password:
@@ -118,7 +120,7 @@ class PromptAgent:
             return False
 
     @classmethod
-    def _prompt_and_set_token_impl(cls):
+    def _prompt_and_set_token_impl(cls) -> bool:
         # Account access section — compact UI
         console.print(cls.indent("\n"))
         table = Table(box=None, show_header=False, pad_edge=False, show_edge=False)
@@ -130,7 +132,7 @@ class PromptAgent:
         console.print(table)
 
         # Prompt for a valid choice using Rich input
-        valid_choices = {"1", "2", "q", "b"}
+        valid_choices = {"1", "2", "q"}
         while True:
             choice = (
                 console.input("\n[bold blue]→[/bold blue] Choose (1/2/q): ")
@@ -139,16 +141,11 @@ class PromptAgent:
             )
             if choice in valid_choices:
                 break
-            if choice == "b":
-                # Back navigation (currently at top level, so same as quit)
-                console.print("Goodbye!")
-                return False
             warn("Invalid choice. Please enter 1, 2, or q.")
 
         if choice == "q":
             console.print("Goodbye!")
             return False
-        email = ""
 
         # Registration
         if choice == "1":
@@ -167,7 +164,6 @@ class PromptAgent:
 
             # Step 2: Email
             console.print("\n[bold blue]Step 2/6[/bold blue] - Account Details")
-            email = ""
             while True:
                 email = console.input("Email: ").strip()
                 if not email:
@@ -518,7 +514,7 @@ class PromptAgent:
         success("Found existing access token, reusing it for authentication.")
 
     @classmethod
-    def reverify_email(cls, access_token):
+    def reverify_email(cls, access_token) -> bool | str:
         """Prompt for email verification. Returns True if successful, 'restart' to show main menu, False to quit."""
         console.print("\n[bold]Email Verification Required[/bold]")
         console.print("Your account exists but email is not verified.")
@@ -591,7 +587,7 @@ class PromptAgent:
         return choice.lower()
 
     @classmethod
-    def _verify_user_email(cls, access_token: str):
+    def _verify_user_email(cls, access_token: str) -> bool:
         console.print("\n[bold]Email Verification[/bold]")
         console.print("Enter the verification code sent to your email.")
         console.print(
