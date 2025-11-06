@@ -112,7 +112,7 @@ Where `n_estimators` defaults to:
 
 - 8 for both classification and regression
 
-Per day the current prediction allowance is 10,000,000 credits. We will adjust this limit based on usage patterns. If you require further credits, please fill out [this form](https://forms.gle/2xbHnkxbpb7BtpE47).
+Per day the current prediction allowance is 100,000,000 credits. We will adjust this limit based on usage patterns. If you require further credits, please fill out [this form](https://forms.gle/2xbHnkxbpb7BtpE47).
 
 ### Monitoring Usage
 
@@ -126,7 +126,7 @@ Usage limits reset daily at 00:00:00 UTC.
 
 ### Size Limitations
 
-1. Maximum total cells per request must be below 500,000:
+1. Maximum total cells per request must be below 20,000,000:
 
 ```python
 max_cells = (num_train_rows + num_test_rows) * num_cols
