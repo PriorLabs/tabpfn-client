@@ -21,13 +21,9 @@ from tabpfn_client.ui import (
 def maybe_graceful_exit() -> None:
     try:
         from IPython import get_ipython
-        print("test 1")
         if get_ipython() is not None:
-            print("test 2")
             return
-        print("test 3")
     except ImportError:
-        print("test 4")
         # We're in a script, just exit
         sys.exit(1)
 
