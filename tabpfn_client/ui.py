@@ -8,7 +8,6 @@ import sys
 from contextlib import contextmanager
 from typing import Iterator, List
 
-from rich import traceback
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.panel import Panel
