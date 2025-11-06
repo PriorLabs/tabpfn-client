@@ -1,6 +1,7 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
 import getpass
+import sys
 import textwrap
 from rich.table import Table
 
@@ -15,6 +16,17 @@ from tabpfn_client.ui import (
     status,
     print_logo,
 )
+
+
+def maybe_graceful_exit() -> None:
+    try:
+        from IPython import get_ipython
+
+        if get_ipython() is not None:
+            return
+    except ImportError:
+        # We're in a script, just exit
+        sys.exit(1)
 
 
 class PromptAgent:
@@ -117,6 +129,7 @@ class PromptAgent:
             return True
         except KeyboardInterrupt:
             console.print("\n\n[yellow]Interrupted. Goodbye![/yellow]")
+            maybe_graceful_exit()
             return False
 
     @classmethod
@@ -145,6 +158,7 @@ class PromptAgent:
 
         if choice == "q":
             console.print("Goodbye!")
+            maybe_graceful_exit()
             return False
 
         # Registration
@@ -347,6 +361,7 @@ class PromptAgent:
                     continue
                 elif retry_choice == "q":
                     console.print("Goodbye!")
+                    maybe_graceful_exit()
                     return False
                 else:
                     # Invalid choice, use default (retry)
@@ -551,7 +566,8 @@ class PromptAgent:
                 return "restart"  # Signal to show main menu
             elif choice in ["q", "quit"]:
                 console.print("Goodbye!")
-                return False  # Signal to quit without showing menu
+                maybe_graceful_exit()
+                return False
             else:
                 warn("Please enter 1, 2, or q.")
 

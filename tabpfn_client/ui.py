@@ -8,7 +8,6 @@ import sys
 from contextlib import contextmanager
 from typing import Iterator, List
 
-from rich import traceback
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.panel import Panel
@@ -31,9 +30,6 @@ def _collect_suppressed_modules() -> List[object]:
         else:
             suppressed.append(module)
     return suppressed
-
-
-traceback.install(show_locals=False, suppress=_collect_suppressed_modules())
 
 
 def _should_use_color() -> bool:
