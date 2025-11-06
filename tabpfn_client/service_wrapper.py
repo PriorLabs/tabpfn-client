@@ -147,7 +147,7 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
         # Allow disabling browser login via environment variables
         # - TABPFN_NO_BROWSER=1/true/yes/on
         # - TABPFN_CLIENT_NO_BROWSER=1/true/yes/on (backward-compatible alias)
-        def _truthy(val: str | None) -> bool:
+        def _truthy(val: str) -> bool:
             return bool(val) and val.strip().lower() in {"1", "true", "yes", "on"}
 
         if _truthy(os.environ.get("TABPFN_NO_BROWSER")) or _truthy(

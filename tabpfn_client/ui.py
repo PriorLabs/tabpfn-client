@@ -67,7 +67,7 @@ def setup_logging(verbosity: int = 0) -> None:
     )
 
 
-def header(title: str, subtitle: str | None = None) -> None:
+def header(title: str, subtitle: str = None) -> None:
     """Render a section header."""
 
     console.print(
@@ -128,14 +128,14 @@ _PRIOR_LABS_ASCII_SMALL = r"""
 """
 
 
-def print_logo(subtitle: str | None = None) -> None:
+def print_logo(subtitle = None) -> None:
     """Print the large Prior Labs ASCII logo with optional subtitle."""
     console.print(_PRIOR_LABS_ASCII, style="bold blue")
     if subtitle:
         console.print(f"[dim]{subtitle}[/dim]", end="\n\n")
 
 
-def print_logo_small(subtitle: str | None = None) -> None:
+def print_logo_small(subtitle = None) -> None:
     """Print a small Prior Labs ASCII banner with optional subtitle."""
     console.print(_PRIOR_LABS_ASCII_SMALL, style="bold blue")
     if subtitle:
