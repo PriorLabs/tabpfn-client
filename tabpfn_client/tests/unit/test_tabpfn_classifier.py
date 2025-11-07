@@ -765,115 +765,6 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             tabpfn.fit(X, y_str)
         self.assertIn("exceeds the maximal number of", str(cm.exception))
 
-
-class TestTabPFNModelSelection(unittest.TestCase):
-    def setUp(self):
-        # skip init
-        config.Config.is_initialized = True
-        config.Config.use_server = True
-
-    def tearDown(self):
-        # undo setUp
-        config.reset()
-
-    def test_list_available_models_returns_expected_models(self):
-        expected_models = [
-            "v2.5_default-2",
-            "v2.5_default",
-            "v2.5_large-features-L",
-            "v2.5_large-features-XL",
-            "v2.5_large-samples",
-            "v2.5_real-large-features",
-            "v2.5_real-large-samples-and-features",
-            "v2.5_real",
-            "v2.5_variant",
-            "v2_default",
-            "default",
-            "gn2p4bpt",
-            "llderlii",
-            "od3j1g5m",
-            "vutqq28w",
-            "znskzxi4",
-        ]
-        self.assertEqual(TabPFNClassifier.list_available_models(), expected_models)
-
-    def test_model_names_that_are_substrings_come_later(self):
-        # Mitigation to ensure that model "parsing" in the tabpfn-time-series
-        # package continues to work. Long-term we should fix that package as
-        # that "parsing" is quite brittle.
-        # https://github.com/PriorLabs/tabpfn-time-series/blob/71c22aed9d3f8ec280ffb753d0e87086be3cb7a4/tabpfn_time_series/worker/model_adapters/tabpfn_adapter.py#L18
-
-        model_names = TabPFNClassifier.list_available_models()
-
-        for i in range(len(model_names)):
-            possible_substring = model_names[i]
-            for j in range(i + 1, len(model_names)):
-                model_name = model_names[j]
-                self.assertNotIn(possible_substring, model_name)
-
-    def test_validate_model_name_with_valid_model_passes(self):
-        # Should not raise any exception
-        TabPFNClassifier._validate_model_name("default")
-        TabPFNClassifier._validate_model_name("gn2p4bpt")
-
-    def test_validate_model_name_with_invalid_model_raises_error(self):
-        with self.assertRaises(ValueError):
-            TabPFNClassifier._validate_model_name("invalid_model")
-
-    def test_model_name_to_path_returns_expected_path(self):
-        # Test default model path. Server decides.
-        expected_default_path = None
-        self.assertEqual(
-            TabPFNClassifier._model_name_to_path("classification", "default"),
-            expected_default_path,
-        )
-
-        # Test specific model path
-        expected_specific_path = "tabpfn-v2-classifier-gn2p4bpt.ckpt"
-        self.assertEqual(
-            TabPFNClassifier._model_name_to_path("classification", "gn2p4bpt"),
-            expected_specific_path,
-        )
-
-        # Test specific v2.5 model path
-        expected_specific_path = "tabpfn-v2.5-classifier-v2.5_default.ckpt"
-        self.assertEqual(
-            TabPFNClassifier._model_name_to_path("classification", "v2.5_default"),
-            expected_specific_path,
-        )
-
-    def test_model_name_to_path_with_invalid_model_raises_error(self):
-        with self.assertRaises(ValueError):
-            TabPFNClassifier._model_name_to_path("classification", "invalid_model")
-
-    def test_predict_proba_uses_correct_model_path(self):
-        # Setup
-        X = np.random.rand(10, 5)
-        y = np.random.randint(0, 2, 10)
-
-        tabpfn = TabPFNClassifier(model_path="gn2p4bpt")
-
-        # Mock the inference client
-        with patch.object(InferenceClient, "predict") as mock_predict:
-            mock_predict.return_value = PredictionResult(
-                y_pred={"probas": np.random.rand(10, 2)}, metadata={}
-            )
-
-            with patch.object(InferenceClient, "fit") as mock_fit:
-                mock_fit.return_value = "dummy_uid"
-
-                # Fit and predict
-                tabpfn.fit(X, y)
-                tabpfn.predict_proba(X)
-
-                # Verify the model path was correctly passed to predict
-                predict_kwargs = mock_predict.call_args[1]
-                expected_model_path = "tabpfn-v2-classifier-gn2p4bpt.ckpt"
-
-                self.assertEqual(
-                    predict_kwargs["config"]["model_path"], expected_model_path
-                )
-
     @patch.object(InferenceClient, "fit", return_value="dummy_uid")
     @patch.object(
         InferenceClient,
@@ -934,3 +825,65 @@ class TestTabPFNModelSelection(unittest.TestCase):
 
         # predict_proba should be called 5 times (once per fold)
         self.assertEqual(mock_predict.call_count, 5)
+
+    @patch.object(InferenceClient, "fit", return_value="dummy_uid")
+    def test__model_path_passed_to_fit__model_path_is_passed_to_config(self, mock_fit):
+        """Test that model_path is passed to the config during fit."""
+        init(use_server=True)
+
+        custom_path = "tabpfn-v2-classifier-znskzxi4.ckpt"
+        classifier = TabPFNClassifier(model_path=custom_path)
+
+        X = np.random.rand(50, 5)
+        y = np.random.randint(0, 2, 50)
+
+        classifier.fit(X, y)
+
+        # Check that the config passed to fit includes the model_path
+        actual_config = mock_fit.call_args[1]["config"]
+        self.assertEqual(actual_config["model_path"], custom_path)
+
+    def test__create_default_for_version_v2__model_path_is_set(self):
+        """Test create_default_for_version with ModelVersion.V2."""
+        from tabpfn_client.constants import ModelVersion
+
+        classifier = TabPFNClassifier.create_default_for_version(ModelVersion.V2)
+
+        # Check that model_path is set to the V2 default
+        self.assertEqual(
+            classifier.model_path, "tabpfn-v2-classifier-finetuned-zk73skhh.ckpt"
+        )
+
+    def test__create_default_for_version_v2_5__expect_model_path_is_none(self):
+        """Test create_default_for_version with ModelVersion.V2_5."""
+        from tabpfn_client.constants import ModelVersion
+
+        classifier = TabPFNClassifier.create_default_for_version(ModelVersion.V2_5)
+
+        # Check that model_path is None for V2.5 (auto selection)
+        self.assertIsNone(classifier.model_path)
+
+    def test__create_default_for_version__with_overrides__overrides_are_applied(self):
+        """Test create_default_for_version with parameter overrides."""
+        from tabpfn_client.constants import ModelVersion
+
+        classifier = TabPFNClassifier.create_default_for_version(
+            ModelVersion.V2,
+            n_estimators=3,
+            softmax_temperature=0.7,
+            balance_probabilities=True,
+        )
+
+        # Check that overrides are applied
+        self.assertEqual(classifier.n_estimators, 3)
+        self.assertEqual(classifier.softmax_temperature, 0.7)
+        self.assertEqual(classifier.balance_probabilities, True)
+        # Model path should still be the default for V2
+        self.assertEqual(
+            classifier.model_path, "tabpfn-v2-classifier-finetuned-zk73skhh.ckpt"
+        )
+
+    def test__create_default_for_version__invalid_version__raises_value_error(self):
+        """Test create_default_for_version with invalid version."""
+        with self.assertRaises(ValueError):
+            TabPFNClassifier.create_default_for_version("invalid_version")

@@ -734,111 +734,6 @@ class TestTabPFNRegressorInference(unittest.TestCase):
         # predict should be called 5 times (once per fold)
         self.assertEqual(mock_predict.call_count, 5)
 
-
-class TestTabPFNModelSelection(unittest.TestCase):
-    def setUp(self):
-        # skip init
-        config.Config.is_initialized = True
-        config.Config.use_server = True
-
-    def tearDown(self):
-        # undo setUp
-        config.reset()
-
-    def test_list_available_models_returns_expected_models(self):
-        expected_models = [
-            "v2.5_default",
-            "v2.5_low-skew",
-            "v2.5_quantiles",
-            "v2.5_real-variant",
-            "v2.5_real",
-            "v2.5_small-samples",
-            "v2.5_variant",
-            "v2_default",
-            "default",
-            "2noar4o2",
-            "5wof9ojf",
-            "09gpqh39",
-            "wyl4o83o",
-        ]
-        self.assertEqual(TabPFNRegressor.list_available_models(), expected_models)
-
-    def test_model_names_that_are_substrings_come_later(self):
-        # Mitigation to ensure that model "parsing" in the tabpfn-time-series
-        # package continues to work. Long-term we should fix that package as
-        # that "parsing" is quite brittle.
-        # https://github.com/PriorLabs/tabpfn-time-series/blob/71c22aed9d3f8ec280ffb753d0e87086be3cb7a4/tabpfn_time_series/worker/model_adapters/tabpfn_adapter.py#L18
-
-        model_names = TabPFNRegressor.list_available_models()
-
-        for i in range(len(model_names)):
-            possible_substring = model_names[i]
-            for j in range(i + 1, len(model_names)):
-                model_name = model_names[j]
-                self.assertNotIn(possible_substring, model_name)
-
-    def test_validate_model_name_with_valid_model_passes(self):
-        # Should not raise any exception
-        TabPFNRegressor._validate_model_name("default")
-        TabPFNRegressor._validate_model_name("2noar4o2")
-
-    def test_validate_model_name_with_invalid_model_raises_error(self):
-        with self.assertRaises(ValueError):
-            TabPFNRegressor._validate_model_name("invalid_model")
-
-    def test_model_name_to_path_returns_expected_path(self):
-        # Test default model path. Server decides.
-        expected_default_path = None
-        self.assertEqual(
-            TabPFNRegressor._model_name_to_path("regression", "default"),
-            expected_default_path,
-        )
-
-        # Test specific model path
-        expected_specific_path = "tabpfn-v2-regressor-2noar4o2.ckpt"
-        self.assertEqual(
-            TabPFNRegressor._model_name_to_path("regression", "2noar4o2"),
-            expected_specific_path,
-        )
-
-        # Test specific v2.5 model path
-        expected_specific_path = "tabpfn-v2.5-regressor-v2.5_default.ckpt"
-        self.assertEqual(
-            TabPFNRegressor._model_name_to_path("regression", "v2.5_default"),
-            expected_specific_path,
-        )
-
-    def test_model_name_to_path_with_invalid_model_raises_error(self):
-        with self.assertRaises(ValueError):
-            TabPFNRegressor._model_name_to_path("regression", "invalid_model")
-
-    def test_predict_uses_correct_model_path(self):
-        # Setup
-        X = np.random.rand(10, 5)
-        y = np.random.rand(10)
-
-        tabpfn = TabPFNRegressor(model_path="2noar4o2")
-
-        # Mock the inference client
-        with patch.object(InferenceClient, "predict") as mock_predict:
-            mock_predict.return_value = PredictionResult(
-                y_pred={"mean": np.random.rand(10)}, metadata={}
-            )
-            with patch.object(InferenceClient, "fit") as mock_fit:
-                mock_fit.return_value = "dummy_uid"
-
-                # Fit and predict
-                tabpfn.fit(X, y)
-                tabpfn.predict(X)
-
-                # Verify the model path was correctly passed to predict
-                predict_kwargs = mock_predict.call_args[1]
-                expected_model_path = "tabpfn-v2-regressor-2noar4o2.ckpt"
-
-                self.assertEqual(
-                    predict_kwargs["config"]["model_path"], expected_model_path
-                )
-
     @patch.object(InferenceClient, "fit", return_value="dummy_uid")
     @patch.object(
         InferenceClient,
@@ -864,3 +759,61 @@ class TestTabPFNModelSelection(unittest.TestCase):
         tabpfn_false.fit(X, y)
         y_pred_false = tabpfn_false.predict(test_X)
         self.assertIsNotNone(y_pred_false)
+
+    @patch.object(InferenceClient, "fit", return_value="dummy_uid")
+    def test__model_path_passed_to_fit__model_path_is_passed_to_config(self, mock_fit):
+        """Test that model_path is passed to the config during fit."""
+        init(use_server=True)
+
+        custom_path = "tabpfn-v2-regressor-tvvss6bp.ckpt"
+        regressor = TabPFNRegressor(model_path=custom_path)
+
+        X = np.random.rand(50, 5)
+        y = np.random.rand(50)
+
+        regressor.fit(X, y)
+
+        # Check that the config passed to fit includes the model_path
+        actual_config = mock_fit.call_args[1]["config"]
+        self.assertEqual(actual_config["model_path"], custom_path)
+
+    def test__create_default_for_version_v2__model_path_is_set(self):
+        """Test create_default_for_version with ModelVersion.V2."""
+        from tabpfn_client.constants import ModelVersion
+
+        regressor = TabPFNRegressor.create_default_for_version(ModelVersion.V2)
+
+        # Check that model_path is set to the V2 default
+        self.assertEqual(regressor.model_path, "tabpfn-v2-regressor.ckpt")
+
+    def test__create_default_for_version_v2_5__expect_model_path_is_none(self):
+        """Test create_default_for_version with ModelVersion.V2_5."""
+        from tabpfn_client.constants import ModelVersion
+
+        regressor = TabPFNRegressor.create_default_for_version(ModelVersion.V2_5)
+
+        # Check that model_path is None for V2.5 (auto selection)
+        self.assertIsNone(regressor.model_path)
+
+    def test__create_default_for_version__with_overrides__overrides_are_applied(self):
+        """Test create_default_for_version with parameter overrides."""
+        from tabpfn_client.constants import ModelVersion
+
+        regressor = TabPFNRegressor.create_default_for_version(
+            ModelVersion.V2,
+            n_estimators=3,
+            softmax_temperature=0.7,
+            average_before_softmax=True,
+        )
+
+        # Check that overrides are applied
+        self.assertEqual(regressor.n_estimators, 3)
+        self.assertEqual(regressor.softmax_temperature, 0.7)
+        self.assertEqual(regressor.average_before_softmax, True)
+        # Model path should still be the default for V2
+        self.assertEqual(regressor.model_path, "tabpfn-v2-regressor.ckpt")
+
+    def test__create_default_for_version__invalid_version__raises_value_error(self):
+        """Test create_default_for_version with invalid version."""
+        with self.assertRaises(ValueError):
+            TabPFNRegressor.create_default_for_version("invalid_version")
