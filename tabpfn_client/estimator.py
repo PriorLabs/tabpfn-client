@@ -43,14 +43,14 @@ def _default_model_path_v2(task: Literal["classification", "regression"]) -> str
 
 
 def _default_model_path_v2_5(task: Literal["classification", "regression"]) -> str:
-    # using auto makes this robust to changes in the tabpfn package
-    return "auto"
+    # using None makes this robust to changes in the tabpfn package
+    return None
 
 
 class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     def __init__(
         self,
-        model_path: str = "auto",
+        model_path: Optional[str] = None,
         n_estimators: int = 8,
         softmax_temperature: float = 0.9,
         balance_probabilities: bool = False,
@@ -71,8 +71,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Parameters
         ----------
-        model_path: str, default="auto"
-            The name of the model to use. If "auto", default to our latest
+        model_path: str or None, default=None
+            The name of the model to use. If None, default to our latest
             default model.
         n_estimators: int, default=8
             The number of estimators in the TabPFN ensemble. We aggregate the
@@ -243,7 +243,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 class TabPFNRegressor(RegressorMixin, BaseEstimator):
     def __init__(
         self,
-        model_path: str = "auto",
+        model_path: Optional[str] = None,
         n_estimators: int = 8,
         softmax_temperature: float = 0.9,
         average_before_softmax: bool = False,
@@ -263,8 +263,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         Parameters
         ----------
-        model_path: str, default="auto"
-            The name to the model to use. If "auto", default to our latest
+        model_path: str or None, default=None
+            The name to the model to use. If None, default to our latest
             default model.
         n_estimators: int, default=8
             The number of estimators in the TabPFN ensemble. We aggregate the
