@@ -825,3 +825,65 @@ class TestTabPFNClassifierInference(unittest.TestCase):
 
         # predict_proba should be called 5 times (once per fold)
         self.assertEqual(mock_predict.call_count, 5)
+
+    @patch.object(InferenceClient, "fit", return_value="dummy_uid")
+    def test__model_path_passed_to_fit__model_path_is_passed_to_config(self, mock_fit):
+        """Test that model_path is passed to the config during fit."""
+        init(use_server=True)
+
+        custom_path = "tabpfn-v2-classifier-znskzxi4.ckpt"
+        classifier = TabPFNClassifier(model_path=custom_path)
+
+        X = np.random.rand(50, 5)
+        y = np.random.randint(0, 2, 50)
+
+        classifier.fit(X, y)
+
+        # Check that the config passed to fit includes the model_path
+        actual_config = mock_fit.call_args[1]["config"]
+        self.assertEqual(actual_config["model_path"], custom_path)
+
+    def test__create_default_for_version_v2__model_path_is_set(self):
+        """Test create_default_for_version with ModelVersion.V2."""
+        from tabpfn_client.constants import ModelVersion
+
+        classifier = TabPFNClassifier.create_default_for_version(ModelVersion.V2)
+
+        # Check that model_path is set to the V2 default
+        self.assertEqual(
+            classifier.model_path, "tabpfn-v2-classifier-finetuned-zk73skhh.ckpt"
+        )
+
+    def test__create_default_for_version_v2_5__expect_model_path_is_none(self):
+        """Test create_default_for_version with ModelVersion.V2_5."""
+        from tabpfn_client.constants import ModelVersion
+
+        classifier = TabPFNClassifier.create_default_for_version(ModelVersion.V2_5)
+
+        # Check that model_path is None for V2.5 (auto selection)
+        self.assertIsNone(classifier.model_path)
+
+    def test__create_default_for_version__with_overrides__overrides_are_applied(self):
+        """Test create_default_for_version with parameter overrides."""
+        from tabpfn_client.constants import ModelVersion
+
+        classifier = TabPFNClassifier.create_default_for_version(
+            ModelVersion.V2,
+            n_estimators=3,
+            softmax_temperature=0.7,
+            balance_probabilities=True,
+        )
+
+        # Check that overrides are applied
+        self.assertEqual(classifier.n_estimators, 3)
+        self.assertEqual(classifier.softmax_temperature, 0.7)
+        self.assertEqual(classifier.balance_probabilities, True)
+        # Model path should still be the default for V2
+        self.assertEqual(
+            classifier.model_path, "tabpfn-v2-classifier-finetuned-zk73skhh.ckpt"
+        )
+
+    def test__create_default_for_version__invalid_version__raises_value_error(self):
+        """Test create_default_for_version with invalid version."""
+        with self.assertRaises(ValueError):
+            TabPFNClassifier.create_default_for_version("invalid_version")

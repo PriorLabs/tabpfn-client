@@ -759,3 +759,61 @@ class TestTabPFNRegressorInference(unittest.TestCase):
         tabpfn_false.fit(X, y)
         y_pred_false = tabpfn_false.predict(test_X)
         self.assertIsNotNone(y_pred_false)
+
+    @patch.object(InferenceClient, "fit", return_value="dummy_uid")
+    def test__model_path_passed_to_fit__model_path_is_passed_to_config(self, mock_fit):
+        """Test that model_path is passed to the config during fit."""
+        init(use_server=True)
+
+        custom_path = "tabpfn-v2-regressor-tvvss6bp.ckpt"
+        regressor = TabPFNRegressor(model_path=custom_path)
+
+        X = np.random.rand(50, 5)
+        y = np.random.rand(50)
+
+        regressor.fit(X, y)
+
+        # Check that the config passed to fit includes the model_path
+        actual_config = mock_fit.call_args[1]["config"]
+        self.assertEqual(actual_config["model_path"], custom_path)
+
+    def test__create_default_for_version_v2__model_path_is_set(self):
+        """Test create_default_for_version with ModelVersion.V2."""
+        from tabpfn_client.constants import ModelVersion
+
+        regressor = TabPFNRegressor.create_default_for_version(ModelVersion.V2)
+
+        # Check that model_path is set to the V2 default
+        self.assertEqual(regressor.model_path, "tabpfn-v2-regressor.ckpt")
+
+    def test__create_default_for_version_v2_5__expect_model_path_is_none(self):
+        """Test create_default_for_version with ModelVersion.V2_5."""
+        from tabpfn_client.constants import ModelVersion
+
+        regressor = TabPFNRegressor.create_default_for_version(ModelVersion.V2_5)
+
+        # Check that model_path is None for V2.5 (auto selection)
+        self.assertIsNone(regressor.model_path)
+
+    def test__create_default_for_version__with_overrides__overrides_are_applied(self):
+        """Test create_default_for_version with parameter overrides."""
+        from tabpfn_client.constants import ModelVersion
+
+        regressor = TabPFNRegressor.create_default_for_version(
+            ModelVersion.V2,
+            n_estimators=3,
+            softmax_temperature=0.7,
+            average_before_softmax=True,
+        )
+
+        # Check that overrides are applied
+        self.assertEqual(regressor.n_estimators, 3)
+        self.assertEqual(regressor.softmax_temperature, 0.7)
+        self.assertEqual(regressor.average_before_softmax, True)
+        # Model path should still be the default for V2
+        self.assertEqual(regressor.model_path, "tabpfn-v2-regressor.ckpt")
+
+    def test__create_default_for_version__invalid_version__raises_value_error(self):
+        """Test create_default_for_version with invalid version."""
+        with self.assertRaises(ValueError):
+            TabPFNRegressor.create_default_for_version("invalid_version")
