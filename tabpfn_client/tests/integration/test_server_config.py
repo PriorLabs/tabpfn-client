@@ -13,7 +13,7 @@ class TestServerConfig(unittest.TestCase):
             self.config = yaml.safe_load(f)
 
     def test_host_configuration(self):
-        expected_host = "tabpfn-server-wjedmz7r5a-ez.a.run.app"
+        expected_host = "api.priorlabs.ai"
         self.assertEqual(
             self.config["host"], expected_host, f"Host should be {expected_host}"
         )

@@ -1,5 +1,8 @@
 import unittest
 from unittest.mock import patch
+import sys
+import types
+import builtins
 
 import shutil
 import numpy as np
@@ -47,6 +50,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
 
         # mock server connection
         mock_server.router.get(mock_server.endpoints.root.path).respond(200)
+        mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
         mock_server.router.post(mock_server.endpoints.fit.path).respond(
             200, json={"train_set_uid": "5"}
         )
@@ -154,7 +158,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         return_value=False,
     )
     @patch("tabpfn_client.browser_auth.webbrowser.open", return_value=False)
-    @patch("builtins.input", side_effect=["1"])
+    @patch("rich.console.Console.input", side_effect=["1"])
     @with_mock_server()
     def test_decline_terms_and_cond(
         self,
@@ -184,6 +188,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
 
         # mock server connection
         mock_server.router.get(mock_server.endpoints.root.path).respond(200)
+        mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
         fit_route = mock_server.router.post(mock_server.endpoints.fit.path)
         fit_route.respond(200, json={"train_set_uid": "5"})
 
@@ -324,7 +329,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             tabpfn.fit(X, y)
 
     def test_data_size_check_on_train_with_oversized_data_raise_error(self):
-        X = np.random.randn(50_001, 401)
+        X = np.random.randn(50_001, 2001)
         y = np.random.randn(50_001)
 
         tabpfn = TabPFNRegressor()
@@ -446,6 +451,79 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             self.assertEqual(
                 predict_params, {"output_type": "quantiles", "quantiles": quantiles}
             )
+
+    def test_predict_full_adds_criterion_with_optional_dependencies(self):
+        regressor = TabPFNRegressor()
+        regressor.fitted_ = True
+        regressor.last_train_set_uid = "dummy_uid"
+        regressor.last_train_X = np.random.randn(5, 2)
+        regressor.last_train_y = np.random.randn(5)
+
+        test_X = np.random.randn(3, 2)
+        dummy_output = {"borders": [0.0, 1.0], "mean": np.random.randn(3)}
+
+        class DummyFullSupportBarDistribution:
+            def __init__(self, borders):
+                self.borders = borders
+
+        module_tabpfn = types.ModuleType("tabpfn")
+        module_regressor = types.ModuleType("tabpfn.regressor")
+        module_regressor.FullSupportBarDistribution = DummyFullSupportBarDistribution
+        module_tabpfn.regressor = module_regressor
+
+        module_torch = types.ModuleType("torch")
+        module_torch.tensor = lambda borders: borders
+
+        with patch.dict(
+            sys.modules,
+            {
+                "tabpfn": module_tabpfn,
+                "tabpfn.regressor": module_regressor,
+                "torch": module_torch,
+            },
+        ):
+            with patch.object(InferenceClient, "predict") as mock_predict:
+                mock_predict.return_value = PredictionResult(
+                    y_pred=dummy_output.copy(), metadata={}
+                )
+                output = regressor.predict(test_X, output_type="full")
+
+        self.assertIn("criterion", output)
+        self.assertIsInstance(output["criterion"], DummyFullSupportBarDistribution)
+        self.assertEqual(output["criterion"].borders, dummy_output["borders"])
+
+    def test_predict_full_missing_optional_dependencies_logs_warning(self):
+        regressor = TabPFNRegressor()
+        regressor.fitted_ = True
+        regressor.last_train_set_uid = "dummy_uid"
+        regressor.last_train_X = np.random.randn(5, 2)
+        regressor.last_train_y = np.random.randn(5)
+
+        test_X = np.random.randn(3, 2)
+        dummy_output = {"borders": [0.0, 1.0], "mean": np.random.randn(3)}
+
+        with patch.object(InferenceClient, "predict") as mock_predict:
+            mock_predict.return_value = PredictionResult(
+                y_pred=dummy_output.copy(), metadata={}
+            )
+
+            original_import = builtins.__import__
+
+            def import_side_effect(name, *args, **kwargs):
+                if name in {"tabpfn", "tabpfn.regressor", "torch"}:
+                    raise ImportError(f"No module named {name}")
+                return original_import(name, *args, **kwargs)
+
+            with patch("builtins.__import__", side_effect=import_side_effect):
+                with self.assertLogs(
+                    "tabpfn_client.estimator", level="WARNING"
+                ) as captured_logs:
+                    output = regressor.predict(test_X, output_type="full")
+
+        self.assertNotIn("criterion", output)
+        self.assertTrue(
+            any("Optional dependencies" in message for message in captured_logs.output)
+        )
 
     def test_predict_with_long_and_comma_text(self):
         """Test predictions with long text (>2500 chars) and text containing commas."""
@@ -668,8 +746,36 @@ class TestTabPFNModelSelection(unittest.TestCase):
         config.reset()
 
     def test_list_available_models_returns_expected_models(self):
-        expected_models = ["default", "2noar4o2", "5wof9ojf", "09gpqh39", "wyl4o83o"]
+        expected_models = [
+            "v2.5_default",
+            "v2.5_low-skew",
+            "v2.5_quantiles",
+            "v2.5_real-variant",
+            "v2.5_real",
+            "v2.5_small-samples",
+            "v2.5_variant",
+            "v2_default",
+            "default",
+            "2noar4o2",
+            "5wof9ojf",
+            "09gpqh39",
+            "wyl4o83o",
+        ]
         self.assertEqual(TabPFNRegressor.list_available_models(), expected_models)
+
+    def test_model_names_that_are_substrings_come_later(self):
+        # Mitigation to ensure that model "parsing" in the tabpfn-time-series
+        # package continues to work. Long-term we should fix that package as
+        # that "parsing" is quite brittle.
+        # https://github.com/PriorLabs/tabpfn-time-series/blob/71c22aed9d3f8ec280ffb753d0e87086be3cb7a4/tabpfn_time_series/worker/model_adapters/tabpfn_adapter.py#L18
+
+        model_names = TabPFNRegressor.list_available_models()
+
+        for i in range(len(model_names)):
+            possible_substring = model_names[i]
+            for j in range(i + 1, len(model_names)):
+                model_name = model_names[j]
+                self.assertNotIn(possible_substring, model_name)
 
     def test_validate_model_name_with_valid_model_passes(self):
         # Should not raise any exception
@@ -695,15 +801,18 @@ class TestTabPFNModelSelection(unittest.TestCase):
             expected_specific_path,
         )
 
+        # Test specific v2.5 model path
+        expected_specific_path = "tabpfn-v2.5-regressor-v2.5_default.ckpt"
+        self.assertEqual(
+            TabPFNRegressor._model_name_to_path("regression", "v2.5_default"),
+            expected_specific_path,
+        )
+
     def test_model_name_to_path_with_invalid_model_raises_error(self):
         with self.assertRaises(ValueError):
             TabPFNRegressor._model_name_to_path("regression", "invalid_model")
 
     def test_predict_uses_correct_model_path(self):
-        # First verify available models are as expected
-        expected_models = ["default", "2noar4o2", "5wof9ojf", "09gpqh39", "wyl4o83o"]
-        self.assertEqual(TabPFNRegressor._AVAILABLE_MODELS, expected_models)
-
         # Setup
         X = np.random.rand(10, 5)
         y = np.random.rand(10)

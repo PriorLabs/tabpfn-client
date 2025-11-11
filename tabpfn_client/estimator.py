@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import Optional, Literal, Dict, Union
 import logging
+from typing_extensions import Self
 import numpy as np
 import pandas as pd
 from tabpfn_client.config import init
@@ -15,13 +16,27 @@ from sklearn.utils.validation import check_is_fitted
 
 from tabpfn_client.config import Config
 from tabpfn_client.client import PredictionResult
+from tabpfn_client.constants import ModelVersion
 from tabpfn_client.service_wrapper import InferenceClient
+
+try:
+    from torch import Tensor
+
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
 MAX_ROWS = 50_000
-MAX_COLS = 400
+MAX_COLS = 2000
 MAX_NUMBER_OF_CLASSES = 10
+
+# Special string used to identify v2.5 models in model paths.
+V_2_5_IDENTIFIER = "v2.5"
+
+DEFAULT_V2_MODEL_PATH = "v2_default"
+DEFAULT_V2_5_MODEL_PATH = "v2.5_default"
 
 
 class TabPFNModelSelection:
@@ -51,11 +66,47 @@ class TabPFNModelSelection:
         # Let the server handle the default model. This enables v2.5 as well.
         if model_name == "default":
             return None
+        if V_2_5_IDENTIFIER in model_name:
+            return f"tabpfn-{V_2_5_IDENTIFIER}-{model_name_task}-{model_name}.ckpt"
         return f"tabpfn-v2-{model_name_task}-{model_name}.ckpt"
+
+    @classmethod
+    def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
+        """Construct an estimator that uses the given version of the model.
+
+        In addition to selecting the model, this also configures the estimator with
+        certain default settings associated with this model version.
+
+        Any kwargs will override the default settings.
+        """
+        options = {
+            "n_estimators": 8,
+            "softmax_temperature": 0.9,
+        }
+        if version == ModelVersion.V2:
+            options["model_path"] = DEFAULT_V2_MODEL_PATH
+        elif version == ModelVersion.V2_5:
+            options["model_path"] = DEFAULT_V2_5_MODEL_PATH
+        else:
+            raise ValueError(f"Unknown version: {version}")
+
+        options.update(overrides)
+
+        return cls(**options)
 
 
 class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
+        "v2.5_default-2",
+        DEFAULT_V2_5_MODEL_PATH,
+        "v2.5_large-features-L",
+        "v2.5_large-features-XL",
+        "v2.5_large-samples",
+        "v2.5_real-large-features",
+        "v2.5_real-large-samples-and-features",
+        "v2.5_real",
+        "v2.5_variant",
+        DEFAULT_V2_MODEL_PATH,
         "default",
         "gn2p4bpt",
         "llderlii",
@@ -80,7 +131,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         paper_version: bool = False,
         tabpfn_systems: Optional[list[str]] = ["preprocessing", "text"],
     ):
-        """Initialize TabPFNClassifier.
+        """Construct a TabPFN classifier.
+
+        This constructs a classifier using the latest model and settings. If you would
+        like to use a previous model version, use `create_default_for_version()`
+        instead. You can also use `model_path` to specify a particular model
 
         Parameters
         ----------
@@ -239,6 +294,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
 class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
+        DEFAULT_V2_5_MODEL_PATH,
+        "v2.5_low-skew",
+        "v2.5_quantiles",
+        "v2.5_real-variant",
+        "v2.5_real",
+        "v2.5_small-samples",
+        "v2.5_variant",
+        DEFAULT_V2_MODEL_PATH,
         "default",
         "2noar4o2",
         "5wof9ojf",
@@ -261,7 +324,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         paper_version: bool = False,
         tabpfn_systems: Optional[list[str]] = ["preprocessing", "text"],
     ):
-        """Initialize TabPFNRegressor.
+        """Construct a TabPFN regressor.
+
+        This constructs a regressor using the latest model and settings. If you would
+        like to use a previous model version, use `create_default_for_version()`
+        instead. You can also use `model_path` to specify a particular model.
 
         Parameters
         ----------
@@ -405,7 +472,22 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         # Unpack and store metadata
         self.last_meta = result.metadata
 
-        return result.y_pred
+        output = result.y_pred
+        if output_type == "full":
+            try:
+                from tabpfn.regressor import FullSupportBarDistribution
+                import torch
+
+                output["criterion"] = FullSupportBarDistribution(
+                    borders=torch.tensor(output["borders"])
+                )
+            except ImportError:
+                logger.warning(
+                    "Optional dependencies 'tabpfn' and 'torch' are required to "
+                    "construct the criterion when output_type='full'. Skipping criterion."
+                )
+
+        return output
 
     def _validate_targets(self, y) -> np.ndarray:
         y_ = column_or_1d(y, warn=True)
@@ -453,6 +535,14 @@ def _clean_text_features(X):
     """
     # Convert numpy array to pandas DataFrame if necessary
     # not necessary if numpy array of numbers
+    if TORCH_AVAILABLE and isinstance(X, Tensor):
+        if X.requires_grad:
+            X = X.detach()
+        if X.is_cuda:
+            X = X.cpu()
+
+        X = X.numpy()
+
     if isinstance(X, np.ndarray):
         if np.issubdtype(X.dtype, np.number):
             return X
@@ -476,7 +566,7 @@ def _clean_text_features(X):
                     .str.slice(0, 2500)
                 )
 
-    # Convert back to numpy if input was numpy
+    # Convert back to numpy if input was numpy (or tensor that was converted to numpy)
     if isinstance(X, np.ndarray):
         return X_.to_numpy()
     return X_
