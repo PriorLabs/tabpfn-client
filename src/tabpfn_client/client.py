@@ -509,7 +509,6 @@ class ServiceClient(Singleton):
         if not train_set_uid:
             raise RuntimeError("Error during fit. No valid model received.")
 
-        train_set_uid = train_set_uid
         cls.dataset_uid_cache_manager.add_dataset_uid(dataset_hash, train_set_uid)
         return train_set_uid
 
