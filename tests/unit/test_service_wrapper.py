@@ -4,7 +4,7 @@ from unittest.mock import patch
 from io import BytesIO
 from pathlib import Path
 
-from tabpfn_client.tests.mock_tabpfn_server import with_mock_server
+from tests.mock_tabpfn_server import with_mock_server
 from tabpfn_client.service_wrapper import UserAuthenticationClient, UserDataClient
 from tabpfn_client.client import ServiceClient
 

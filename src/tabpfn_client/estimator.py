@@ -3,11 +3,15 @@
 
 from __future__ import annotations
 
-from typing import Optional, Literal, Dict, Union
+from typing import Callable, Optional, Literal, Dict, Union
 import logging
 from typing_extensions import Self
 import numpy as np
 import pandas as pd
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+from tabpfn_client.client import ModelType
 from tabpfn_client.config import init
 from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.utils import column_or_1d
@@ -94,6 +98,27 @@ class TabPFNModelSelection:
 
         return cls(**options)
 
+    def _get_estimator_params_with_model_path(
+        self, task: Literal["classification", "regression"]
+    ) -> Dict:
+        """Get estimator parameters with the model_path resolved to full path.
+        
+        Parameters
+        ----------
+        task : {"classification", "regression"}
+            The task type to determine the correct model path.
+            
+        Returns
+        -------
+        Dict
+            Dictionary of estimator parameters with model_path updated to full path.
+        """
+        estimator_param = self.get_params()
+        estimator_param["model_path"] = self._model_name_to_path(
+            task, self.model_path
+        )
+        return estimator_param
+
 
 class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
@@ -129,6 +154,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         ] = None,
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
+        thinking: bool = False,
+        thinking_params: Optional[dict] = None,
     ):
         """Construct a TabPFN classifier.
 
@@ -178,6 +205,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
+        thinking: bool, default=False,
+            Whether to use thinking.
+        thinking_params: dict or None, default= None
+            Additional parameters for thinking. Meant for internal use.
         """
         self.model_path = model_path
         self.n_estimators = n_estimators
@@ -192,9 +223,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.last_train_set_uid = None
         self.last_train_X = None
         self.last_train_y = None
+        self.thinking = thinking
+        self.thinking_params = thinking_params
         self.last_meta = {}
 
-    def fit(self, X, y):
+    def fit(self, X, y, description: str = ""):
         # assert init() is called
         init()
 
@@ -202,13 +235,19 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         X = _clean_text_features(X)
         self._validate_targets_and_classes(y)
         _check_paper_version(self.paper_version, X)
+        _check_description(self.thinking, description)
 
-        estimator_param = self.get_params()
-        estimator_param["model_path"] = TabPFNClassifier._model_name_to_path(
-            "classification", self.model_path
-        )
+        estimator_param = self._get_estimator_params_with_model_path("classification")
         if Config.use_server:
-            self.last_train_set_uid = InferenceClient.fit(X, y, config=estimator_param)
+            model_type = ModelType.TABPFN_R if self.thinking else ModelType.TABPFN
+            self.last_train_set_uid = InferenceClient.fit(
+                X,
+                y,
+                tabpfn_config=estimator_param,
+                model_type=model_type,
+                task="classification",
+                description=description,
+            )
             self.last_train_X = X
             self.last_train_y = y
             self.fitted_ = True
@@ -240,27 +279,27 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         """
         return self._predict(X, output_type="probas")
 
-    def _predict(self, X, output_type):
+    def _predict(self, X, output_type) -> dict[str, np.ndarray]:
         check_is_fitted(self)
         validate_data_size(X)
         _check_paper_version(self.paper_version, X)
         X = _clean_text_features(X)
 
-        estimator_param = self.get_params()
-        estimator_param["model_path"] = TabPFNClassifier._model_name_to_path(
-            "classification", self.model_path
-        )
+        estimator_param = self._get_estimator_params_with_model_path("classification")
+        model_type = ModelType.TABPFN_R if self.thinking else ModelType.TABPFN
 
-        result: PredictionResult = InferenceClient.predict(
-            X,
-            task="classification",
-            train_set_uid=self.last_train_set_uid,
-            config=estimator_param,
-            predict_params={"output_type": output_type},
-            X_train=self.last_train_X,
-            y_train=self.last_train_y,
-        )
-
+        def predict_task() -> PredictionResult:
+            return InferenceClient.predict(
+                X,
+                model_type=model_type,
+                task="classification",
+                train_set_uid=self.last_train_set_uid,
+                tabpfn_config=estimator_param,
+                predict_params={"output_type": output_type},
+                X_train=self.last_train_X,
+                y_train=self.last_train_y,
+            )
+        result = run_prediction(self.thinking, predict_task)
         # Unpack and store metadata
         self.last_meta = result.metadata
 
@@ -315,6 +354,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         ] = None,
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
+        thinking: bool = False,
+        thinking_params: Optional[dict] = None,
     ):
         """Construct a TabPFN regressor.
 
@@ -358,6 +399,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
+        thinking: bool, default=False,
+            Whether to use thinking.
+        thinking_params: dict or None, default= None
+            Additional parameters for thinking. Meant for internal use.
         """
         self.model_path = model_path
         self.n_estimators = n_estimators
@@ -368,12 +413,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.random_state = random_state
         self.inference_config = inference_config
         self.paper_version = paper_version
+        self.thinking = thinking
+        self.thinking_params = thinking_params
         self.last_train_set_uid = None
         self.last_train_X = None
         self.last_train_y = None
         self.last_meta = {}
 
-    def fit(self, X, y):
+    def fit(self, X, y, description: str = ""):
         # assert init() is called
         init()
 
@@ -381,13 +428,19 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self._validate_targets(y)
         X = _clean_text_features(X)
         _check_paper_version(self.paper_version, X)
+        _check_description(self.thinking, description)
 
-        estimator_param = self.get_params()
-        estimator_param["model_path"] = TabPFNRegressor._model_name_to_path(
-            "regression", self.model_path
-        )
+        estimator_param = self._get_estimator_params_with_model_path("regression")
         if Config.use_server:
-            self.last_train_set_uid = InferenceClient.fit(X, y, config=estimator_param)
+            model_type = ModelType.TABPFN_R if self.thinking else ModelType.TABPFN
+            self.last_train_set_uid = InferenceClient.fit(
+                X,
+                y,
+                tabpfn_config=estimator_param,
+                model_type=model_type,
+                task="regression",
+                description=description,
+            )
             self.last_train_X = X
             self.last_train_y = y
             self.fitted_ = True
@@ -440,20 +493,21 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             "quantiles": quantiles,
         }
 
-        estimator_param = self.get_params()
-        estimator_param["model_path"] = TabPFNRegressor._model_name_to_path(
-            "regression", self.model_path
-        )
+        estimator_param = self._get_estimator_params_with_model_path("regression")
+        model_type = ModelType.TABPFN_R if self.thinking else ModelType.TABPFN
 
-        result: PredictionResult = InferenceClient.predict(
-            X,
-            task="regression",
-            train_set_uid=self.last_train_set_uid,
-            config=estimator_param,
-            predict_params=predict_params,
-            X_train=self.last_train_X,
-            y_train=self.last_train_y,
-        )
+        def predict_task() -> PredictionResult:
+            return InferenceClient.predict(
+                X,
+                model_type=model_type,
+                task="regression",
+                train_set_uid=self.last_train_set_uid,
+                tabpfn_config=estimator_param,
+                predict_params=predict_params,
+                X_train=self.last_train_X,
+                y_train=self.last_train_y,
+            )
+        result = run_prediction(self.thinking, predict_task)
 
         # Unpack and store metadata
         self.last_meta = result.metadata
@@ -549,3 +603,31 @@ def _clean_text_features(X):
     if isinstance(X, np.ndarray):
         return X_.to_numpy()
     return X_
+
+
+def _check_description(thinking: bool, description: str) -> None:
+    if thinking and not description:
+        raise ValueError("fit requires a description when thinking is True.")
+
+
+def run_prediction(thinking: bool, predict_task: Callable) -> PredictionResult:
+    """
+    Run the prediction task with a spinner if thinking is True.
+    """
+    if not thinking:
+        result = predict_task()
+    else:
+        spinner = ["-", "\\", "|", "/"]
+        i = 0
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(predict_task)
+            while not future.done():
+                sys.stderr.write(
+                    f"\r{spinner[i % len(spinner)]} Predicting..."
+                )
+                sys.stderr.flush()
+                time.sleep(0.2)
+                i += 1
+            result = future.result()
+
+    return result

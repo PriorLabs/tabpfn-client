@@ -13,7 +13,7 @@ from sklearn.exceptions import NotFittedError
 from tabpfn_client import init, reset
 from tabpfn_client.estimator import TabPFNRegressor
 from tabpfn_client.service_wrapper import UserAuthenticationClient, InferenceClient
-from tabpfn_client.tests.mock_tabpfn_server import with_mock_server
+from tests.mock_tabpfn_server import with_mock_server
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client import config
 import json
@@ -381,6 +381,8 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             "inference_config",
             "model_path",
             "paper_version",
+            "thinking",
+            "thinking_params",
         }
 
         # Create regressor with various parameters
@@ -405,7 +407,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             regressor.predict(test_X)
 
             # Get the config that was passed to predict
-            actual_config = mock_predict.call_args[1]["config"]
+            actual_config = mock_predict.call_args[1]["tabpfn_config"]
 
             # Check that only allowed parameters are present
             config_params = set(actual_config.keys())
@@ -836,7 +838,7 @@ class TestTabPFNModelSelection(unittest.TestCase):
                 expected_model_path = "tabpfn-v2-regressor-2noar4o2.ckpt"
 
                 self.assertEqual(
-                    predict_kwargs["config"]["model_path"], expected_model_path
+                    predict_kwargs["tabpfn_config"]["model_path"], expected_model_path
                 )
 
     @patch.object(InferenceClient, "fit", return_value="dummy_uid")

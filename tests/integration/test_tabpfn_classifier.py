@@ -1,20 +1,17 @@
 import unittest
-import importlib
 
 from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
 import numpy as np
 
-import tabpfn_client.client
 from tabpfn_client import init, reset
 from tabpfn_client import TabPFNClassifier
-from tabpfn_client.tests.mock_tabpfn_server import with_mock_server
+from tests.mock_tabpfn_server import with_mock_server
 from tabpfn_client.service_wrapper import UserAuthenticationClient
 
 
 class TestTabPFNClassifier(unittest.TestCase):
     def setUp(self):
-        importlib.reload(tabpfn_client.client)
         X, y = load_breast_cancer(return_X_y=True)
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
             X, y, test_size=0.33, random_state=42
@@ -22,7 +19,6 @@ class TestTabPFNClassifier(unittest.TestCase):
 
     def tearDown(self):
         reset()
-        importlib.reload(tabpfn_client.client)
 
     @with_mock_server()
     def test_use_remote_tabpfn_classifier(self, mock_server):

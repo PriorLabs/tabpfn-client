@@ -169,5 +169,17 @@ package-lock.json
 package.json
 .DS_Store
 
+devenv.*
+.devenv*
 .envrc
-*devenv*
+.vscode/
+
+# TabPFN cache
+.tabpfn/
+
+output/
+logs/
+
+# Internal
+experiments_*/caafe_datasets/data/*
+!experiments_*/caafe_datasets/data/descriptions

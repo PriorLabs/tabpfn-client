@@ -2,34 +2,35 @@
 #  Licensed under the Apache License, Version 2.0
 
 from __future__ import annotations
-
+from collections import OrderedDict
 from copy import deepcopy
-import traceback
-import re
 from dataclasses import dataclass, field
-from pathlib import Path
-import httpx
-import logging
-from importlib.metadata import version, PackageNotFoundError
-import numpy as np
-from omegaconf import OmegaConf
+from enum import Enum, auto
+from importlib.metadata import PackageNotFoundError, version
 import json
+import logging
 import os
+from pathlib import Path
+import re
 import threading
 import time
-from collections import OrderedDict
-from typing import Any, Dict, Literal, Optional, Union
+import traceback
+from typing import Annotated, Any, Dict, Literal, Optional, Union
 
-import backoff
-import sseclient
-import xxhash
-from httpx._transports.default import HTTPTransport
 from tqdm import tqdm
 
+import backoff
+import httpx
+from httpx._transports.default import HTTPTransport
+import numpy as np
+from omegaconf import OmegaConf
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+import sseclient
 from tabpfn_client.browser_auth import BrowserAuthHandler
 from tabpfn_client.constants import CACHE_DIR
-from tabpfn_client.tabpfn_common_utils import utils as common_utils
-from tabpfn_client.tabpfn_common_utils.utils import Singleton
+from tabpfn_common_utils import utils as common_utils
+from tabpfn_common_utils.utils import Singleton
+import xxhash
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,14 @@ def _on_giveup(details: Dict[str, Any]):
     logger.error(message)
 
 
+def _caching_disabled() -> bool:
+    val = os.getenv("DISABLE_DS_CACHING", "")
+    disabled = str(val).lower() in {"1", "true", "yes", "on"}
+    if disabled:
+        logger.warning("Dataset caching is disabled.")
+    return disabled
+
+
 class GCPOverloaded(Exception):
     """
     Exception raised when the Google Cloud Platform service is overloaded or
@@ -81,12 +90,16 @@ class SensitiveDataFilter(logging.Filter):
 class DatasetUIDCacheManager:
     """
     Manages a cache of the last 50 uploaded datasets, tracking dataset hashes and their UIDs.
+
+    Can be disabled using the environment variable 'DISABLE_DS_CACHING'.
     """
 
     def __init__(self):
         self.file_path = CACHE_DIR / "dataset_cache"
-        self.cache = self.load_cache()
         self.cache_limit = 50
+        self.disable_ds_caching = _caching_disabled()
+
+        self.cache = self.load_cache() if not self.disable_ds_caching else OrderedDict()
 
     def load_cache(self):
         """
@@ -109,7 +122,7 @@ class DatasetUIDCacheManager:
         Generates hash by all received arguments and returns cached dataset uid if in cache, otherwise None.
         """
         dataset_hash = self._compute_hash(*args)
-        if str(dataset_hash) in self.cache:
+        if str(dataset_hash) in self.cache and not self.disable_ds_caching:
             self.cache.move_to_end(dataset_hash)
             return self.cache[dataset_hash], dataset_hash
         else:
@@ -125,7 +138,9 @@ class DatasetUIDCacheManager:
         self.cache.move_to_end(hash)
         if len(self.cache) > self.cache_limit:
             self.cache.popitem(last=False)
-        self.save_cache()
+
+        if not self.disable_ds_caching:
+            self.save_cache()
 
     def save_cache(self):
         """
@@ -161,6 +176,11 @@ SERVER_CONFIG_FILE = Path(__file__).parent.resolve() / "server_config.yaml"
 SERVER_CONFIG = OmegaConf.load(SERVER_CONFIG_FILE)
 
 
+class ModelType(Enum):
+    TABPFN = auto()
+    TABPFN_R = auto()
+
+
 def get_client_version() -> str:
     try:
         return version("tabpfn_client")
@@ -168,6 +188,41 @@ def get_client_version() -> str:
         # Package not found, should only happen during development. Execute 'pip install -e .' to use the actual
         # version number during development. Otherwise, simply return a version number that is large enough.
         return "5.5.5"
+
+
+# TODO(fjablonski): Move to common package.
+class FitProgressEvent(BaseModel):
+    """
+    Update to the progress of fitting the model.
+    """
+
+    status: Literal["in_progress"] = "in_progress"
+    estimated_time_remaining_sec: float
+    total_steps: int
+    current_step: int
+    message: str
+
+
+class FitCompleteEvent(BaseModel):
+    status: Literal["complete"] = "complete"
+    # Identifies the dataset and thus the model
+    train_set_uid: str
+
+
+class FitErrorEvent(BaseModel):
+    """
+    Error event emitted by the server during fitting.
+    """
+
+    status: Literal["error"] = "error"
+    message: str
+
+
+ResponseEvents = Annotated[
+    Union[FitCompleteEvent, FitProgressEvent, FitErrorEvent],
+    Field(discriminator="status"),
+]
+ResponseEventAdapter = TypeAdapter(ResponseEvents)
 
 
 @dataclass(frozen=True)
@@ -214,6 +269,74 @@ class ServiceClient(Singleton):
     _access_token = None
     dataset_uid_cache_manager = DatasetUIDCacheManager()
 
+    @staticmethod
+    def _process_tabpfn_config(tabpfn_config: Union[dict, None]) -> tuple[bool, list[str], Union[dict, None], Optional[dict]]:
+        """
+        Process tabpfn_config to extract paper_version, tabpfn_systems and tabpfnr_params.
+        
+        Parameters
+        ----------
+        tabpfn_config : dict or None
+            Configuration dict that may contain a 'paper_version' key.
+            
+        Returns
+        -------
+        paper_version : bool
+            Whether to use paper version (affects tabpfn_systems).
+        tabpfn_systems : list[str]
+            List of systems to use (empty if paper_version, otherwise ["preprocessing", "text"]).
+        processed_config : dict or None
+            The config dict with paper_version removed (if present), or None if input was None.
+        tabpfnr_params:
+        """
+        tabpfnr_params: Optional[dict[str, any]]
+        if tabpfn_config is None:
+            paper_version = False
+            processed_config = None
+            tabpfnr_params = None
+        else:
+            # Make a copy to avoid modifying the original
+            processed_config = tabpfn_config.copy()
+            paper_version = processed_config.pop("paper_version", False)
+
+            # Thinking params are only used during fit and are not accepted by the underlying model.
+            processed_config.pop("thinking", None)
+            tabpfnr_params = processed_config.pop("thinking_params", None)
+        
+        tabpfn_systems = [] if paper_version else ["preprocessing", "text"]
+        return paper_version, tabpfn_systems, processed_config, tabpfnr_params
+
+    @staticmethod
+    def _build_tabpfn_params(tabpfn_config: Union[dict, None]) -> dict:
+        """
+        Build parameters dict for tabpfn_config and tabpfn_systems.
+        
+        This is a unified helper for both fit and predict methods to ensure
+        consistent parameter handling.
+        
+        Parameters
+        ----------
+        tabpfn_config : dict or None
+            Configuration dict that may contain a 'paper_version' key.
+            
+        Returns
+        -------
+        params : dict
+            Dictionary containing 'tabpfn_systems' and optionally 'tabpfn_config'.
+        """
+        _, tabpfn_systems, processed_config, _ = ServiceClient._process_tabpfn_config(tabpfn_config)
+        
+        params = {
+            "tabpfn_systems": json.dumps(tabpfn_systems)
+        }
+        
+        if processed_config is not None:
+            params["tabpfn_config"] = json.dumps(
+                processed_config, default=lambda x: x.to_dict()
+            )
+        
+        return params
+
     @classmethod
     def get_access_token(cls):
         return cls._access_token
@@ -248,7 +371,15 @@ class ServiceClient(Singleton):
         on_backoff=_on_backoff,
         on_giveup=_on_giveup,
     )
-    def fit(cls, X, y, config=None) -> str:
+    def fit(
+        cls,
+        X,
+        y,
+        model_type: ModelType,
+        tabpfn_config: Union[dict, None] = None,
+        task: Optional[Literal["classification", "regression"]] = None,
+        description: str = "",
+    ) -> str:
         """
         Upload a train set to server and return the train set UID if successful.
 
@@ -258,8 +389,14 @@ class ServiceClient(Singleton):
             The training input samples.
         y : array-like of shape (n_samples,) or (n_samples, n_outputs)
             The target values.
-        config : dict, optional
-            Configuration for the fit method. Includes tabpfn_systems and paper_version.
+        model_type : ModelType
+            Whether to fit a TabPFN or TabPFN-R model.
+        tabpfn_config : dict, optional
+            Configuration for the fit method. Includes tabpfn_systems, paper_version and thinking params.
+        task: str, optional
+            Task type: "classification" or "regression"
+        description: str, optional
+            Description of the dataset and task for the server.
 
         Returns
         -------
@@ -271,37 +408,106 @@ class ServiceClient(Singleton):
         X_serialized = common_utils.serialize_to_csv_formatted_bytes(X)
         y_serialized = common_utils.serialize_to_csv_formatted_bytes(y)
 
-        if config is None:
-            tabpfn_systems = ["preprocessing", "text"]
-        else:
-            tabpfn_systems = (
-                [] if config["paper_version"] else ["preprocessing", "text"]
-            )
+        # Build unified params for tabpfn_config and tabpfn_systems
+        query_params = cls._build_tabpfn_params(tabpfn_config)
 
+        # Extract tabpfn_systems for hashing
+        paper_version, tabpfn_systems, _, tabpfnr_params = cls._process_tabpfn_config(tabpfn_config)
+
+        description_for_hashing = "" if description is None else description
+        tabpfnr_params_for_hashing = "" if tabpfnr_params is None else json.dumps(tabpfnr_params, sort_keys=True)
+        task_for_hashing = "" if task is None else task
         # Get hash for dataset. Include access token for the case that one user uses different accounts.
         (
             cached_dataset_uid,
             dataset_hash,
         ) = cls.dataset_uid_cache_manager.get_dataset_uid(
-            X_serialized, y_serialized, cls._access_token, "_".join(tabpfn_systems)
+            X_serialized,
+            y_serialized,
+            model_type.name,
+            cls._access_token,
+            "_".join(tabpfn_systems),
+            description_for_hashing,
+            tabpfnr_params_for_hashing,
+            task_for_hashing
         )
         if cached_dataset_uid:
             return cached_dataset_uid
 
-        response = cls.httpx_client.post(
-            url=cls.server_endpoints.fit.path,
+        if model_type == ModelType.TABPFN:
+            url = cls.server_endpoints.fit.path
+        elif model_type == ModelType.TABPFN_R:
+            url = cls.server_endpoints.fit_reasoning.path
+        else:
+            raise RuntimeError(f"Unknown model type {model_type}")
+
+        form_data = {"desc": description}
+
+        if task:
+            query_params["task"] = task
+        else:
+            assert model_type != ModelType.TABPFN_R, "Thinking mode requires a task."
+        if tabpfnr_params:
+            form_data["tabpfnr_params"] = json.dumps(tabpfnr_params)
+
+        with cls.httpx_client.stream(
+            "POST",
+            url=url,
             files=common_utils.to_httpx_post_file_format(
                 [
                     ("x_file", "x_train_filename", X_serialized),
                     ("y_file", "y_train_filename", y_serialized),
                 ]
             ),
-            params={"tabpfn_systems": json.dumps(tabpfn_systems)},
-        )
+            data=form_data,
+            params=query_params,
+        ) as response:
+            cls._validate_response(response, "fit")
+            train_set_uid = None
+            pbar = None
+            try:
+                for line in response.iter_lines():
+                    # Handle responses that might be missing the status field
+                    try:
+                        event = ResponseEventAdapter.validate_json(line)
+                    except (ValidationError, ValueError, json.JSONDecodeError) as e:
+                        # If validation fails, try to infer the event type and add missing status field
+                        raw_data = json.loads(line)
+                        if "train_set_uid" in raw_data and "status" not in raw_data:
+                            # This looks like a FitCompleteEvent missing the status field
+                            raw_data["status"] = "complete"
+                            event = FitCompleteEvent(**raw_data)
+                        else:
+                            # Re-raise the original error if we can't handle it
+                            raise e
 
-        cls._validate_response(response, "fit")
+                    if isinstance(event, FitProgressEvent):
+                        if pbar is None:
+                            pbar = tqdm(
+                                total=event.total_steps,
+                                desc="Fitting...",
+                                unit=" step",
+                            )
+                        else:
+                            pbar.update(event.current_step - pbar.n)
+                        pbar.set_postfix(
+                            {
+                                "remaining": f"{event.estimated_time_remaining_sec:.2f}s",
+                                "status": event.message,
+                            }
+                        )
+                    elif isinstance(event, FitCompleteEvent):
+                        train_set_uid = event.train_set_uid
+                    elif isinstance(event, FitErrorEvent):
+                        # Handle structured error events
+                        raise RuntimeError(f"Error from server: {event.message}")
+            finally:
+                if pbar:
+                    pbar.close()
 
-        train_set_uid = response.json()["train_set_uid"]
+        if not train_set_uid:
+            raise RuntimeError("Error during fit. No valid model received.")
+
         cls.dataset_uid_cache_manager.add_dataset_uid(dataset_hash, train_set_uid)
         return train_set_uid
 
@@ -327,6 +533,7 @@ class ServiceClient(Singleton):
         cls,
         train_set_uid: str,
         x_test,
+        model_type: ModelType,
         task: Literal["classification", "regression"],
         predict_params: Union[dict, None] = None,
         tabpfn_config: Union[dict, None] = None,
@@ -352,20 +559,16 @@ class ServiceClient(Singleton):
 
         x_test_serialized = common_utils.serialize_to_csv_formatted_bytes(x_test)
 
-        params = {
+        # Build unified params for tabpfn_config and tabpfn_systems
+        params = cls._build_tabpfn_params(tabpfn_config)
+        params.update({
             "train_set_uid": train_set_uid,
             "task": task,
             "predict_params": json.dumps(predict_params),
-        }
-        if tabpfn_config is not None:
-            paper_version = tabpfn_config.pop("paper_version")
-            params["tabpfn_config"] = json.dumps(
-                tabpfn_config, default=lambda x: x.to_dict()
-            )
-        else:
-            paper_version = False
-        tabpfn_systems = [] if paper_version else ["preprocessing", "text"]
-        params["tabpfn_systems"] = json.dumps(tabpfn_systems)
+        })
+
+        # Extract tabpfn_systems for hashing
+        paper_version, tabpfn_systems, _, _ = cls._process_tabpfn_config(tabpfn_config)
 
         # In the arguments for hashing, include train_set_uid for the case that the same test set was previously used
         # with different train set. Include access token for the case that a user uses different accounts.
@@ -375,6 +578,8 @@ class ServiceClient(Singleton):
         ) = cls.dataset_uid_cache_manager.get_dataset_uid(
             x_test_serialized,
             train_set_uid,
+            # Note: This may not be strictly necessary for predict, but keep it for safety.
+            model_type.name,
             cls._access_token,
             "_".join(tabpfn_systems),
         )
@@ -390,7 +595,10 @@ class ServiceClient(Singleton):
         for attempt in range(max_attempts):
             try:
                 with cls._make_prediction_request(
-                    cached_test_set_uid, x_test_serialized, params
+                    cached_test_set_uid,
+                    x_test_serialized,
+                    params,
+                    model_type=model_type,
                 ) as response:
                     cls._validate_response(response, "predict")
                     # Handle updates from server
@@ -448,13 +656,20 @@ class ServiceClient(Singleton):
                         raise RuntimeError(
                             "Train set data is required to re-upload but was not provided."
                         )
+                    # I don't think this check is necessary anymore, but I want
+                    # to understand why the non-thinking models needed this
+                    # re-upload feature in the first place and test that
+                    # thinking actually works before removing it.
+                    if model_type == ModelType.TABPFN_R:
+                        raise NotImplementedError(
+                            "Automatically re-uploading the train set is not supported for thinking mode. Please call fit()."
+                        )
                     train_set_uid = cls.fit(
                         X_train,
                         y_train,
-                        config=dict(
-                            tabpfn_config if tabpfn_config else {},
-                            **{"paper_version": paper_version},
-                        ),
+                        model_type=model_type,
+                        tabpfn_config=tabpfn_config,
+                        task=task
                     )
                     params["train_set_uid"] = train_set_uid
                     cached_test_set_uid = None
@@ -485,20 +700,27 @@ class ServiceClient(Singleton):
         return PredictionResult(result, metadata)
 
     @classmethod
-    def _make_prediction_request(cls, test_set_uid, x_test_serialized, params):
+    def _make_prediction_request(
+        cls, test_set_uid, x_test_serialized, params, model_type: ModelType
+    ):
         """
         Helper function to make the prediction request to the server.
         """
+        if model_type == ModelType.TABPFN:
+            url = cls.server_endpoints.predict.path
+        elif model_type == ModelType.TABPFN_R:
+            url = cls.server_endpoints.predict_reasoning.path
+        else:
+            raise RuntimeError(f"Unknown model type {model_type}")
+
         if test_set_uid:
             params = params.copy()
             params["test_set_uid"] = test_set_uid
-            response = cls.httpx_client.stream(
-                method="post", url=cls.server_endpoints.predict.path, params=params
-            )
+            response = cls.httpx_client.stream(method="post", url=url, params=params)
         else:
             response = cls.httpx_client.stream(
                 method="post",
-                url=cls.server_endpoints.predict.path,
+                url=url,
                 params=params,
                 files=common_utils.to_httpx_post_file_format(
                     [("x_file", "x_test_filename", x_test_serialized)]
