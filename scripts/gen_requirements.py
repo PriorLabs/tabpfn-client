@@ -40,7 +40,6 @@ if __name__ == "__main__":
         action="store_true",
         help="Use the dev dependency group.",
     )
-    parser.set_defaults(dev_dependencies=False)
     args = parser.parse_args()
 
     with open("pyproject.toml", "rb") as f:
