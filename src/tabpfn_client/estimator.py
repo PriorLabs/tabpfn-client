@@ -629,5 +629,5 @@ def run_prediction(thinking: bool, predict_task: Callable) -> PredictionResult:
                 time.sleep(0.2)
                 i += 1
             result = future.result()
-    
+
     return result
