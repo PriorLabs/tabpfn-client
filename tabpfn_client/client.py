@@ -28,8 +28,8 @@ from tqdm import tqdm
 
 from tabpfn_client.browser_auth import BrowserAuthHandler
 from tabpfn_client.constants import CACHE_DIR
-from tabpfn_client.tabpfn_common_utils import utils as common_utils
-from tabpfn_client.tabpfn_common_utils.utils import Singleton
+from tabpfn_common_utils import utils as common_utils
+from tabpfn_common_utils.utils import Singleton
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,14 @@ def _on_giveup(details: Dict[str, Any]):
         f"Giving up. Exception: {details['exception']}"
     )
     logger.error(message)
+
+
+def _caching_disabled() -> bool:
+    val = os.getenv("DISABLE_DS_CACHING", "")
+    disabled = str(val).lower() in {"1", "true", "yes", "on"}
+    if disabled:
+        logger.warning("Dataset caching is disabled.")
+    return disabled
 
 
 class GCPOverloaded(Exception):
@@ -85,8 +93,10 @@ class DatasetUIDCacheManager:
 
     def __init__(self):
         self.file_path = CACHE_DIR / "dataset_cache"
-        self.cache = self.load_cache()
         self.cache_limit = 50
+        self.disable_ds_caching = _caching_disabled()
+
+        self.cache = self.load_cache() if not self.disable_ds_caching else OrderedDict()
 
     def load_cache(self):
         """
@@ -109,7 +119,7 @@ class DatasetUIDCacheManager:
         Generates hash by all received arguments and returns cached dataset uid if in cache, otherwise None.
         """
         dataset_hash = self._compute_hash(*args)
-        if str(dataset_hash) in self.cache:
+        if str(dataset_hash) in self.cache and not self.disable_ds_caching:
             self.cache.move_to_end(dataset_hash)
             return self.cache[dataset_hash], dataset_hash
         else:
@@ -125,7 +135,9 @@ class DatasetUIDCacheManager:
         self.cache.move_to_end(hash)
         if len(self.cache) > self.cache_limit:
             self.cache.popitem(last=False)
-        self.save_cache()
+
+        if not self.disable_ds_caching:
+            self.save_cache()
 
     def save_cache(self):
         """
@@ -274,9 +286,7 @@ class ServiceClient(Singleton):
         if config is None:
             tabpfn_systems = ["preprocessing", "text"]
         else:
-            tabpfn_systems = (
-                [] if config["paper_version"] else ["preprocessing", "text"]
-            )
+            tabpfn_systems = [] if config["paper_version"] else config["tabpfn_systems"]
 
         # Get hash for dataset. Include access token for the case that one user uses different accounts.
         (
@@ -359,12 +369,15 @@ class ServiceClient(Singleton):
         }
         if tabpfn_config is not None:
             paper_version = tabpfn_config.pop("paper_version")
+            tabpfn_systems = tabpfn_config.pop("tabpfn_systems")
             params["tabpfn_config"] = json.dumps(
                 tabpfn_config, default=lambda x: x.to_dict()
             )
         else:
             paper_version = False
-        tabpfn_systems = [] if paper_version else ["preprocessing", "text"]
+            tabpfn_systems = ["preprocessing", "text"]
+        if paper_version:
+            tabpfn_systems = []
         params["tabpfn_systems"] = json.dumps(tabpfn_systems)
 
         # In the arguments for hashing, include train_set_uid for the case that the same test set was previously used
