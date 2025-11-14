@@ -1,4 +1,4 @@
-# local
+# # local testing
 # protocol: "http"
 # host: "localhost"
 # port: "8080"
@@ -7,6 +7,7 @@
 protocol: "https"
 host: "api.priorlabs.ai"
 port: "443"
+
 gui_url: "https://ux.priorlabs.ai"
 endpoints:
   root:
@@ -93,6 +94,16 @@ endpoints:
     path: "/download_all_data/"
     methods: [ "GET" ]
     description: "Download all uploaded data"
+
+  fit_reasoning:
+    path: "/beta/tabpfn-r/fit/"
+    methods: ["POST"]
+    description: "Fit"
+
+  predict_reasoning:
+    path: "/beta/tabpfn-r/predict/"
+    methods: ["POST"]
+    description: "Predict"
 
   delete_dataset:
     path: "/delete_dataset/"

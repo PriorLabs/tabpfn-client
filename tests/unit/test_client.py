@@ -7,9 +7,9 @@ from sklearn.model_selection import train_test_split
 import numpy as np
 import json
 
-from tabpfn_client.client import ServiceClient
+from tabpfn_client.client import ServiceClient, ModelType
 from tabpfn_client.constants import CACHE_DIR
-from tabpfn_client.tests.mock_tabpfn_server import with_mock_server
+from tests.mock_tabpfn_server import with_mock_server
 
 
 class TestServiceClient(unittest.TestCase):
@@ -197,7 +197,7 @@ class TestServiceClient(unittest.TestCase):
             200, json=dummy_json
         )
         ServiceClient.authorize("dummy_token")
-        ServiceClient.fit(self.X_train, self.y_train)
+        ServiceClient.fit(self.X_train, self.y_train, model_type=ModelType.TABPFN)
 
         dummy_result = {"test_set_uid": "dummy_uid", "classification": [1, 2, 3]}
         mock_server.router.post(mock_server.endpoints.predict.path).respond(
@@ -209,6 +209,7 @@ class TestServiceClient(unittest.TestCase):
         pred = ServiceClient.predict(
             train_set_uid=dummy_json["train_set_uid"],
             x_test=self.X_test,
+            model_type=ModelType.TABPFN,
             task="classification",
         )
         self.assertTrue(np.array_equal(pred.y_pred, dummy_result["classification"]))
@@ -260,25 +261,37 @@ class TestServiceClient(unittest.TestCase):
 
         # Mock the fit endpoint to return a fixed train_set_uid
         with patch.object(
-            ServiceClient.httpx_client, "post", wraps=ServiceClient.httpx_client.post
-        ) as mock_post:
-            # Set up the mock response
+            ServiceClient.httpx_client,
+            "stream",
+            wraps=ServiceClient.httpx_client.stream,
+        ) as mock_stream:
+            # Set up the mock streaming response for fit
             mock_response = Mock()
             mock_response.status_code = 200
-            mock_response.json.return_value = {"train_set_uid": "dummy_train_set_uid"}
-            mock_post.return_value = mock_response
+            mock_response.iter_lines = Mock(
+                return_value=[
+                    '{"status": "complete", "train_set_uid": "dummy_train_set_uid"}'
+                ]
+            )
+            mock_response.__enter__ = Mock(return_value=mock_response)
+            mock_response.__exit__ = Mock(return_value=None)
+            mock_stream.return_value = mock_response
 
             # First upload
-            train_set_uid1 = ServiceClient.fit(self.X_train, self.y_train)
+            train_set_uid1 = ServiceClient.fit(
+                self.X_train, self.y_train, model_type=ModelType.TABPFN
+            )
 
             # Second upload with the same data
-            train_set_uid2 = ServiceClient.fit(self.X_train, self.y_train)
+            train_set_uid2 = ServiceClient.fit(
+                self.X_train, self.y_train, model_type=ModelType.TABPFN
+            )
 
             # The train_set_uid should be the same due to caching
             self.assertEqual(train_set_uid1, train_set_uid2)
 
             # The fit endpoint should have been called only once
-            mock_post.assert_called_once()
+            mock_stream.assert_called_once()
 
     def test_predict_with_caching(self):
         """
@@ -303,11 +316,16 @@ class TestServiceClient(unittest.TestCase):
             # Mock responses
             def side_effect(*args, **kwargs):
                 if kwargs.get("url") == ServiceClient.server_endpoints.fit.path:
+                    # Provide a context-managed streaming response for fit
                     response = Mock()
                     response.status_code = 200
-                    response.json.return_value = {
-                        "train_set_uid": "dummy_train_set_uid"
-                    }
+                    response.iter_lines = Mock(
+                        return_value=[
+                            '{"status": "complete", "train_set_uid": "dummy_train_set_uid"}'
+                        ]
+                    )
+                    response.__enter__ = Mock(return_value=response)
+                    response.__exit__ = Mock(return_value=None)
                     return response
                 elif kwargs.get("url") == ServiceClient.server_endpoints.predict.path:
                     response = Mock()
@@ -330,16 +348,24 @@ class TestServiceClient(unittest.TestCase):
             mock_stream.side_effect = side_effect
 
             # Upload train set
-            train_set_uid = ServiceClient.fit(self.X_train, self.y_train)
+            train_set_uid = ServiceClient.fit(
+                self.X_train, self.y_train, model_type=ModelType.TABPFN
+            )
 
             # First prediction
             pred1 = ServiceClient.predict(
-                train_set_uid=train_set_uid, x_test=self.X_test, task="classification"
+                train_set_uid=train_set_uid,
+                x_test=self.X_test,
+                model_type=ModelType.TABPFN,
+                task="classification",
             )
 
             # Second prediction with the same test set
             pred2 = ServiceClient.predict(
-                train_set_uid=train_set_uid, x_test=self.X_test, task="classification"
+                train_set_uid=train_set_uid,
+                x_test=self.X_test,
+                model_type=ModelType.TABPFN,
+                task="classification",
             )
 
             # The predictions should be the same
@@ -352,7 +378,12 @@ class TestServiceClient(unittest.TestCase):
 
             # Check that the test set was uploaded only once (first predict call)
             upload_calls = [
-                call for call in mock_stream.call_args_list if "files" in call[1]
+                c
+                for c in mock_stream.call_args_list
+                if (
+                    c.kwargs.get("url") == ServiceClient.server_endpoints.predict.path
+                    and "files" in c.kwargs
+                )
             ]
             self.assertEqual(len(upload_calls), 1)
 
@@ -364,26 +395,24 @@ class TestServiceClient(unittest.TestCase):
         ServiceClient.authorize("dummy_access_token")
 
         # Mock the fit and predict endpoints
-        with (
-            patch.object(
-                ServiceClient.httpx_client,
-                "post",
-                wraps=ServiceClient.httpx_client.post,
-            ) as mock_post,
-            patch.object(
-                ServiceClient.httpx_client,
-                "stream",
-                wraps=ServiceClient.httpx_client.stream,
-            ) as mock_stream,
-        ):
+        with patch.object(
+            ServiceClient.httpx_client,
+            "stream",
+            wraps=ServiceClient.httpx_client.stream,
+        ) as mock_stream:
             # Mock responses with side effects to simulate invalid cached UIDs
             def side_effect(*args, **kwargs):
                 if kwargs.get("url") == ServiceClient.server_endpoints.fit.path:
+                    # Provide a context-managed streaming response for fit
                     response = Mock()
                     response.status_code = 200
-                    response.json.return_value = {
-                        "train_set_uid": "dummy_train_set_uid"
-                    }
+                    response.iter_lines = Mock(
+                        return_value=[
+                            '{"status": "complete", "train_set_uid": "dummy_train_set_uid"}'
+                        ]
+                    )
+                    response.__enter__ = Mock(return_value=response)
+                    response.__exit__ = Mock(return_value=None)
                     return response
                 elif kwargs.get("url") == ServiceClient.server_endpoints.predict.path:
                     # Simulate invalid UID on first call, success on second
@@ -420,16 +449,18 @@ class TestServiceClient(unittest.TestCase):
                 side_effect.call_count += 1
                 return side_effect(*args, **kwargs)
 
-            mock_post.side_effect = side_effect_counter
             mock_stream.side_effect = side_effect_counter
 
             # Upload train set
-            train_set_uid = ServiceClient.fit(self.X_train, self.y_train)
+            train_set_uid = ServiceClient.fit(
+                self.X_train, self.y_train, model_type=ModelType.TABPFN
+            )
 
             # Attempt prediction, which should fail and trigger retry
             pred = ServiceClient.predict(
                 train_set_uid=train_set_uid,
                 x_test=self.X_test,
+                model_type=ModelType.TABPFN,
                 task="classification",
                 X_train=self.X_train,
                 y_train=self.y_train,
@@ -440,13 +471,13 @@ class TestServiceClient(unittest.TestCase):
 
             # The predict endpoint should have been called twice due to retry
             self.assertEqual(
-                mock_post.call_count + mock_stream.call_count, 4
+                mock_stream.call_count, 4
             )  # 1 fit + 2 predict + 1 re-upload
 
             # Ensure that fit was called again (re-upload)
             upload_calls = [
                 call
-                for call in mock_post.call_args_list
+                for call in mock_stream.call_args_list
                 if call.kwargs.get("url") == ServiceClient.server_endpoints.fit.path
             ]
             self.assertEqual(len(upload_calls), 2)

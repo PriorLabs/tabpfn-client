@@ -3,7 +3,7 @@ import json
 import requests
 from typing import Optional
 
-from tabpfn_client.tabpfn_common_utils.utils import get_example_dataset
+from tabpfn_common_utils.utils import get_example_dataset
 
 TARGET_NAME = "target"
 

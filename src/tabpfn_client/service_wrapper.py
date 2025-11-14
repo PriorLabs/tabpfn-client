@@ -4,11 +4,13 @@
 import logging
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
-from tabpfn_client.client import ServiceClient
+import numpy as np
+
+from tabpfn_client.client import ServiceClient, ModelType
 from tabpfn_client.constants import CACHE_DIR
-from tabpfn_client.tabpfn_common_utils.utils import Singleton
+from tabpfn_common_utils.utils import Singleton
 
 logger = logging.getLogger(__name__)
 
@@ -244,8 +246,23 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         )
 
     @classmethod
-    def fit(cls, X, y, config=None) -> str:
-        return ServiceClient.fit(X, y, config=config)
+    def fit(
+        cls,
+        X,
+        y,
+        model_type: ModelType = ModelType.TABPFN,
+        tabpfn_config=None,
+        task: Optional[Literal["classification", "regression"]] = None,
+        description: str = "",
+    ) -> str:
+        return ServiceClient.fit(
+            X,
+            y,
+            tabpfn_config=tabpfn_config,
+            model_type=model_type,
+            task=task,
+            description=description,
+        )
 
     @classmethod
     def predict(
@@ -253,17 +270,19 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         X,
         task: Literal["classification", "regression"],
         train_set_uid: str,
-        config=None,
+        model_type: ModelType = ModelType.TABPFN,
+        tabpfn_config=None,
         predict_params=None,
         X_train=None,
         y_train=None,
-    ):
+    ) -> dict[str, np.ndarray]:
         return ServiceClient.predict(
             train_set_uid=train_set_uid,
             x_test=X,
-            tabpfn_config=config,
+            tabpfn_config=tabpfn_config,
             predict_params=predict_params,
             task=task,
             X_train=X_train,
             y_train=y_train,
+            model_type=model_type,
         )
