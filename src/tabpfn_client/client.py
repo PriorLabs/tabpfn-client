@@ -300,7 +300,6 @@ class ServiceClient(Singleton):
             paper_version = processed_config.pop("paper_version", False)
 
             # Thinking params are only used during fit and are not accepted by the underlying model.
-            # TODO(brendan): Did I forget to pass this?
             processed_config.pop("thinking", None)
             tabpfnr_params = processed_config.pop("thinking_params", None)
         
