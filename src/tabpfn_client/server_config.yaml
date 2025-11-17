@@ -1,12 +1,12 @@
-# # local testing
-# protocol: "http"
-# host: "localhost"
-# port: "8080"
+# local testing
+protocol: "http"
+host: "localhost"
+port: "8080"
 
-# production
-protocol: "https"
-host: "api.priorlabs.ai"
-port: "443"
+## production
+#protocol: "https"
+#host: "api.priorlabs.ai"
+#port: "443"
 
 gui_url: "https://ux.priorlabs.ai"
 endpoints:
