@@ -625,6 +625,8 @@ def run_task(task: Callable, message: str, with_spinner: bool) -> Any:
         start = time.time()
         spinner = ["-", "\\", "|", "/"]
         i = 0
+        minutes = 0
+        seconds = 0
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(task)
             while not future.done():
