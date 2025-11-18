@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Callable, Optional, Literal, Dict, Union
+from typing import Any, Callable, Optional, Literal, Dict, Union
 import logging
 from typing_extensions import Self
 import numpy as np
@@ -240,14 +240,17 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         estimator_param = self._get_estimator_params_with_model_path("classification")
         if Config.use_server:
             model_type = ModelType.TABPFN_R if self.thinking else ModelType.TABPFN
-            self.last_train_set_uid = InferenceClient.fit(
-                X,
-                y,
-                tabpfn_config=estimator_param,
-                model_type=model_type,
-                task="classification",
-                description=description,
-            )
+
+            def fit_task() -> str:
+                return InferenceClient.fit(
+                    X,
+                    y,
+                    tabpfn_config=estimator_param,
+                    model_type=model_type,
+                    task="classification",
+                    description=description,
+                )
+            self.last_train_set_uid = run_task(fit_task, "Fitting", with_spinner=True)
             self.last_train_X = X
             self.last_train_y = y
             self.fitted_ = True
@@ -299,7 +302,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 X_train=self.last_train_X,
                 y_train=self.last_train_y,
             )
-        result = run_prediction(self.thinking, predict_task)
+        result = run_task(predict_task, "Predicting", with_spinner=self.thinking)
         # Unpack and store metadata
         self.last_meta = result.metadata
 
@@ -433,14 +436,17 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         estimator_param = self._get_estimator_params_with_model_path("regression")
         if Config.use_server:
             model_type = ModelType.TABPFN_R if self.thinking else ModelType.TABPFN
-            self.last_train_set_uid = InferenceClient.fit(
-                X,
-                y,
-                tabpfn_config=estimator_param,
-                model_type=model_type,
-                task="regression",
-                description=description,
-            )
+
+            def fit_task() -> str:
+                return InferenceClient.fit(
+                    X,
+                    y,
+                    tabpfn_config=estimator_param,
+                    model_type=model_type,
+                    task="regression",
+                    description=description,
+                )
+            self.last_train_set_uid = run_task(fit_task, "Fitting", with_spinner=True)
             self.last_train_X = X
             self.last_train_y = y
             self.fitted_ = True
@@ -507,8 +513,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                 X_train=self.last_train_X,
                 y_train=self.last_train_y,
             )
-        result = run_prediction(self.thinking, predict_task)
-
+        result = run_task(predict_task, "Predicting", with_spinner=self.thinking)
         # Unpack and store metadata
         self.last_meta = result.metadata
 
@@ -610,24 +615,32 @@ def _check_description(thinking: bool, description: str) -> None:
         raise ValueError("fit requires a description when thinking is True.")
 
 
-def run_prediction(thinking: bool, predict_task: Callable) -> PredictionResult:
+def run_task(task: Callable, message: str, with_spinner: bool) -> Any:
     """
     Run the prediction task with a spinner if thinking is True.
     """
-    if not thinking:
-        result = predict_task()
+    if not with_spinner:
+        result = task()
     else:
+        start = time.time()
         spinner = ["-", "\\", "|", "/"]
         i = 0
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(predict_task)
+            future = executor.submit(task)
             while not future.done():
-                sys.stderr.write(
-                    f"\r{spinner[i % len(spinner)]} Predicting..."
+                elapsed = int(time.time() - start)
+                minutes = elapsed // 60
+                seconds = elapsed % 60
+                sys.stdout.write(
+                    f"\r{minutes:02d}:{seconds:02d} {message}... {spinner[i % len(spinner)]}"
                 )
-                sys.stderr.flush()
+                sys.stdout.flush()
                 time.sleep(0.2)
                 i += 1
             result = future.result()
-
+        # Remove spinner, but keep elapsed time
+        sys.stdout.write(
+            f"\r{minutes:02d}:{seconds:02d} {message}... Done!\n"
+        )
+        sys.stdout.flush()
     return result
