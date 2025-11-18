@@ -617,7 +617,7 @@ def _check_description(thinking: bool, description: str) -> None:
 
 def run_task(task: Callable, message: str, with_spinner: bool) -> Any:
     """
-    Run the prediction task with a spinner if thinking is True.
+    Run the task with a spinner if thinking is True.
     """
     if not with_spinner:
         result = task()
