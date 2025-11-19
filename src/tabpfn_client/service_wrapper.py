@@ -8,7 +8,7 @@ from typing import Literal, Optional
 
 import numpy as np
 
-from tabpfn_client.client import ServiceClient, ModelType
+from tabpfn_client.client import FittedModel, ServiceClient, ModelType
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_common_utils.utils import Singleton
 
@@ -254,7 +254,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         tabpfn_config=None,
         task: Optional[Literal["classification", "regression"]] = None,
         description: str = "",
-    ) -> str:
+    ) -> FittedModel:
         return ServiceClient.fit(
             X,
             y,
@@ -270,6 +270,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         X,
         task: Literal["classification", "regression"],
         train_set_uid: str,
+        model_id: Optional[str] = None,
         model_type: ModelType = ModelType.TABPFN,
         tabpfn_config=None,
         predict_params=None,
@@ -280,6 +281,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             train_set_uid=train_set_uid,
             x_test=X,
             tabpfn_config=tabpfn_config,
+            model_id=model_id,
             predict_params=predict_params,
             task=task,
             X_train=X_train,

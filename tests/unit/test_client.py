@@ -278,14 +278,16 @@ class TestServiceClient(unittest.TestCase):
             mock_stream.return_value = mock_response
 
             # First upload
-            train_set_uid1 = ServiceClient.fit(
+            fitted_model1 = ServiceClient.fit(
                 self.X_train, self.y_train, model_type=ModelType.TABPFN
             )
+            train_set_uid1 = fitted_model1.train_set_uid
 
             # Second upload with the same data
-            train_set_uid2 = ServiceClient.fit(
+            fitted_model2 = ServiceClient.fit(
                 self.X_train, self.y_train, model_type=ModelType.TABPFN
             )
+            train_set_uid2 = fitted_model2.train_set_uid
 
             # The train_set_uid should be the same due to caching
             self.assertEqual(train_set_uid1, train_set_uid2)
@@ -348,9 +350,10 @@ class TestServiceClient(unittest.TestCase):
             mock_stream.side_effect = side_effect
 
             # Upload train set
-            train_set_uid = ServiceClient.fit(
+            fitted_model = ServiceClient.fit(
                 self.X_train, self.y_train, model_type=ModelType.TABPFN
             )
+            train_set_uid = fitted_model.train_set_uid
 
             # First prediction
             pred1 = ServiceClient.predict(
@@ -452,9 +455,10 @@ class TestServiceClient(unittest.TestCase):
             mock_stream.side_effect = side_effect_counter
 
             # Upload train set
-            train_set_uid = ServiceClient.fit(
+            fitted_model = ServiceClient.fit(
                 self.X_train, self.y_train, model_type=ModelType.TABPFN
             )
+            train_set_uid = fitted_model.train_set_uid
 
             # Attempt prediction, which should fail and trigger retry
             pred = ServiceClient.predict(

@@ -221,6 +221,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.inference_config = inference_config
         self.paper_version = paper_version
         self.last_train_set_uid = None
+        self.last_model_id = None
         self.last_train_X = None
         self.last_train_y = None
         self.thinking = thinking
@@ -240,7 +241,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         estimator_param = self._get_estimator_params_with_model_path("classification")
         if Config.use_server:
             model_type = ModelType.TABPFN_R if self.thinking else ModelType.TABPFN
-            self.last_train_set_uid = InferenceClient.fit(
+            fitted_model = InferenceClient.fit(
                 X,
                 y,
                 tabpfn_config=estimator_param,
@@ -248,6 +249,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 task="classification",
                 description=description,
             )
+            self.last_train_set_uid = fitted_model.train_set_uid
+            self.last_model_id = fitted_model.model_id
             self.last_train_X = X
             self.last_train_y = y
             self.fitted_ = True
@@ -294,6 +297,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 model_type=model_type,
                 task="classification",
                 train_set_uid=self.last_train_set_uid,
+                model_id=self.last_model_id,
                 tabpfn_config=estimator_param,
                 predict_params={"output_type": output_type},
                 X_train=self.last_train_X,
@@ -416,6 +420,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.thinking = thinking
         self.thinking_params = thinking_params
         self.last_train_set_uid = None
+        self.last_model_id = None
         self.last_train_X = None
         self.last_train_y = None
         self.last_meta = {}
@@ -433,7 +438,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         estimator_param = self._get_estimator_params_with_model_path("regression")
         if Config.use_server:
             model_type = ModelType.TABPFN_R if self.thinking else ModelType.TABPFN
-            self.last_train_set_uid = InferenceClient.fit(
+            fitted_model = InferenceClient.fit(
                 X,
                 y,
                 tabpfn_config=estimator_param,
@@ -441,6 +446,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                 task="regression",
                 description=description,
             )
+            self.last_train_set_uid = fitted_model.train_set_uid
+            self.last_model_id = fitted_model.model_id
             self.last_train_X = X
             self.last_train_y = y
             self.fitted_ = True
@@ -502,6 +509,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                 model_type=model_type,
                 task="regression",
                 train_set_uid=self.last_train_set_uid,
+                model_id=self.last_model_id,
                 tabpfn_config=estimator_param,
                 predict_params=predict_params,
                 X_train=self.last_train_X,

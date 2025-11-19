@@ -207,6 +207,7 @@ class FitCompleteEvent(BaseModel):
     status: Literal["complete"] = "complete"
     # Identifies the dataset and thus the model
     train_set_uid: str
+    model_id: Optional[str] = None
 
 
 class FitErrorEvent(BaseModel):
@@ -223,6 +224,11 @@ ResponseEvents = Annotated[
     Field(discriminator="status"),
 ]
 ResponseEventAdapter = TypeAdapter(ResponseEvents)
+
+
+class FittedModel(BaseModel):
+    train_set_uid: str
+    model_id: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -324,7 +330,7 @@ class ServiceClient(Singleton):
         params : dict
             Dictionary containing 'tabpfn_systems' and optionally 'tabpfn_config'.
         """
-        _, tabpfn_systems, processed_config, _ = ServiceClient._process_tabpfn_config(tabpfn_config)
+        _, tabpfn_systems, processed_config, tabpfnr_params = ServiceClient._process_tabpfn_config(tabpfn_config)
         
         params = {
             "tabpfn_systems": json.dumps(tabpfn_systems)
@@ -334,7 +340,9 @@ class ServiceClient(Singleton):
             params["tabpfn_config"] = json.dumps(
                 processed_config, default=lambda x: x.to_dict()
             )
-        
+        if tabpfnr_params is not None:
+            params["tabpfnr_params"] = json.dumps(tabpfnr_params)
+
         return params
 
     @classmethod
@@ -379,7 +387,7 @@ class ServiceClient(Singleton):
         tabpfn_config: Union[dict, None] = None,
         task: Optional[Literal["classification", "regression"]] = None,
         description: str = "",
-    ) -> str:
+    ) -> FittedModel:
         """
         Upload a train set to server and return the train set UID if successful.
 
@@ -447,8 +455,6 @@ class ServiceClient(Singleton):
             query_params["task"] = task
         else:
             assert model_type != ModelType.TABPFN_R, "Thinking mode requires a task."
-        if tabpfnr_params:
-            form_data["tabpfnr_params"] = json.dumps(tabpfnr_params)
 
         with cls.httpx_client.stream(
             "POST",
@@ -498,6 +504,7 @@ class ServiceClient(Singleton):
                         )
                     elif isinstance(event, FitCompleteEvent):
                         train_set_uid = event.train_set_uid
+                        model_id = event.model_id
                     elif isinstance(event, FitErrorEvent):
                         # Handle structured error events
                         raise RuntimeError(f"Error from server: {event.message}")
@@ -509,7 +516,7 @@ class ServiceClient(Singleton):
             raise RuntimeError("Error during fit. No valid model received.")
 
         cls.dataset_uid_cache_manager.add_dataset_uid(dataset_hash, train_set_uid)
-        return train_set_uid
+        return FittedModel(train_set_uid=train_set_uid, model_id=model_id)
 
     @classmethod
     @backoff.on_exception(
@@ -535,6 +542,7 @@ class ServiceClient(Singleton):
         x_test,
         model_type: ModelType,
         task: Literal["classification", "regression"],
+        model_id: Optional[str] = None,
         predict_params: Union[dict, None] = None,
         tabpfn_config: Union[dict, None] = None,
         X_train=None,
@@ -563,6 +571,7 @@ class ServiceClient(Singleton):
         params = cls._build_tabpfn_params(tabpfn_config)
         params.update({
             "train_set_uid": train_set_uid,
+            "model_id": model_id,
             "task": task,
             "predict_params": json.dumps(predict_params),
         })
@@ -578,6 +587,7 @@ class ServiceClient(Singleton):
         ) = cls.dataset_uid_cache_manager.get_dataset_uid(
             x_test_serialized,
             train_set_uid,
+            model_id,
             # Note: This may not be strictly necessary for predict, but keep it for safety.
             model_type.name,
             cls._access_token,
@@ -664,13 +674,14 @@ class ServiceClient(Singleton):
                         raise NotImplementedError(
                             "Automatically re-uploading the train set is not supported for thinking mode. Please call fit()."
                         )
-                    train_set_uid = cls.fit(
+                    fitted_model = cls.fit(
                         X_train,
                         y_train,
                         model_type=model_type,
                         tabpfn_config=tabpfn_config,
                         task=task
                     )
+                    train_set_uid = fitted_model.train_set_uid
                     params["train_set_uid"] = train_set_uid
                     cached_test_set_uid = None
                 else:
