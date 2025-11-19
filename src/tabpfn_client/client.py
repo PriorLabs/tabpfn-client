@@ -464,46 +464,26 @@ class ServiceClient(Singleton):
         ) as response:
             cls._validate_response(response, "fit")
             train_set_uid = None
-            pbar = None
-            try:
-                for line in response.iter_lines():
-                    # Handle responses that might be missing the status field
-                    try:
-                        event = ResponseEventAdapter.validate_json(line)
-                    except (ValidationError, ValueError, json.JSONDecodeError) as e:
-                        # If validation fails, try to infer the event type and add missing status field
-                        raw_data = json.loads(line)
-                        if "train_set_uid" in raw_data and "status" not in raw_data:
-                            # This looks like a FitCompleteEvent missing the status field
-                            raw_data["status"] = "complete"
-                            event = FitCompleteEvent(**raw_data)
-                        else:
-                            # Re-raise the original error if we can't handle it
-                            raise e
+            for line in response.iter_lines():
+                # Handle responses that might be missing the status field
+                try:
+                    event = ResponseEventAdapter.validate_json(line)
+                except (ValidationError, ValueError, json.JSONDecodeError) as e:
+                    # If validation fails, try to infer the event type and add missing status field
+                    raw_data = json.loads(line)
+                    if "train_set_uid" in raw_data and "status" not in raw_data:
+                        # This looks like a FitCompleteEvent missing the status field
+                        raw_data["status"] = "complete"
+                        event = FitCompleteEvent(**raw_data)
+                    else:
+                        # Re-raise the original error if we can't handle it
+                        raise e
 
-                    if isinstance(event, FitProgressEvent):
-                        if pbar is None:
-                            pbar = tqdm(
-                                total=event.total_steps,
-                                desc="Fitting...",
-                                unit=" step",
-                            )
-                        else:
-                            pbar.update(event.current_step - pbar.n)
-                        pbar.set_postfix(
-                            {
-                                "remaining": f"{event.estimated_time_remaining_sec:.2f}s",
-                                "status": event.message,
-                            }
-                        )
-                    elif isinstance(event, FitCompleteEvent):
-                        train_set_uid = event.train_set_uid
-                    elif isinstance(event, FitErrorEvent):
-                        # Handle structured error events
-                        raise RuntimeError(f"Error from server: {event.message}")
-            finally:
-                if pbar:
-                    pbar.close()
+                if isinstance(event, FitCompleteEvent):
+                    train_set_uid = event.train_set_uid
+                elif isinstance(event, FitErrorEvent):
+                    # Handle structured error events
+                    raise RuntimeError(f"Error from server: {event.message}")
 
         if not train_set_uid:
             raise RuntimeError("Error during fit. No valid model received.")
