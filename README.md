@@ -220,11 +220,11 @@ rm -rf ~/tabpfn-client-test.tmp dist
 uv pip install --upgrade build && python -m build
 uv pip install --upgrade twine && python -m twine upload --repository testpypi dist/*
 # Use a separate directory for testing so we don't accidentally run the local code
-mkdir ~/tabpfn-client-test.tmp && cp tabpfn_client/tests/quick_test.py ~/tabpfn-client-test.tmp && cp requirements.txt ~/tabpfn-client-test.tmp && cd ~/tabpfn-client-test.tmp
+mkdir ~/tabpfn-client-test.tmp && cp tests/quick_test.py ~/tabpfn-client-test.tmp && cp tests/quick_test_reasoning.py ~/tabpfn-client-test.tmp && cd ~/tabpfn-client-test.tmp
 uv venv && source .venv/bin/activate
 # We use --pre for the rc version and --no-deps because TestPyPI dependencies are unreliable.
-uv pip install --pre --index-url https://test.pypi.org/simple/ --no-deps tabpfn-client
-uv pip install -r requirements.txt
+pip3 download --pre --index-url https://test.pypi.org/simple/ --no-deps tabpfn-client
+uv pip install *.whl
 python quick_test.py
 ```
 
@@ -237,7 +237,7 @@ rm -rf ~/tabpfn-client-test.tmp dist
 uv pip install --upgrade build && python -m build
 uv pip install --upgrade twine && python -m twine upload --repository pypi dist/*
 # Use a separate directory for testing so we don't accidentally run the local code
-mkdir ~/tabpfn-client-test.tmp && cp tabpfn_client/tests/quick_test.py ~/tabpfn-client-test.tmp && cp requirements.txt ~/tabpfn-client-test.tmp && cd ~/tabpfn-client-test.tmp
+mkdir ~/tabpfn-client-test.tmp && cp tests/quick_test.py ~/tabpfn-client-test.tmp && cp tests/quick_test_reasoning.py ~/tabpfn-client-test.tmp && cd ~/tabpfn-client-test.tmp
 uv venv && source .venv/bin/activate
 # We use --pre in case you intend to push an rc version.
 uv pip install -U --pre tabpfn-client
