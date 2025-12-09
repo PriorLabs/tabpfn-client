@@ -26,6 +26,7 @@ def embiggen(x):
         print(f"shape after: {big.shape}")
         return big
 
+# This is a test comment. Don't merge.
 if __name__ == "__main__":
     # Patch webbrowser.open to prevent browser login
     with patch("webbrowser.open", return_value=False):
