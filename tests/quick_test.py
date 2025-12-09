@@ -29,7 +29,7 @@ def embiggen(x):
 if __name__ == "__main__":
     # Patch webbrowser.open to prevent browser login
     with patch("webbrowser.open", return_value=False):
-        trigger_multi_gpu_threshold = False
+        trigger_multi_gpu_threshold = True
 
         X, y = load_breast_cancer(return_X_y=True)
         X_train, X_test, y_train, y_test = train_test_split(
@@ -38,7 +38,7 @@ if __name__ == "__main__":
 
         if trigger_multi_gpu_threshold:
             X_train = embiggen(X_train)
-            y_train = embiggen(y_train)
+            y_train = embiggen(y_train).values.ravel()
 
         tabpfn = TabPFNClassifier.create_default_for_version(
             ModelVersion.V2_5, n_estimators=3
@@ -61,7 +61,7 @@ if __name__ == "__main__":
 
         if trigger_multi_gpu_threshold:
             X_train = embiggen(X_train)
-            y_train = embiggen(y_train)
+            y_train = embiggen(y_train).values.ravel()
 
         tabpfn = TabPFNRegressor.create_default_for_version(
             ModelVersion.V2_5, n_estimators=3
