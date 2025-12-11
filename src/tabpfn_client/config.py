@@ -31,16 +31,13 @@ def init(use_server=True):
         return
 
     if use_server:
+        is_valid_token, access_token = UserAuthenticationClient.try_reuse_existing_token()
+
         # check connection to server
         if not UserAuthenticationClient.is_accessible_connection():
             raise RuntimeError(
                 "TabPFN is inaccessible at the moment, please try again later."
             )
-
-        (
-            is_valid_token,
-            access_token,
-        ) = UserAuthenticationClient.try_reuse_existing_token()
 
         if is_valid_token:
             PromptAgent.prompt_reusing_existing_token()
