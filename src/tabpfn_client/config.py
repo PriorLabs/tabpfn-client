@@ -3,11 +3,18 @@
 
 import shutil
 
+from httpx import ConnectError
+
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.service_wrapper import UserAuthenticationClient
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client.prompt_agent import PromptAgent
 from tabpfn_client.ui import console, warn
+
+
+CONNECTION_ERROR = RuntimeError(
+    "TabPFN is inaccessible at the moment, please try again later."
+)
 
 
 class Config:
@@ -31,16 +38,17 @@ def init(use_server=True):
         return
 
     if use_server:
-        # check connection to server
-        if not UserAuthenticationClient.is_accessible_connection():
-            raise RuntimeError(
-                "TabPFN is inaccessible at the moment, please try again later."
+        try:
+            is_valid_token, access_token = (
+                UserAuthenticationClient.try_reuse_existing_token()
             )
+        except ConnectError:
+            raise CONNECTION_ERROR
 
-        (
-            is_valid_token,
-            access_token,
-        ) = UserAuthenticationClient.try_reuse_existing_token()
+        # TODO: no need to check connection again if token is valid, need to
+        # adjust tests accordingly.
+        if not UserAuthenticationClient.is_accessible_connection():
+            raise CONNECTION_ERROR
 
         if is_valid_token:
             PromptAgent.prompt_reusing_existing_token()
