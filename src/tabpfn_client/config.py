@@ -38,12 +38,15 @@ def init(use_server=True):
         return
 
     if use_server:
-        try:
-            is_valid_token, access_token = (
-                UserAuthenticationClient.try_reuse_existing_token()
-            )
-        except ConnectError as e:
-            raise CONNECTION_ERROR
+        is_valid_token, access_token = (
+            UserAuthenticationClient.try_reuse_existing_token()
+        )
+        # try:
+        #     is_valid_token, access_token = (
+        #         UserAuthenticationClient.try_reuse_existing_token()
+        #     )
+        # except ConnectError:
+        #     raise CONNECTION_ERROR
 
         # Only check connection if we didn't already validate it via token check
         # (if no token exists, we need to verify the server is accessible)
