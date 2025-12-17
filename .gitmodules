@@ -1,3 +1,0 @@
-[submodule "tabpfn_client/tabpfn_common_utils"]
-	path = tabpfn_client/tabpfn_common_utils
-	url = https://github.com/liam-sbhoo/tabpfn_common_utils.git
