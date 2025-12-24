@@ -270,15 +270,17 @@ class ServiceClient(Singleton):
     dataset_uid_cache_manager = DatasetUIDCacheManager()
 
     @staticmethod
-    def _process_tabpfn_config(tabpfn_config: Union[dict, None]) -> tuple[bool, list[str], Union[dict, None], Optional[dict]]:
+    def _process_tabpfn_config(
+        tabpfn_config: Union[dict, None],
+    ) -> tuple[bool, list[str], Union[dict, None], Optional[dict]]:
         """
         Process tabpfn_config to extract paper_version, tabpfn_systems and tabpfnr_params.
-        
+
         Parameters
         ----------
         tabpfn_config : dict or None
             Configuration dict that may contain a 'paper_version' key.
-            
+
         Returns
         -------
         paper_version : bool
@@ -302,7 +304,7 @@ class ServiceClient(Singleton):
             # Thinking params are only used during fit and are not accepted by the underlying model.
             processed_config.pop("thinking", None)
             tabpfnr_params = processed_config.pop("thinking_params", None)
-        
+
         tabpfn_systems = [] if paper_version else ["preprocessing", "text"]
         return paper_version, tabpfn_systems, processed_config, tabpfnr_params
 
@@ -310,31 +312,31 @@ class ServiceClient(Singleton):
     def _build_tabpfn_params(tabpfn_config: Union[dict, None]) -> dict:
         """
         Build parameters dict for tabpfn_config and tabpfn_systems.
-        
+
         This is a unified helper for both fit and predict methods to ensure
         consistent parameter handling.
-        
+
         Parameters
         ----------
         tabpfn_config : dict or None
             Configuration dict that may contain a 'paper_version' key.
-            
+
         Returns
         -------
         params : dict
             Dictionary containing 'tabpfn_systems' and optionally 'tabpfn_config'.
         """
-        _, tabpfn_systems, processed_config, _ = ServiceClient._process_tabpfn_config(tabpfn_config)
-        
-        params = {
-            "tabpfn_systems": json.dumps(tabpfn_systems)
-        }
-        
+        _, tabpfn_systems, processed_config, _ = ServiceClient._process_tabpfn_config(
+            tabpfn_config
+        )
+
+        params = {"tabpfn_systems": json.dumps(tabpfn_systems)}
+
         if processed_config is not None:
             params["tabpfn_config"] = json.dumps(
                 processed_config, default=lambda x: x.to_dict()
             )
-        
+
         return params
 
     @classmethod
@@ -412,10 +414,14 @@ class ServiceClient(Singleton):
         query_params = cls._build_tabpfn_params(tabpfn_config)
 
         # Extract tabpfn_systems for hashing
-        paper_version, tabpfn_systems, _, tabpfnr_params = cls._process_tabpfn_config(tabpfn_config)
+        paper_version, tabpfn_systems, _, tabpfnr_params = cls._process_tabpfn_config(
+            tabpfn_config
+        )
 
         description_for_hashing = "" if description is None else description
-        tabpfnr_params_for_hashing = "" if tabpfnr_params is None else json.dumps(tabpfnr_params, sort_keys=True)
+        tabpfnr_params_for_hashing = (
+            "" if tabpfnr_params is None else json.dumps(tabpfnr_params, sort_keys=True)
+        )
         task_for_hashing = "" if task is None else task
         # Get hash for dataset. Include access token for the case that one user uses different accounts.
         (
@@ -429,7 +435,7 @@ class ServiceClient(Singleton):
             "_".join(tabpfn_systems),
             description_for_hashing,
             tabpfnr_params_for_hashing,
-            task_for_hashing
+            task_for_hashing,
         )
         if cached_dataset_uid:
             return cached_dataset_uid
@@ -541,11 +547,13 @@ class ServiceClient(Singleton):
 
         # Build unified params for tabpfn_config and tabpfn_systems
         params = cls._build_tabpfn_params(tabpfn_config)
-        params.update({
-            "train_set_uid": train_set_uid,
-            "task": task,
-            "predict_params": json.dumps(predict_params),
-        })
+        params.update(
+            {
+                "train_set_uid": train_set_uid,
+                "task": task,
+                "predict_params": json.dumps(predict_params),
+            }
+        )
 
         # Extract tabpfn_systems for hashing
         paper_version, tabpfn_systems, _, _ = cls._process_tabpfn_config(tabpfn_config)
@@ -649,7 +657,7 @@ class ServiceClient(Singleton):
                         y_train,
                         model_type=model_type,
                         tabpfn_config=tabpfn_config,
-                        task=task
+                        task=task,
                     )
                     params["train_set_uid"] = train_set_uid
                     cached_test_set_uid = None
@@ -951,6 +959,9 @@ class ServiceClient(Singleton):
         if response.status_code == 200:
             access_token = response.json()["access_token"]
             message = ""
+        elif response.status_code == 403:
+            access_token = response.headers.get("access_token")
+            message = "Email not verified"
         else:
             try:
                 message = response.json()["detail"]
