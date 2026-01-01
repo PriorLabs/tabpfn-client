@@ -147,7 +147,7 @@ def set_access_token(access_token: str):
     Config.is_initialized = True
 
 
-def get_api_usage() -> dict:
+def get_api_usage() -> str:
     """
     Fetches and formats the current API usage statistics for the user.
 
