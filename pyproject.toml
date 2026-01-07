@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tabpfn-client"
-version = "0.2.9rc4"
+version = "0.2.9rc5"
 requires-python = ">=3.9"
 
 description = "API access for TabPFN: Foundation model for tabular data"
@@ -39,7 +39,7 @@ dependencies = [
     "xxhash>=1.1.0,<=3.6.0",
     "backoff>=2.2.0,<=2.2.1",
     "rich>=13.7.0,<=14.0.0",
-    "tabpfn-common-utils>=0.2.10,<=0.2.12"
+    "tabpfn-common-utils>=0.2.10,<=0.2.13"
 ]
 
 [project.urls]
