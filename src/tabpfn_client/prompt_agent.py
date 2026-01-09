@@ -7,6 +7,10 @@ from rich.table import Table
 
 from password_strength import PasswordPolicy
 
+from tabpfn_client.constants import (
+    URL_PRIOR_LABS_TERMS_AND_CONDITIONS,
+    URL_TABPFN_CLIENT_GITHUB_ISSUES,
+)
 from tabpfn_client.service_wrapper import UserAuthenticationClient
 from tabpfn_client.ui import (
     console,
@@ -107,7 +111,7 @@ class PromptAgent:
         )
         console.print(
             cls.indent(
-                "[cyan]Report issues: https://github.com/priorlabs/tabpfn-client/issues[/cyan]"
+                f"[cyan]Report issues: {URL_TABPFN_CLIENT_GITHUB_ISSUES}[/cyan]"
             )
         )
         console.print(cls.indent("[cyan]Press Ctrl+C anytime to exit[/cyan]"))
@@ -372,7 +376,8 @@ class PromptAgent:
     def prompt_terms_and_cond(cls) -> bool:
         """Simplified terms prompt for registration flow."""
         console.print(
-            "By using TabPFN, you agree to the terms and conditions at [link=https://www.priorlabs.ai/terms]https://www.priorlabs.ai/terms[/link]"
+            "By using TabPFN, you agree to the terms and conditions at "
+            f"[link={URL_PRIOR_LABS_TERMS_AND_CONDITIONS}]{URL_PRIOR_LABS_TERMS_AND_CONDITIONS}[/link]"
         )
 
         while True:
