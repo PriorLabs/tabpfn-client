@@ -3,24 +3,25 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional, Literal, Dict, Union
 import logging
-from typing_extensions import Self
-import numpy as np
-import pandas as pd
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from tabpfn_client.client import ModelType
-from tabpfn_client.config import init
+from typing import Any, Callable, Dict, Literal, Optional, Union
+from typing_extensions import Self
+
+import numpy as np
+import pandas as pd
 from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.utils import column_or_1d
 from sklearn.utils.multiclass import check_classification_targets
 from sklearn.utils.validation import check_is_fitted
-
-from tabpfn_client.config import Config
-from tabpfn_client.client import PredictionResult
-from tabpfn_client.constants import ModelVersion
+from tabpfn_client.client import ModelType, PredictionResult
+from tabpfn_client.config import Config, init
+from tabpfn_client.constants import (
+    URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE,
+    ModelVersion,
+)
 from tabpfn_client.service_wrapper import InferenceClient
 
 try:
@@ -322,7 +323,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 f"Number of classes {len(self.classes_)} exceeds the maximal number of "
                 f"{MAX_NUMBER_OF_CLASSES} classes supported by TabPFN. Consider using "
                 "a strategy to reduce the number of classes. For code see "
-                f"{URL_TAPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE}"
+                f"{URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE}"
             )
 
 

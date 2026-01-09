@@ -7,6 +7,10 @@ from rich.table import Table
 
 from password_strength import PasswordPolicy
 
+from tabpfn_client.constants import (
+    URL_PRIOR_LABS_TERMS_AND_CONDITIONS,
+    URL_TABPFN_CLIENT_GITHUB_ISSUES,
+)
 from tabpfn_client.service_wrapper import UserAuthenticationClient
 from tabpfn_client.ui import (
     console,
@@ -107,7 +111,7 @@ class PromptAgent:
         )
         console.print(
             cls.indent(
-                f"[cyan]Report issues: {URL_TAPFN_CLIENT_GITHUB_ISSUES}[/cyan]"
+                f"[cyan]Report issues: {URL_TABPFN_CLIENT_GITHUB_ISSUES}[/cyan]"
             )
         )
         console.print(cls.indent("[cyan]Press Ctrl+C anytime to exit[/cyan]"))
