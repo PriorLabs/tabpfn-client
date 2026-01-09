@@ -322,8 +322,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 f"Number of classes {len(self.classes_)} exceeds the maximal number of "
                 f"{MAX_NUMBER_OF_CLASSES} classes supported by TabPFN. Consider using "
                 "a strategy to reduce the number of classes. For code see "
-                "https://github.com/PriorLabs/tabpfn-extensions/blob/main/src/"
-                "tabpfn_extensions/many_class/many_class_classifier.py"
+                f"{URL_TAPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE}"
             )
 
 
