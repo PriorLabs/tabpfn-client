@@ -39,7 +39,8 @@ dependencies = [
     "xxhash>=1.1.0,<=3.6.0",
     "backoff>=2.2.0,<=2.2.1",
     "rich>=13.7.0,<=14.0.0",
-    "tabpfn-common-utils>=0.2.10,<=0.2.13"
+    "tabpfn-common-utils>=0.2.10,<=0.2.13",
+    "licensecheck>=2025.1.0"
 ]
 
 [project.urls]
