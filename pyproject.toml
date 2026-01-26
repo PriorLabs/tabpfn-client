@@ -38,7 +38,7 @@ dependencies = [
     "typing_extensions>=4.12.2,<=4.15.0",
     "xxhash>=1.1.0,<=3.6.0",
     "backoff>=2.2.0,<=2.2.1",
-    "rich>=13.7.0,<=14.0.0",
+    "rich>=13.7.0,<=14.3.1",
     "tabpfn-common-utils>=0.2.10,<=0.2.13"
 ]
 
