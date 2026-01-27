@@ -76,6 +76,14 @@ class GCPOverloaded(Exception):
     pass
 
 
+class RetryableServerError(Exception):
+    """
+    Base exception for retryable server-side HTTP errors (typically 5xx).
+    """
+
+    pass
+
+
 class SensitiveDataFilter(logging.Filter):
     def filter(self, record):
         if "password" in record.getMessage():
@@ -365,10 +373,11 @@ class ServiceClient(Singleton):
             httpx.WriteTimeout,
             httpx.RemoteProtocolError,
             GCPOverloaded,
+            RetryableServerError,
         ),
-        max_tries=3,
+        max_tries=6,
         base=2,
-        max_value=30,
+        max_value=120,
         logger=logger,
         on_backoff=_on_backoff,
         on_giveup=_on_giveup,
@@ -507,10 +516,11 @@ class ServiceClient(Singleton):
             httpx.WriteTimeout,
             httpx.RemoteProtocolError,
             GCPOverloaded,
+            RetryableServerError,
         ),
-        max_tries=3,
+        max_tries=6,
         base=2,
-        max_value=30,
+        max_value=120,
         logger=logger,
         on_backoff=_on_backoff,
         on_giveup=_on_giveup,
@@ -744,6 +754,13 @@ class ServiceClient(Singleton):
 
         # If we not only want to check the version compatibility, also raise other errors.
         if not only_version_check:
+            # Treat selected errors as retryable.
+            if response.status_code in {408, 502, 503, 504}:
+                error_msg = (
+                    f"Fail to call {method_name} with error: {response.status_code}, reason: "
+                    f"{response.reason_phrase} and text: {response.text}"
+                )
+                raise RetryableServerError(error_msg)
             if load is not None:
                 raise RuntimeError(f"Fail to call {method_name} with error: {load}")
             logger.error(
