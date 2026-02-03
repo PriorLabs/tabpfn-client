@@ -949,7 +949,9 @@ class ServiceClient(Singleton):
         return is_verified, message
 
     @classmethod
-    def login(cls, email: str, password: str) -> tuple[str, str]:
+    def login(
+        cls, email: str, password: str
+    ) -> tuple[str | None, str, int, str | None]:
         """
         Login with the provided credentials and return the access token if successful.
 
@@ -964,9 +966,14 @@ class ServiceClient(Singleton):
             The access token returned from the server. Return None if login fails.
         message : str
             The message returned from the server.
+        status_code : int
+            The status code returned from the server.
+        session_id : str | None
+            The session id returned from the server.
         """
 
         access_token = None
+        session_id = None
         response = cls.httpx_client.post(
             cls.server_endpoints.login.path,
             data=common_utils.to_oauth_request_form(email, password),
@@ -975,6 +982,7 @@ class ServiceClient(Singleton):
         cls._validate_response(response, "login", only_version_check=True)
         if response.status_code == 200:
             access_token = response.json()["access_token"]
+            session_id = response.cookies.get("session_id")
             message = ""
         elif response.status_code == 403:
             access_token = response.headers.get("access_token")
@@ -989,7 +997,7 @@ class ServiceClient(Singleton):
                 )
         # status code signifies the success of the login, issues with password, and email verification
         # 200 : success, 401 : wrong password, 403 : email not verified yet
-        return access_token, message, response.status_code
+        return access_token, message, response.status_code, session_id
 
     @classmethod
     def get_password_policy(cls) -> dict:

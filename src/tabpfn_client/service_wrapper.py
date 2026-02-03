@@ -79,7 +79,7 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
 
     @classmethod
     def set_token_by_login(cls, email: str, password: str) -> tuple[bool, str]:
-        access_token, message, status_code = ServiceClient.login(email, password)
+        access_token, message, status_code, _ = ServiceClient.login(email, password)
 
         if access_token is None:
             return False, message, status_code
