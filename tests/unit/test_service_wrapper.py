@@ -25,8 +25,11 @@ class TestUserAuthClient(unittest.TestCase):
     def test_set_token_by_valid_login(self, mock_server):
         # mock valid login response
         dummy_token = "dummy_token"
+        dummy_session_id = "dummy_session_id"
         mock_server.router.post(mock_server.endpoints.login.path).respond(
-            200, json={"access_token": dummy_token}
+            200,
+            json={"access_token": dummy_token},
+            cookies={"session_id": dummy_session_id},
         )
 
         self.assertTrue(
