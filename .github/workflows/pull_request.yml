@@ -73,7 +73,7 @@ jobs:
       # REFER: https://github.com/actions/setup-python#caching-packages-dependencies
       - name: Setup pip cache
         id: pip-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ matrix.dependency-set }}-${{ hashFiles('pyproject.toml', 'requirements-generated.txt', 'dev-requirements-generated.txt')}}
@@ -98,6 +98,15 @@ jobs:
 
       - name: Initialize submodules
         run: git submodule update --init --recursive
+
+      - name: Check for forbidden licenses
+        run: |
+          licensecheck \
+            --requirements-paths pyproject.toml \
+            --only-licenses APACHE MIT BSD ISC PYTHON UNLICENSE UNKNOWN \
+            --ignore-packages certifi "tabpfn*" \
+            --show-only-failing \
+            -0
 
       - name: Report cache status
         run: |
