@@ -33,13 +33,13 @@ dependencies = [
     "password-strength>=0.0.3.post2,<=0.0.3.post2",
     "pydantic>=2.11.7,<=2.12.4",
     "scikit-learn>=1.3.1,<=1.6.1",
-    "sseclient-py>=1.8.0,<=1.8.0",
-    "tqdm>=4.63.0,<=4.67.1",
+    "sseclient-py>=1.8.0,<=1.9.0",
+    "tqdm>=4.63.0,<=4.67.3",
     "typing_extensions>=4.12.2,<=4.15.0",
     "xxhash>=1.1.0,<=3.6.0",
     "backoff>=2.2.0,<=2.2.1",
-    "rich>=13.7.0,<=14.0.0",
-    "tabpfn-common-utils>=0.2.10,<=0.2.15"
+    "rich>=13.7.0,<=14.3.2",
+    "tabpfn-common-utils>=0.2.10,<=0.2.16"
 ]
 
 [project.urls]
