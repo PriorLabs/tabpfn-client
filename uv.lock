@@ -1324,7 +1324,7 @@ requires-dist = [
     { name = "rich", specifier = ">=13.7.0,<=14.0.0" },
     { name = "scikit-learn", specifier = ">=1.3.1,<=1.6.1" },
     { name = "sseclient-py", specifier = ">=1.8.0,<=1.8.0" },
-    { name = "tabpfn-common-utils", specifier = ">=0.2.10,<=0.2.12" },
+    { name = "tabpfn-common-utils", specifier = ">=0.2.10,<0.3.0" },
     { name = "tqdm", specifier = ">=4.63.0,<=4.67.1" },
     { name = "typing-extensions", specifier = ">=4.12.2,<=4.15.0" },
     { name = "xxhash", specifier = ">=1.1.0,<=3.6.0" },
@@ -1340,7 +1340,7 @@ dev = [
 
 [[package]]
 name = "tabpfn-common-utils"
-version = "0.2.12"
+version = "0.2.13"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock" },
@@ -1355,9 +1355,9 @@ dependencies = [
     { name = "scikit-learn" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/40/32/79b09b19bc1deabe3d8bfe3ecb5c0fdbdce580fb288827772c953c366920/tabpfn_common_utils-0.2.12.tar.gz", hash = "sha256:022db32454a1da71834a590b12c31d4560f5bdad6fa56aa0747deb3acddafce2", size = 1929304, upload-time = "2025-12-16T08:48:44.429Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ab/b7/28252232d26db27594cab9e7a89630e087e72bbfca65eedc5429893f23c4/tabpfn_common_utils-0.2.13.tar.gz", hash = "sha256:d4b62abc0bea480a1ce95e5b77f804129eff89d2de689e97ceae497a31fbb81c", size = 1930399, upload-time = "2025-12-30T15:22:54.172Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9a/7e/0bcc337ac4136b4c49f9a0ff3fd75b93bf5fdf5206b7d4e245253d0e8b70/tabpfn_common_utils-0.2.12-py3-none-any.whl", hash = "sha256:ef6193726ce655f35143b05bb53a70b7cb523e9f0f8fe77c6bfb1b5415e71b0d", size = 34982, upload-time = "2025-12-16T08:48:43.004Z" },
+    { url = "https://files.pythonhosted.org/packages/9d/4c/ce04df6a4c9dd9663c4a80da73025a88c032382837b1480bb8f78bb5181d/tabpfn_common_utils-0.2.13-py3-none-any.whl", hash = "sha256:c24fcc3ae18a7c7306084a3f41c02d2025d93522019741d50064c10078a6f0fb", size = 36138, upload-time = "2025-12-30T15:22:52.533Z" },
 ]
 
 [[package]]
