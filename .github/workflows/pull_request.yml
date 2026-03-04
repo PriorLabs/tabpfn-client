@@ -100,6 +100,7 @@ jobs:
         run: git submodule update --init --recursive
 
       - name: Check for forbidden licenses
+        if: runner.os == 'MacOS' && matrix.python-version == '3.9'
         run: |
           licensecheck \
             --requirements-paths pyproject.toml \
