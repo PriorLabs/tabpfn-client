@@ -49,7 +49,6 @@ logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
 
 
 _CHUNK_UPLOAD_PARALLELISM = 16
-# TODO revise was added with comment "temporary workaround for slow computation on server side"
 _DEFAULT_HTTPX_TIMEOUT = httpx.Timeout(timeout=900.0)  # 15 minutes
 
 
