@@ -289,13 +289,18 @@ ResponseEvents = Annotated[
 ResponseEventAdapter = TypeAdapter(ResponseEvents)
 
 
+def _get_crc32c_hash(data: bytes) -> str:
+    """Computes the CRC32C checksum and returns it as a base64 encoded string."""
+    crc32c_value = google_crc32c.value(data)
+    return base64.b64encode(struct.pack(">I", crc32c_value)).decode("ascii")
+
+
 def _serialize_to_parquet(data) -> tuple[bytes, str]:
     df = data if isinstance(data, pd.DataFrame) else pd.DataFrame(data)
     buf = io.BytesIO()
     df.to_parquet(buf, index=False, compression="zstd")
     dataset_bytes = buf.getvalue()
-    crc32c_value = google_crc32c.value(dataset_bytes)
-    crc32c_b64 = base64.b64encode(struct.pack(">I", crc32c_value)).decode("ascii")
+    crc32c_b64 = _get_crc32c_hash(dataset_bytes)
     return dataset_bytes, crc32c_b64
 
 
@@ -534,10 +539,13 @@ class ServiceClient(Singleton):
                         prepare_resp.y_train,
                     ),
                 ]
-                for future in as_completed(futures):
-                    # If one of the uploads fails, the whole fit fails but the other upload
-                    # keeps on running in the background. Ok for now.
-                    future.result()
+                try:
+                    for future in as_completed(futures):
+                        future.result()
+                except Exception:
+                    for f in futures:
+                        f.cancel()
+                    raise
 
         form_data = {"desc": description}
         query_params = cls._build_tabpfn_params(tabpfn_config)
@@ -640,6 +648,11 @@ class ServiceClient(Singleton):
             )
             return
 
+        # CRC32C hashes are computed to verify the integrity of the uploaded data.
+        # When uploading multiple chunks we want to compute per-chunk CRC32C hashes.
+        # We compute them once so retries don't recalculate.
+        chunk_hashes = [_get_crc32c_hash(c) for c in chunks]
+
         with ThreadPoolExecutor(
             max_workers=min(CHUNK_UPLOAD_PARALLELISM, num_chunks)
         ) as pool:
@@ -650,6 +663,7 @@ class ServiceClient(Singleton):
                     chunk=chunks[i],
                     headers=info.required_headers,
                     dataset=dataset,
+                    crc32c_hash=chunk_hashes[i],
                     chunk_index=i,
                 ): i
                 for i in range(num_chunks)
@@ -680,17 +694,9 @@ class ServiceClient(Singleton):
         chunk: bytes,
         headers: dict[str, str],
         dataset: str,
-        crc32c_hash: str | None = None,
+        crc32c_hash: str,
         chunk_index: int = 0,
     ) -> None:
-        # When uploading a single chunk (no splitting), we reuse the precomputed
-        # whole-file CRC32C. For multi-chunk uploads, compute per-chunk CRC32C.
-        if crc32c_hash is None:
-            crc32c_value = google_crc32c.value(chunk)
-            crc32c_hash = base64.b64encode(struct.pack(">I", crc32c_value)).decode(
-                "ascii"
-            )
-
         resp = cls.httpx_client.put(
             url,
             content=chunk,
