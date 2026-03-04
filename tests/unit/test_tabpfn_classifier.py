@@ -1,3 +1,4 @@
+import time
 import unittest
 from unittest.mock import patch
 import shutil
@@ -16,7 +17,6 @@ from tabpfn_client.service_wrapper import UserAuthenticationClient, InferenceCli
 from tests.mock_tabpfn_server import with_mock_server
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client import config
-import tabpfn_client.client as client_module
 from tabpfn_client.client import (
     GetDatasetLimitsResponse,
     PredictionResult,
@@ -31,14 +31,14 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         # set up dummy data
         reset()
         ServiceClient.reset_authorization()
-        client_module._dataset_limits = None
+        ServiceClient._dataset_limits = None
         X, y = load_breast_cancer(return_X_y=True)
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
             X, y, test_size=0.33
         )
 
     def tearDown(self):
-        client_module._dataset_limits = None
+        ServiceClient._dataset_limits = None
         # remove cache dir
         shutil.rmtree(CACHE_DIR, ignore_errors=True)
 
@@ -351,12 +351,14 @@ class TestTabPFNClassifierInference(unittest.TestCase):
     def setUp(self):
         # skip init
         config.Config.is_initialized = True
-        client_module._dataset_limits = GetDatasetLimitsResponse(
+        ServiceClient._dataset_limits = GetDatasetLimitsResponse(
             max_cells=100_000, max_cols=2000, max_size_bytes=100_000_000, max_classes=10
         )
+        ServiceClient._dataset_limits_ts = time.monotonic()
 
     def tearDown(self):
-        client_module._dataset_limits = None
+        ServiceClient._dataset_limits = None
+        ServiceClient._dataset_limits_ts = 0.0
         # undo setUp
         config.reset()
 

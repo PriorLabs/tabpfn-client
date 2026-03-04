@@ -47,8 +47,6 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
 
-_dataset_limits: GetDatasetLimitsResponse | None = None
-
 
 CHUNK_UPLOAD_PARALLELISM = 16
 
@@ -344,6 +342,8 @@ class ServiceClient(Singleton):
         follow_redirects=True,
     )
     _access_token = None
+    _dataset_limits: GetDatasetLimitsResponse | None = None
+    _dataset_limits_ts: float = 0.0
     dataset_uid_cache_manager = DatasetUIDCacheManager()
 
     @staticmethod
@@ -422,16 +422,27 @@ class ServiceClient(Singleton):
 
     @classmethod
     def get_dataset_limits(cls) -> GetDatasetLimitsResponse | None:
-        global _dataset_limits
-        if _dataset_limits is not None:
-            return _dataset_limits
+        """Fetch and cache dataset limits. The cache expires after 30 minutes.
+
+        Not thread-safe, but concurrent calls are benign: duplicates fetch the
+        same data and the reference assignment is atomic under the GIL."""
+        ttl = 1800.0  # 30 minutes
+        if (
+            cls._dataset_limits is not None
+            and (time.monotonic() - cls._dataset_limits_ts) < ttl
+        ):
+            return cls._dataset_limits
         try:
             response = cls.httpx_client.get("/tabpfn/get_dataset_limits/")
             response.raise_for_status()
-            _dataset_limits = GetDatasetLimitsResponse.model_validate(response.json())
-            return _dataset_limits
+            cls._dataset_limits = GetDatasetLimitsResponse.model_validate(
+                response.json()
+            )
+            cls._dataset_limits_ts = time.monotonic()
+            return cls._dataset_limits
         except Exception:
             logger.debug("Failed to fetch dataset limits", exc_info=True)
+            return cls._dataset_limits  # return stale value if available
 
     @classmethod
     def authorize(cls, access_token: str):
