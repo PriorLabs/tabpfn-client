@@ -49,7 +49,7 @@ logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
 
 
 _CHUNK_UPLOAD_PARALLELISM = 16
-_DEFAULT_HTTPX_TIMEOUT = httpx.Timeout(timeout=900.0)  # 15 minutes
+_DEFAULT_HTTPX_TIMEOUT = 900.0  # 15 minutes
 
 
 def _on_backoff(details: Dict[str, Any]):
