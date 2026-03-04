@@ -1531,7 +1531,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "backoff", specifier = ">=2.2.0,<=2.2.1" },
-    { name = "google-crc32c", specifier = ">=1.5.0,<=2.0.0" },
+    { name = "google-crc32c", specifier = ">=1.5.0,<=1.8.0" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.25.0,<=0.28.1" },
     { name = "omegaconf", specifier = ">=2.1.2,<=2.3.0" },
     { name = "pandas", specifier = ">=2.1.2,<=2.3.3" },
