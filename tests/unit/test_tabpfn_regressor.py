@@ -17,7 +17,12 @@ from tests.mock_tabpfn_server import with_mock_server
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client import config
 import json
-from tabpfn_client.client import PredictionResult
+import tabpfn_client.client as client_module
+from tabpfn_client.client import (
+    GetDatasetLimitsResponse,
+    PredictionResult,
+    ServiceClient,
+)
 
 
 class TestTabPFNRegressorInit(unittest.TestCase):
@@ -26,12 +31,15 @@ class TestTabPFNRegressorInit(unittest.TestCase):
     def setUp(self):
         # set up dummy data
         reset()
+        ServiceClient.reset_authorization()
+        client_module._dataset_limits = None
         X, y = load_diabetes(return_X_y=True)
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
             X, y, test_size=0.33
         )
 
     def tearDown(self):
+        client_module._dataset_limits = None
         # remove cache dir
         shutil.rmtree(CACHE_DIR, ignore_errors=True)
 
@@ -44,19 +52,29 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_prompt_and_set_token,
         mock_webbrowser_open,
     ):
-        mock_prompt_and_set_token.side_effect = (
-            lambda: UserAuthenticationClient.set_token(self.dummy_token)
-        )
+        def _set_token_and_return_true():
+            UserAuthenticationClient.set_token(self.dummy_token)
+            return True
+
+        mock_prompt_and_set_token.side_effect = _set_token_and_return_true
 
         # mock server connection
         mock_server.router.get(mock_server.endpoints.root.path).respond(200)
-        mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
         mock_server.router.post(mock_server.endpoints.fit.path).respond(
             200, json={"train_set_uid": "5"}
         )
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
+        mock_server.router.get("/tabpfn/get_dataset_limits/").respond(
+            200,
+            json={
+                "max_cells": 100_000_000,
+                "max_cols": 2000,
+                "max_size_bytes": 100_000_000,
+                "max_classes": 10,
+            },
+        )
 
         mock_predict_responses = {
             "mean": [100, 200, 300],
@@ -92,11 +110,19 @@ class TestTabPFNRegressorInit(unittest.TestCase):
     @with_mock_server()
     def test_reuse_saved_access_token(self, mock_server):
         # mock connection and authentication
-        mock_server.router.get(mock_server.endpoints.root.path).respond(200)
         mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
+        mock_server.router.get("/tabpfn/get_dataset_limits/").respond(
+            200,
+            json={
+                "max_cells": 100_000_000,
+                "max_cols": 2000,
+                "max_size_bytes": 100_000_000,
+                "max_classes": 10,
+            },
+        )
 
         # create dummy token file
         token_file = UserAuthenticationClient.CACHED_TOKEN_FILE
@@ -134,11 +160,19 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         token_file.write_text(self.dummy_token)
 
         # init classifier as usual
-        mock_server.router.get(mock_server.endpoints.root.path).respond(200)
         mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
+        mock_server.router.get("/tabpfn/get_dataset_limits/").respond(
+            200,
+            json={
+                "max_cells": 100_000_000,
+                "max_cols": 2000,
+                "max_size_bytes": 100_000_000,
+                "max_classes": 10,
+            },
+        )
         init(use_server=True)
 
         # check if access token is saved
@@ -182,9 +216,11 @@ class TestTabPFNRegressorInit(unittest.TestCase):
     def test_cache_based_on_paper_version(
         self, mock_server, mock_prompt_for_terms_and_cond, mock_prompt_and_set_token
     ):
-        mock_prompt_and_set_token.side_effect = (
-            lambda: UserAuthenticationClient.set_token(self.dummy_token)
-        )
+        def _set_token_and_return_true():
+            UserAuthenticationClient.set_token(self.dummy_token)
+            return True
+
+        mock_prompt_and_set_token.side_effect = _set_token_and_return_true
 
         # mock server connection
         mock_server.router.get(mock_server.endpoints.root.path).respond(200)
@@ -195,6 +231,19 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
+        mock_server.router.get("/tabpfn/get_dataset_limits/").respond(
+            200,
+            json={
+                "max_cells": 100_000_000,
+                "max_cols": 2000,
+                "max_size_bytes": 100_000_000,
+                "max_classes": 10,
+            },
+        )
+
+        # Ensure no cached token so we go through the full login flow
+        UserAuthenticationClient.CACHED_TOKEN_FILE.unlink(missing_ok=True)
+        ServiceClient.reset_authorization()
 
         mock_predict_response = {
             "mean": [100, 200, 300],
@@ -313,8 +362,12 @@ class TestTabPFNRegressorInference(unittest.TestCase):
     def setUp(self):
         # skip init
         config.Config.is_initialized = True
+        client_module._dataset_limits = GetDatasetLimitsResponse(
+            max_cells=100_000, max_cols=2000, max_size_bytes=100_000_000, max_classes=10
+        )
 
     def tearDown(self):
+        client_module._dataset_limits = None
         # undo setUp
         config.reset()
 
@@ -329,27 +382,30 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             tabpfn.fit(X, y)
 
     def test_data_size_check_on_train_with_oversized_data_raise_error(self):
-        X = np.random.randn(50_001, 2001)
-        y = np.random.randn(50_001)
-
+        # max_cols=2000, max_cells=100_000
         tabpfn = TabPFNRegressor()
 
-        # test oversized columns
+        # test oversized columns: 10 * 2001 = 20_010 cells (under limit) but 2001 > max_cols
+        X_wide = np.random.randn(10, 2001)
+        y_wide = np.random.randn(10)
         with self.assertRaises(ValueError):
-            tabpfn.fit(X[:10], y[:10])
+            tabpfn.fit(X_wide, y_wide)
 
-        # test oversized rows
+        # test oversized cells: 1000 * 101 = 101_000 > max_cells=100_000
+        X_big = np.random.randn(1000, 101)
+        y_big = np.random.randn(1000)
         with self.assertRaises(ValueError):
-            tabpfn.fit(X[:, :10], y)
+            tabpfn.fit(X_big, y_big)
 
     def test_data_size_check_on_predict_with_oversized_data_raise_error(self):
-        test_X = np.random.randn(50_001, 5)
+        # 1000 * 101 = 101_000 > max_cells=100_000
+        test_X = np.random.randn(1000, 101)
         tabpfn = TabPFNRegressor()
 
         # skip fitting
         tabpfn.fitted_ = True
 
-        # test oversized rows
+        # test oversized cells
         with self.assertRaises(ValueError):
             tabpfn.predict(test_X)
 

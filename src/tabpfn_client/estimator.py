@@ -16,7 +16,7 @@ from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.utils import column_or_1d
 from sklearn.utils.multiclass import check_classification_targets
 from sklearn.utils.validation import check_is_fitted
-from tabpfn_client.client import ModelType, PredictionResult
+from tabpfn_client.client import ModelType, PredictionResult, ServiceClient
 from tabpfn_client.config import Config, init
 from tabpfn_client.constants import (
     URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE,
@@ -32,10 +32,6 @@ except ImportError:
     TORCH_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
-
-MAX_ROWS = 50_000
-MAX_COLS = 2000
-MAX_NUMBER_OF_CLASSES = 10
 
 # Special string used to identify v2.5 models in model paths.
 V_2_5_IDENTIFIER = "v2.5"
@@ -103,21 +99,19 @@ class TabPFNModelSelection:
         self, task: Literal["classification", "regression"]
     ) -> Dict:
         """Get estimator parameters with the model_path resolved to full path.
-        
+
         Parameters
         ----------
         task : {"classification", "regression"}
             The task type to determine the correct model path.
-            
+
         Returns
         -------
         Dict
             Dictionary of estimator parameters with model_path updated to full path.
         """
         estimator_param = self.get_params()
-        estimator_param["model_path"] = self._model_name_to_path(
-            task, self.model_path
-        )
+        estimator_param["model_path"] = self._model_name_to_path(task, self.model_path)
         return estimator_param
 
 
@@ -251,6 +245,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                     task="classification",
                     description=description,
                 )
+
             self.last_train_set_uid = run_task(fit_task, "Fitting", with_spinner=True)
             self.last_train_X = X
             self.last_train_y = y
@@ -303,6 +298,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 X_train=self.last_train_X,
                 y_train=self.last_train_y,
             )
+
         result = run_task(predict_task, "Predicting", with_spinner=self.thinking)
         # Unpack and store metadata
         self.last_meta = result.metadata
@@ -318,13 +314,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         # TODO: should pass this from the server
         self.classes_ = np.unique(y_)
         # TODO: these things should ideally be shared with the local package
-        if len(self.classes_) > MAX_NUMBER_OF_CLASSES:
-            raise ValueError(
-                f"Number of classes {len(self.classes_)} exceeds the maximal number of "
-                f"{MAX_NUMBER_OF_CLASSES} classes supported by TabPFN. Consider using "
-                "a strategy to reduce the number of classes. For code see "
-                f"{URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE}"
-            )
+        limits = ServiceClient.get_dataset_limits()
+        if limits is not None:
+            if len(self.classes_) > limits.max_classes:
+                raise ValueError(
+                    f"Number of classes {len(self.classes_)} exceeds the maximal number of "
+                    f"{limits.max_classes} classes supported by TabPFN. Consider using "
+                    "a strategy to reduce the number of classes. For code see "
+                    f"{URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE}"
+                )
 
 
 class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
@@ -446,6 +444,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     task="regression",
                     description=description,
                 )
+
             self.last_train_set_uid = run_task(fit_task, "Fitting", with_spinner=True)
             self.last_train_X = X
             self.last_train_y = y
@@ -513,6 +512,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                 X_train=self.last_train_X,
                 y_train=self.last_train_y,
             )
+
         result = run_task(predict_task, "Predicting", with_spinner=self.thinking)
         # Unpack and store metadata
         self.last_meta = result.metadata
@@ -545,8 +545,8 @@ def validate_data_size(X: np.ndarray, y: Union[np.ndarray, None] = None):
     Check the integrity of the training data.
     - check if the number of rows between X and y is consistent
         if y is not None (ValueError)
-    - check if the number of rows is less than MAX_ROWS (ValueError)
-    - check if the number of columns is less than MAX_COLS (ValueError)
+    - check if the number of cells (rows * cols) is within server limits (ValueError)
+    - check if the number of columns is within server limits (ValueError)
     """
 
     # check if the number of samples is consistent (ValueError)
@@ -554,11 +554,19 @@ def validate_data_size(X: np.ndarray, y: Union[np.ndarray, None] = None):
         if X.shape[0] != y.shape[0]:
             raise ValueError("X and y must have the same number of samples")
 
-    # length and feature assertions
-    if X.shape[0] > MAX_ROWS:
-        raise ValueError(f"The number of rows cannot be more than {MAX_ROWS}.")
-    if X.shape[1] > MAX_COLS:
-        raise ValueError(f"The number of columns cannot be more than {MAX_COLS}.")
+    limits = ServiceClient.get_dataset_limits()
+    if limits is None:
+        return
+
+    n_cells = X.shape[0] * X.shape[1]
+    if n_cells > limits.max_cells:
+        raise ValueError(
+            f"The number of cells ({n_cells}) exceeds the maximum of {limits.max_cells}."
+        )
+    if X.shape[1] > limits.max_cols:
+        raise ValueError(
+            f"The number of columns ({X.shape[1]}) exceeds the maximum of {limits.max_cols}."
+        )
 
 
 def _check_paper_version(paper_version, X):
@@ -641,8 +649,6 @@ def run_task(task: Callable, message: str, with_spinner: bool) -> Any:
                 i += 1
             result = future.result()
         # Remove spinner, but keep elapsed time
-        sys.stdout.write(
-            f"\r{minutes:02d}:{seconds:02d} {message}... Done!\n"
-        )
+        sys.stdout.write(f"\r{minutes:02d}:{seconds:02d} {message}... Done!\n")
         sys.stdout.flush()
     return result

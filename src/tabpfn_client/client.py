@@ -2,20 +2,29 @@
 #  Licensed under the Apache License, Version 2.0
 
 from __future__ import annotations
+import base64
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from importlib.metadata import PackageNotFoundError, version
+import io
 import json
 import logging
 import os
 from pathlib import Path
 import re
+import struct
 import threading
 import time
 import traceback
 from typing import Annotated, Any, Dict, Literal, Optional, Union
+
+import google_crc32c
+
+import pandas as pd
+from uuid import UUID
 
 from tqdm import tqdm
 
@@ -37,6 +46,11 @@ logger = logging.getLogger(__name__)
 # avoid logging of httpx and httpcore on client side
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
+
+_dataset_limits: GetDatasetLimitsResponse | None = None
+
+
+CHUNK_UPLOAD_PARALLELISM = 16
 
 
 def _on_backoff(details: Dict[str, Any]):
@@ -198,7 +212,6 @@ def get_client_version() -> str:
         return "5.5.5"
 
 
-# TODO(fjablonski): Move to common package.
 class FitProgressEvent(BaseModel):
     """
     Update to the progress of fitting the model.
@@ -226,11 +239,66 @@ class FitErrorEvent(BaseModel):
     message: str
 
 
+###############################################################
+## Gapi models                                               ##
+###############################################################
+
+
+# From: apps/gapi/routers/tabpfn/prepare_train_set_upload.py
+class FileInfo(BaseModel):
+    format: Literal["csv", "parquet"]
+    hash: str
+    size_bytes: int
+    use_chunks: bool = True
+
+
+class FileUploadInfo(BaseModel):
+    signed_urls: list[str]
+    expires_at: float
+    required_headers: dict[str, str]
+
+
+class PrepareTrainSetUploadRequest(BaseModel):
+    x_train: FileInfo
+    y_train: FileInfo
+
+
+class PrepareTrainSetUploadResponse(BaseModel):
+    upload_id: UUID
+    x_train: FileUploadInfo
+    y_train: FileUploadInfo
+
+
+class DuplicateFilesUploadedResponse(BaseModel):
+    message: str
+    upload_id: UUID
+
+
+# From: apps/gapi/routers/tabpfn/get_dataset_limits.py
+class GetDatasetLimitsResponse(BaseModel):
+    max_size_bytes: int
+    max_cells: int
+    max_cols: int
+    max_classes: int
+
+
+###############################################################
+
 ResponseEvents = Annotated[
     Union[FitCompleteEvent, FitProgressEvent, FitErrorEvent],
     Field(discriminator="status"),
 ]
 ResponseEventAdapter = TypeAdapter(ResponseEvents)
+
+
+def _serialize_to_parquet(data) -> tuple[bytes, str]:
+    df = data if isinstance(data, pd.DataFrame) else pd.DataFrame(data)
+    buf = io.BytesIO()
+    df.to_parquet(buf, index=False, compression="zstd")
+    dataset_bytes = buf.getvalue()
+    crc32c_value = google_crc32c.value(dataset_bytes)
+    crc32c_b64 = base64.b64encode(struct.pack(">I", crc32c_value)).decode("ascii")
+    return dataset_bytes, crc32c_b64
 
 
 @dataclass(frozen=True)
@@ -273,6 +341,7 @@ class ServiceClient(Singleton):
         timeout=httpx_timeout_s,
         headers={"client-version": get_client_version()},
         transport=SelectiveHTTP2Transport(http2_paths=[fit_path]),
+        follow_redirects=True,
     )
     _access_token = None
     dataset_uid_cache_manager = DatasetUIDCacheManager()
@@ -352,6 +421,19 @@ class ServiceClient(Singleton):
         return cls._access_token
 
     @classmethod
+    def get_dataset_limits(cls) -> GetDatasetLimitsResponse | None:
+        global _dataset_limits
+        if _dataset_limits is not None:
+            return _dataset_limits
+        try:
+            response = cls.httpx_client.get("/tabpfn/get_dataset_limits/")
+            response.raise_for_status()
+            _dataset_limits = GetDatasetLimitsResponse.model_validate(response.json())
+            return _dataset_limits
+        except Exception:
+            logger.debug("Failed to fetch dataset limits", exc_info=True)
+
+    @classmethod
     def authorize(cls, access_token: str):
         cls._access_token = access_token
         cls.httpx_client.headers.update(
@@ -364,24 +446,6 @@ class ServiceClient(Singleton):
         cls.httpx_client.headers.pop("Authorization", None)
 
     @classmethod
-    @backoff.on_exception(
-        backoff.expo,
-        (
-            httpx.ConnectError,
-            httpx.TimeoutException,
-            httpx.ReadTimeout,
-            httpx.WriteTimeout,
-            httpx.RemoteProtocolError,
-            GCPOverloaded,
-            RetryableServerError,
-        ),
-        max_tries=6,
-        base=2,
-        max_value=120,
-        logger=logger,
-        on_backoff=_on_backoff,
-        on_giveup=_on_giveup,
-    )
     def fit(
         cls,
         X,
@@ -415,65 +479,91 @@ class ServiceClient(Singleton):
             The unique ID of the train set in the server.
 
         """
-        # Save until prediction for retrying train set upload for the case that anything went wrong with cache.
-        X_serialized = common_utils.serialize_to_csv_formatted_bytes(X)
-        y_serialized = common_utils.serialize_to_csv_formatted_bytes(y)
+        if model_type == ModelType.TABPFN_R:
+            raise NotImplementedError("TABPFN-R is no longer supported")
 
-        # Build unified params for tabpfn_config and tabpfn_systems
-        query_params = cls._build_tabpfn_params(tabpfn_config)
+        x_bytes, x_crc32c_hash = _serialize_to_parquet(X)
+        y_bytes, y_crc32c_hash = _serialize_to_parquet(y)
 
-        # Extract tabpfn_systems for hashing
-        paper_version, tabpfn_systems, _, tabpfnr_params = cls._process_tabpfn_config(
-            tabpfn_config
+        limits = cls.get_dataset_limits()
+        if limits is not None:
+            for name, data in [("x_train", x_bytes), ("y_train", y_bytes)]:
+                if len(data) > limits.max_size_bytes:
+                    raise ValueError(
+                        f"Compressed size of {name} ({len(data)} bytes) exceeds "
+                        f"the server limit of {limits.max_size_bytes} bytes."
+                    )
+
+        prepare_resp = cls._prepare_train_set_upload(
+            PrepareTrainSetUploadRequest(
+                x_train=FileInfo(
+                    format="parquet", hash=x_crc32c_hash, size_bytes=len(x_bytes)
+                ),
+                y_train=FileInfo(
+                    format="parquet", hash=y_crc32c_hash, size_bytes=len(y_bytes)
+                ),
+            )
         )
 
-        description_for_hashing = "" if description is None else description
-        tabpfnr_params_for_hashing = (
-            "" if tabpfnr_params is None else json.dumps(tabpfnr_params, sort_keys=True)
-        )
-        task_for_hashing = "" if task is None else task
-        # Get hash for dataset. Include access token for the case that one user uses different accounts.
-        (
-            cached_dataset_uid,
-            dataset_hash,
-        ) = cls.dataset_uid_cache_manager.get_dataset_uid(
-            X_serialized,
-            y_serialized,
-            model_type.name,
-            cls._access_token,
-            "_".join(tabpfn_systems),
-            description_for_hashing,
-            tabpfnr_params_for_hashing,
-            task_for_hashing,
-        )
-        if cached_dataset_uid:
-            return cached_dataset_uid
-
-        if model_type == ModelType.TABPFN:
-            url = cls.server_endpoints.fit.path
-        elif model_type == ModelType.TABPFN_R:
-            url = cls.server_endpoints.fit_reasoning.path
-        else:
-            raise RuntimeError(f"Unknown model type {model_type}")
+        if isinstance(prepare_resp, PrepareTrainSetUploadResponse):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [
+                    pool.submit(
+                        cls._upload_to_gcs,
+                        "x_train",
+                        x_bytes,
+                        x_crc32c_hash,
+                        prepare_resp.x_train,
+                    ),
+                    pool.submit(
+                        cls._upload_to_gcs,
+                        "y_train",
+                        y_bytes,
+                        y_crc32c_hash,
+                        prepare_resp.y_train,
+                    ),
+                ]
+                for future in as_completed(futures):
+                    # If one of the uploads fails, the whole fit fails but the other upload
+                    # keeps on running in the background. Ok for now.
+                    future.result()
 
         form_data = {"desc": description}
+        query_params = cls._build_tabpfn_params(tabpfn_config)
+        query_params["task"] = task
+        query_params["upload_id"] = str(prepare_resp.upload_id)
 
-        if task:
-            query_params["task"] = task
-        else:
-            assert model_type != ModelType.TABPFN_R, "Thinking mode requires a task."
-        if tabpfnr_params:
-            form_data["tabpfnr_params"] = json.dumps(tabpfnr_params)
+        train_set_uid = cls._fit(form_data, query_params)
 
+        # Note: at the moment we do prevent re-uploading but we do not prevent re-fitting
+        # as the TrainSet.status is not implemented yet.
+        return train_set_uid
+
+    @backoff.on_exception(
+        backoff.constant,
+        (
+            httpx.ConnectError,
+            httpx.TimeoutException,
+            httpx.ReadTimeout,
+            httpx.WriteTimeout,
+            httpx.RemoteProtocolError,
+            RetryableServerError,
+        ),
+        max_tries=2,
+        interval=0,
+        logger=logger,
+        on_backoff=_on_backoff,
+        on_giveup=_on_giveup,
+    )
+    @classmethod
+    def _fit(
+        cls,
+        form_data: dict[str, Any],
+        query_params: dict[str, Any],
+    ) -> str:
         with cls.httpx_client.stream(
             "POST",
-            url=url,
-            files=common_utils.to_httpx_post_file_format(
-                [
-                    ("x_file", "x_train_filename", X_serialized),
-                    ("y_file", "y_train_filename", y_serialized),
-                ]
-            ),
+            url="/fit/",
             data=form_data,
             params=query_params,
         ) as response:
@@ -493,7 +583,6 @@ class ServiceClient(Singleton):
                     else:
                         # Re-raise the original error if we can't handle it
                         raise e
-
                 if isinstance(event, FitCompleteEvent):
                     train_set_uid = event.train_set_uid
                 elif isinstance(event, FitErrorEvent):
@@ -502,9 +591,112 @@ class ServiceClient(Singleton):
 
         if not train_set_uid:
             raise RuntimeError("Error during fit. No valid model received.")
-
-        cls.dataset_uid_cache_manager.add_dataset_uid(dataset_hash, train_set_uid)
         return train_set_uid
+
+    @classmethod
+    def _prepare_train_set_upload(
+        cls,
+        req: PrepareTrainSetUploadRequest,
+    ) -> PrepareTrainSetUploadResponse | DuplicateFilesUploadedResponse:
+        resp = cls.httpx_client.post(
+            url="/tabpfn/prepare_train_set_upload/",
+            json=req.model_dump(),
+        )
+        if resp.status_code == 409:
+            return DuplicateFilesUploadedResponse.model_validate(resp.json())
+        cls._validate_response(resp, "prepare_train_set_upload")
+        return PrepareTrainSetUploadResponse.model_validate(resp.json())
+
+    @classmethod
+    def _upload_to_gcs(
+        cls, dataset: str, data: bytes, crc32c_hash: str, info: FileUploadInfo
+    ) -> None:
+        num_chunks = len(info.signed_urls)
+        chunk_size = len(data) // num_chunks
+        chunks = []
+        for i in range(num_chunks):
+            start = i * chunk_size
+            end = start + chunk_size if i < num_chunks - 1 else len(data)
+            chunks.append(data[start:end])
+
+        if num_chunks == 1:
+            cls._upload_single_chunk(
+                url=info.signed_urls[0],
+                chunk=chunks[0],
+                headers=info.required_headers,
+                dataset=dataset,
+                crc32c_hash=crc32c_hash,
+            )
+            return
+
+        with ThreadPoolExecutor(
+            max_workers=min(CHUNK_UPLOAD_PARALLELISM, num_chunks)
+        ) as pool:
+            futures = {
+                pool.submit(
+                    cls._upload_single_chunk,
+                    url=info.signed_urls[i],
+                    chunk=chunks[i],
+                    headers=info.required_headers,
+                    dataset=dataset,
+                    chunk_index=i,
+                ): i
+                for i in range(num_chunks)
+            }
+            for future in as_completed(futures):
+                future.result()
+
+    @backoff.on_exception(
+        backoff.constant,
+        (
+            httpx.ConnectError,
+            httpx.TimeoutException,
+            httpx.ReadTimeout,
+            httpx.WriteTimeout,
+            httpx.RemoteProtocolError,
+            RetryableServerError,
+        ),
+        max_tries=2,
+        interval=0,
+        logger=logger,
+        on_backoff=_on_backoff,
+        on_giveup=_on_giveup,
+    )
+    @classmethod
+    def _upload_single_chunk(
+        cls,
+        url: str,
+        chunk: bytes,
+        headers: dict[str, str],
+        dataset: str,
+        crc32c_hash: str | None = None,
+        chunk_index: int = 0,
+    ) -> None:
+        # When uploading a single chunk (no splitting), we reuse the precomputed
+        # whole-file CRC32C. For multi-chunk uploads, compute per-chunk CRC32C.
+        if crc32c_hash is None:
+            crc32c_value = google_crc32c.value(chunk)
+            crc32c_hash = base64.b64encode(struct.pack(">I", crc32c_value)).decode(
+                "ascii"
+            )
+
+        resp = cls.httpx_client.put(
+            url,
+            content=chunk,
+            headers={**headers, "x-goog-hash": f"crc32c={crc32c_hash}"},
+            timeout=600,
+        )
+        if resp.status_code == 200:
+            return
+        if resp.status_code in {502, 503, 504}:
+            raise RetryableServerError(
+                f"GCS upload failed for dataset {dataset} at chunk {chunk_index}: "
+                f"{resp.status_code} {resp.text}"
+            )
+        raise RuntimeError(
+            f"GCS upload permanently failed for dataset {dataset} at chunk {chunk_index}: "
+            f"{resp.status_code} {resp.text}"
+        )
 
     @classmethod
     @backoff.on_exception(
