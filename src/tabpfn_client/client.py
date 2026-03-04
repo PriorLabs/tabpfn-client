@@ -48,7 +48,9 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
 
 
-CHUNK_UPLOAD_PARALLELISM = 16
+_CHUNK_UPLOAD_PARALLELISM = 16
+# TODO revise was added with comment "temporary workaround for slow computation on server side"
+_DEFAULT_HTTPX_TIMEOUT = httpx.Timeout(timeout=900.0)  # 15 minutes
 
 
 def _on_backoff(details: Dict[str, Any]):
@@ -305,6 +307,24 @@ def _serialize_to_parquet(data) -> tuple[bytes, str]:
 
 
 @dataclass(frozen=True)
+class ClientOptions:
+    """
+    Options for the client.
+    Can be used to override default client behavior for a single request.
+
+    Parameters
+    ----------
+    timeout : float, optional
+        Timeout for the request in seconds.
+    extra_headers : dict[str, str], optional
+        Extra headers for the request.
+    """
+
+    timeout: float = _DEFAULT_HTTPX_TIMEOUT
+    extra_headers: dict[str, str] | None = None
+
+
+@dataclass(frozen=True)
 class PredictionResult:
     y_pred: Union[np.ndarray, list[np.ndarray], dict[str, np.ndarray]]
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -335,13 +355,10 @@ class ServiceClient(Singleton):
     server_config = SERVER_CONFIG
     server_endpoints = SERVER_CONFIG["endpoints"]
     base_url = f"{server_config.protocol}://{server_config.host}:{server_config.port}"
-    httpx_timeout_s = (
-        4 * 5 * 60 + 15  # temporary workaround for slow computation on server side
-    )
     fit_path = SERVER_CONFIG["endpoints"]["fit"]["path"]
     httpx_client = httpx.Client(
         base_url=base_url,
-        timeout=httpx_timeout_s,
+        timeout=_DEFAULT_HTTPX_TIMEOUT,
         headers={"client-version": get_client_version()},
         transport=SelectiveHTTP2Transport(http2_paths=[fit_path]),
         follow_redirects=True,
@@ -470,6 +487,7 @@ class ServiceClient(Singleton):
         tabpfn_config: Union[dict, None] = None,
         task: Optional[Literal["classification", "regression"]] = None,
         description: str = "",
+        client_options: ClientOptions | None = None,
     ) -> str:
         """
         Upload a train set to server and return the train set UID if successful.
@@ -488,6 +506,10 @@ class ServiceClient(Singleton):
             Task type: "classification" or "regression"
         description: str, optional
             Description of the dataset and task for the server.
+        client_options : ClientOptions, optional
+            Per-request options (e.g. timeout, extra_headers) for the fitting API call
+            only. Does not apply to file uploads. Because uploads can run before fitting,
+            this method may return later than the timeout specified.
 
         Returns
         -------
@@ -495,6 +517,8 @@ class ServiceClient(Singleton):
             The unique ID of the train set in the server.
 
         """
+        client_options = client_options or ClientOptions()
+
         if model_type == ModelType.TABPFN_R:
             raise NotImplementedError("TABPFN-R is no longer supported")
 
@@ -511,14 +535,15 @@ class ServiceClient(Singleton):
                     )
 
         prepare_resp = cls._prepare_train_set_upload(
-            PrepareTrainSetUploadRequest(
+            req=PrepareTrainSetUploadRequest(
                 x_train=FileInfo(
                     format="parquet", hash=x_crc32c_hash, size_bytes=len(x_bytes)
                 ),
                 y_train=FileInfo(
                     format="parquet", hash=y_crc32c_hash, size_bytes=len(y_bytes)
                 ),
-            )
+            ),
+            extra_headers=client_options.extra_headers,
         )
 
         if isinstance(prepare_resp, PrepareTrainSetUploadResponse):
@@ -552,7 +577,12 @@ class ServiceClient(Singleton):
         query_params["task"] = task
         query_params["upload_id"] = str(prepare_resp.upload_id)
 
-        train_set_uid = cls._fit(form_data, query_params)
+        train_set_uid = cls._fit(
+            form_data=form_data,
+            query_params=query_params,
+            timeout=client_options.timeout,
+            extra_headers=client_options.extra_headers,
+        )
 
         # Note: at the moment we do prevent re-uploading but we do not prevent re-fitting
         # as the TrainSet.status is not implemented yet.
@@ -579,12 +609,16 @@ class ServiceClient(Singleton):
         cls,
         form_data: dict[str, Any],
         query_params: dict[str, Any],
+        timeout: float | None = None,
+        extra_headers: dict[str, str] | None = None,
     ) -> str:
         with cls.httpx_client.stream(
             "POST",
             url="/fit/",
             data=form_data,
             params=query_params,
+            timeout=timeout,
+            headers=extra_headers,
         ) as response:
             cls._validate_response(response, "fit")
             train_set_uid = None
@@ -616,10 +650,12 @@ class ServiceClient(Singleton):
     def _prepare_train_set_upload(
         cls,
         req: PrepareTrainSetUploadRequest,
+        extra_headers: dict[str, str] | None = None,
     ) -> PrepareTrainSetUploadResponse | DuplicateFilesUploadedResponse:
         resp = cls.httpx_client.post(
             url="/tabpfn/prepare_train_set_upload/",
             json=req.model_dump(),
+            headers=extra_headers,
         )
         if resp.status_code == 409:
             return DuplicateFilesUploadedResponse.model_validate(resp.json())
@@ -654,7 +690,7 @@ class ServiceClient(Singleton):
         chunk_hashes = [_get_crc32c_hash(c) for c in chunks]
 
         with ThreadPoolExecutor(
-            max_workers=min(CHUNK_UPLOAD_PARALLELISM, num_chunks)
+            max_workers=min(_CHUNK_UPLOAD_PARALLELISM, num_chunks)
         ) as pool:
             futures = {
                 pool.submit(
