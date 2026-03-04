@@ -59,6 +59,13 @@ class TestTabPFNClassifierInit(unittest.TestCase):
 
         # mock server connection
         mock_server.router.get(mock_server.endpoints.root.path).respond(200)
+        mock_server.router.post("/tabpfn/prepare_train_set_upload/").respond(
+            409,
+            json={
+                "message": "duplicate",
+                "upload_id": "00000000-0000-0000-0000-000000000001",
+            },
+        )
         mock_server.router.post(mock_server.endpoints.fit.path).respond(
             200, json={"train_set_uid": "5"}
         )
@@ -225,7 +232,13 @@ class TestTabPFNClassifierInit(unittest.TestCase):
 
         # mock server connection
         mock_server.router.get(mock_server.endpoints.root.path).respond(200)
-        mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
+        mock_server.router.post("/tabpfn/prepare_train_set_upload/").respond(
+            409,
+            json={
+                "message": "duplicate",
+                "upload_id": "00000000-0000-0000-0000-000000000001",
+            },
+        )
         fit_route = mock_server.router.post(mock_server.endpoints.fit.path)
         fit_route.respond(200, json={"train_set_uid": "5"})
 
@@ -240,6 +253,13 @@ class TestTabPFNClassifierInit(unittest.TestCase):
                 "max_size_bytes": 100_000_000,
                 "max_classes": 10,
             },
+        )
+
+        mock_predict_response = [[1, 0.0], [0.9, 0.1], [0.01, 0.99]]
+        mock_server.router.post(mock_server.endpoints.predict.path).respond(
+            200,
+            content=f"data: {json.dumps({'event': 'result', 'data': {'classification': mock_predict_response, 'test_set_uid': '6'}})}\n\n",
+            headers={"Content-Type": "text/event-stream"},
         )
 
         # Ensure no cached token so we go through the full login flow
@@ -262,11 +282,12 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         tabpfn_true.fit(X, y)
         tabpfn_true.predict(test_X)
 
-        # Ensure fit endpoint is not called again
+        # Fit endpoint is called every time (no client-side caching),
+        # but prepare_train_set_upload returns 409 to avoid re-uploading.
         self.assertEqual(
             fit_route.call_count,
-            1,
-            "Fit endpoint should not be called again with the same paper_version",
+            2,
+            "Fit endpoint should be called each time",
         )
 
         # Initialize with paper_version=False
@@ -275,10 +296,9 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         tabpfn_false.fit(X, y)
         tabpfn_false.predict(test_X)
 
-        # check fit is called
         self.assertEqual(
             fit_route.call_count,
-            2,
+            3,
             "Fit endpoint should be called again with a different paper_version",
         )
 
@@ -286,27 +306,11 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         tabpfn_false.fit(X, y)
         tabpfn_false.predict(test_X)
 
-        # Ensure fit endpoint is not called again
         self.assertEqual(
             fit_route.call_count,
-            2,
-            "Fit endpoint should not be called again with the same paper_version",
+            4,
+            "Fit endpoint should be called each time",
         )
-
-        # TODO: fix this
-        # # Check that different cache entries are created for training set
-        # cache_manager = ServiceClient.dataset_uid_cache_manager
-        # X_serialized = common_utils.serialize_to_csv_formatted_bytes(X)
-        # y_serialized = common_utils.serialize_to_csv_formatted_bytes(y)
-        # uid_true_train, hash_true_train = cache_manager.get_dataset_uid(
-        #     X_serialized, y_serialized, self.dummy_token, "_".join([])
-        # )
-        # uid_false_train, hash_false_train = cache_manager.get_dataset_uid(
-        #     X_serialized,
-        #     y_serialized,
-        #     self.dummy_token,
-        #     "_".join(["preprocessing", "text"]),
-        # )
 
         # self.assertNotEqual(
         #     hash_true_train,

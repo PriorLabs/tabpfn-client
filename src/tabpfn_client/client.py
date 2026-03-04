@@ -587,6 +587,7 @@ class ServiceClient(Singleton):
         # as the TrainSet.status is not implemented yet.
         return train_set_uid
 
+    @classmethod
     @backoff.on_exception(
         backoff.constant,
         (
@@ -603,7 +604,6 @@ class ServiceClient(Singleton):
         on_backoff=_on_backoff,
         on_giveup=_on_giveup,
     )
-    @classmethod
     def _fit(
         cls,
         form_data: dict[str, Any],
@@ -706,6 +706,7 @@ class ServiceClient(Singleton):
             for future in as_completed(futures):
                 future.result()
 
+    @classmethod
     @backoff.on_exception(
         backoff.constant,
         (
@@ -722,7 +723,6 @@ class ServiceClient(Singleton):
         on_backoff=_on_backoff,
         on_giveup=_on_giveup,
     )
-    @classmethod
     def _upload_single_chunk(
         cls,
         url: str,
