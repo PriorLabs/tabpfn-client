@@ -305,7 +305,7 @@ def _serialize_to_parquet(data) -> tuple[bytes, str]:
     return dataset_bytes, crc32c_b64
 
 
-@dataclass(frozen=True)
+@dataclass
 class ClientOptions:
     """
     Options for the client.
