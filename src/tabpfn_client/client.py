@@ -47,10 +47,7 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
 
-
-DISABLE_DS_CACHING = bool(os.getenv("DISABLE_DS_CACHING", False))
-
-_CHUNK_UPLOAD_PARALLELISM = 16
+_DEFAULT_CHUNK_UPLOAD_PARALLELISM = 16
 _DEFAULT_HTTPX_TIMEOUT = 900.0  # 15 minutes
 
 
@@ -248,7 +245,7 @@ class FitErrorEvent(BaseModel):
 # From: apps/gapi/routers/tabpfn/prepare_train_set_upload.py
 class FileInfo(BaseModel):
     format: Literal["csv", "parquet"]
-    hash: str | None = None
+    hash: Optional[str] = None
     size_bytes: int
     use_chunks: bool = True
 
@@ -540,7 +537,7 @@ class ServiceClient(Singleton):
                         f"the server limit of {limits.max_size_bytes} bytes."
                     )
 
-        if dedup_files and not DISABLE_DS_CACHING:
+        if dedup_files and not _caching_disabled():
             x_dedup_hash = x_crc32c_hash
             y_dedup_hash = y_crc32c_hash
         else:
@@ -706,7 +703,7 @@ class ServiceClient(Singleton):
         chunk_hashes = [_get_crc32c_hash(c) for c in chunks]
 
         with ThreadPoolExecutor(
-            max_workers=min(_CHUNK_UPLOAD_PARALLELISM, num_chunks)
+            max_workers=min(_DEFAULT_CHUNK_UPLOAD_PARALLELISM, num_chunks)
         ) as pool:
             futures = {
                 pool.submit(
