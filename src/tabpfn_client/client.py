@@ -657,7 +657,7 @@ class ServiceClient(Singleton):
             headers=extra_headers,
         )
         if resp.status_code == 409:
-            return DuplicateFilesUploadedResponse.model_validate(resp.json())
+            return DuplicateFilesUploadedResponse.model_validate(resp.json()["detail"])
         cls._validate_response(resp, "prepare_train_set_upload")
         return PrepareTrainSetUploadResponse.model_validate(resp.json())
 
