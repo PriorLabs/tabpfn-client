@@ -48,6 +48,8 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
 
 
+DISABLE_DS_CACHING = bool(os.getenv("DISABLE_DS_CACHING", False))
+
 _CHUNK_UPLOAD_PARALLELISM = 16
 _DEFAULT_HTTPX_TIMEOUT = 900.0  # 15 minutes
 
@@ -246,7 +248,7 @@ class FitErrorEvent(BaseModel):
 # From: apps/gapi/routers/tabpfn/prepare_train_set_upload.py
 class FileInfo(BaseModel):
     format: Literal["csv", "parquet"]
-    hash: str
+    hash: str | None = None
     size_bytes: int
     use_chunks: bool = True
 
@@ -487,6 +489,7 @@ class ServiceClient(Singleton):
         task: Optional[Literal["classification", "regression"]] = None,
         description: str = "",
         client_options: ClientOptions | None = None,
+        dedup_files: bool = True,
     ) -> str:
         """
         Upload a train set to server and return the train set UID if successful.
@@ -509,6 +512,10 @@ class ServiceClient(Singleton):
             Per-request options (e.g. timeout, extra_headers) for the fitting API call
             only. Does not apply to file uploads. Because uploads can run before fitting,
             this method may return later than the timeout specified.
+        dedup_files: bool, optional
+            If True, the client will check if the same files (identified by their content hash)
+            have already been uploaded and return the corresponding upload_id. Default is True.
+            This is only used if DISABLE_DS_CACHING is False.
 
         Returns
         -------
@@ -533,17 +540,27 @@ class ServiceClient(Singleton):
                         f"the server limit of {limits.max_size_bytes} bytes."
                     )
 
+        if dedup_files and not DISABLE_DS_CACHING:
+            x_dedup_hash = x_crc32c_hash
+            y_dedup_hash = y_crc32c_hash
+        else:
+            x_dedup_hash = None
+            y_dedup_hash = None
+
         prepare_resp = cls._prepare_train_set_upload(
             req=PrepareTrainSetUploadRequest(
                 x_train=FileInfo(
-                    format="parquet", hash=x_crc32c_hash, size_bytes=len(x_bytes)
+                    format="parquet", hash=x_dedup_hash, size_bytes=len(x_bytes)
                 ),
                 y_train=FileInfo(
-                    format="parquet", hash=y_crc32c_hash, size_bytes=len(y_bytes)
+                    format="parquet", hash=y_dedup_hash, size_bytes=len(y_bytes)
                 ),
             ),
             extra_headers=client_options.extra_headers,
         )
+
+        if isinstance(prepare_resp, DuplicateFilesUploadedResponse):
+            logger.warning(prepare_resp.message)
 
         if isinstance(prepare_resp, PrepareTrainSetUploadResponse):
             with ThreadPoolExecutor(max_workers=2) as pool:
