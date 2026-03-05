@@ -62,8 +62,10 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         mock_server.router.post("/tabpfn/prepare_train_set_upload/").respond(
             409,
             json={
-                "message": "duplicate",
-                "upload_id": "00000000-0000-0000-0000-000000000001",
+                "detail": {
+                    "message": "duplicate",
+                    "upload_id": "00000000-0000-0000-0000-000000000001",
+                }
             },
         )
         mock_server.router.post(mock_server.endpoints.fit.path).respond(
@@ -235,8 +237,10 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         mock_server.router.post("/tabpfn/prepare_train_set_upload/").respond(
             409,
             json={
-                "message": "duplicate",
-                "upload_id": "00000000-0000-0000-0000-000000000001",
+                "detail": {
+                    "message": "duplicate",
+                    "upload_id": "00000000-0000-0000-0000-000000000001",
+                }
             },
         )
         fit_route = mock_server.router.post(mock_server.endpoints.fit.path)
