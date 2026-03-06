@@ -314,12 +314,12 @@ class ClientOptions:
     ----------
     timeout : float, optional
         Timeout for the request in seconds.
-    extra_headers : dict[str, str], optional
-        Extra headers for the request.
+    headers : dict[str, str], optional
+        Headers for the request overriding the default headers.
     """
 
     timeout: float = _DEFAULT_HTTPX_TIMEOUT
-    extra_headers: dict[str, str] = field(default_factory=dict)
+    headers: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -506,7 +506,7 @@ class ServiceClient(Singleton):
         description: str, optional
             Description of the dataset and task for the server.
         client_options : ClientOptions, optional
-            Per-request options (e.g. timeout, extra_headers) for the fitting API call
+            Per-request options (e.g. timeout, headers) for the fitting API call
             only. Does not apply to file uploads. Because uploads can run before fitting,
             this method may return later than the timeout specified.
         dedup_files: bool, optional
@@ -553,7 +553,7 @@ class ServiceClient(Singleton):
                     format="parquet", hash=y_dedup_hash, size_bytes=len(y_bytes)
                 ),
             ),
-            extra_headers=client_options.extra_headers,
+            headers=client_options.headers,
         )
 
         if isinstance(prepare_resp, DuplicateFilesUploadedResponse):
@@ -594,7 +594,7 @@ class ServiceClient(Singleton):
             form_data=form_data,
             query_params=query_params,
             timeout=client_options.timeout,
-            extra_headers=client_options.extra_headers,
+            headers=client_options.headers,
         )
 
         # Note: at the moment we do prevent re-uploading but we do not prevent re-fitting
@@ -623,7 +623,7 @@ class ServiceClient(Singleton):
         form_data: dict[str, Any],
         query_params: dict[str, Any],
         timeout: float | None,
-        extra_headers: dict[str, str] | None,
+        headers: dict[str, str] | None,
     ) -> str:
         with cls.httpx_client.stream(
             "POST",
@@ -631,7 +631,7 @@ class ServiceClient(Singleton):
             data=form_data,
             params=query_params,
             timeout=timeout,
-            headers=extra_headers,
+            headers=headers,
         ) as response:
             cls._validate_response(response, "fit")
             train_set_uid = None
@@ -663,12 +663,12 @@ class ServiceClient(Singleton):
     def _prepare_train_set_upload(
         cls,
         req: PrepareTrainSetUploadRequest,
-        extra_headers: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> PrepareTrainSetUploadResponse | DuplicateFilesUploadedResponse:
         resp = cls.httpx_client.post(
             url="/tabpfn/prepare_train_set_upload/",
             json=req.model_dump(),
-            headers=extra_headers,
+            headers=headers,
         )
         if resp.status_code == 409:
             return DuplicateFilesUploadedResponse.model_validate(resp.json()["detail"])
@@ -861,7 +861,7 @@ class ServiceClient(Singleton):
                     params,
                     model_type=model_type,
                     timeout=client_options.timeout,
-                    extra_headers=client_options.extra_headers,
+                    headers=client_options.headers,
                 ) as response:
                     cls._validate_response(response, "predict")
                     # Handle updates from server
@@ -970,7 +970,7 @@ class ServiceClient(Singleton):
         params,
         model_type: ModelType,
         timeout: float | None,
-        extra_headers: dict[str, str],
+        headers: dict[str, str],
     ):
         """
         Helper function to make the prediction request to the server.
@@ -989,7 +989,7 @@ class ServiceClient(Singleton):
                 method="post",
                 url=url,
                 params=params,
-                headers=extra_headers,
+                headers=headers,
                 timeout=timeout,
             )
         else:
@@ -1000,7 +1000,7 @@ class ServiceClient(Singleton):
                 files=common_utils.to_httpx_post_file_format(
                     [("x_file", "x_test_filename", x_test_serialized)]
                 ),
-                headers=extra_headers,
+                headers=headers,
                 timeout=timeout,
             )
         return response
