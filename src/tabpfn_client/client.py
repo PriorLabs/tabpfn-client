@@ -677,7 +677,7 @@ class ServiceClient(Singleton):
 
     @classmethod
     def _upload_to_gcs(
-        cls, dataset: str, data: bytes, crc32c_hash: str, info: FileUploadInfo
+        cls, dataset: str, data: bytes, crc32c_hash: str | None, info: FileUploadInfo
     ) -> None:
         num_chunks = len(info.signed_urls)
         chunk_size = len(data) // num_chunks
@@ -743,13 +743,15 @@ class ServiceClient(Singleton):
         chunk: bytes,
         headers: dict[str, str],
         dataset: str,
-        crc32c_hash: str,
+        crc32c_hash: str | None,
         chunk_index: int = 0,
     ) -> None:
+        if crc32c_hash is not None:
+            headers = {**headers, "x-goog-hash": f"crc32c={crc32c_hash}"}
         resp = cls.httpx_client.put(
             url,
             content=chunk,
-            headers={**headers, "x-goog-hash": f"crc32c={crc32c_hash}"},
+            headers=headers,
             timeout=600,
         )
         if resp.status_code == 200:
