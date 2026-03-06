@@ -319,7 +319,7 @@ class ClientOptions:
     """
 
     timeout: float = _DEFAULT_HTTPX_TIMEOUT
-    extra_headers: dict[str, str] | None = field(default_factory=dict)
+    extra_headers: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
