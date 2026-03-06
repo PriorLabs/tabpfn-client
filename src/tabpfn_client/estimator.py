@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import sys
 import time
+from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, Literal, Optional, Union
 from typing_extensions import Self
@@ -16,7 +17,12 @@ from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.utils import column_or_1d
 from sklearn.utils.multiclass import check_classification_targets
 from sklearn.utils.validation import check_is_fitted
-from tabpfn_client.client import ModelType, PredictionResult, ServiceClient
+from tabpfn_client.client import (
+    ModelType,
+    PredictionResult,
+    ServiceClient,
+    ClientOptions,
+)
 from tabpfn_client.config import Config, init
 from tabpfn_client.constants import (
     URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE,
@@ -215,6 +221,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.random_state = random_state
         self.inference_config = inference_config
         self.paper_version = paper_version
+        self.last_trace_id = None
         self.last_train_set_uid = None
         self.last_train_X = None
         self.last_train_y = None
@@ -222,7 +229,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.thinking_params = thinking_params
         self.last_meta = {}
 
-    def fit(self, X, y, description: str = ""):
+    def fit(
+        self,
+        X,
+        y,
+        description: str = "",
+        client_options: ClientOptions | None = None,
+        dedup_files: bool = True,
+    ):
         # assert init() is called
         init()
 
@@ -236,6 +250,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         if Config.use_server:
             model_type = ModelType.TABPFN_R if self.thinking else ModelType.TABPFN
 
+            if "trace_id" not in client_options.extra_headers:
+                client_options.extra_headers["trace_id"] = uuid4().hex
+
+            self.last_trace_id = client_options.extra_headers["trace_id"]
+
             def fit_task() -> str:
                 return InferenceClient.fit(
                     X,
@@ -244,6 +263,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                     model_type=model_type,
                     task="classification",
                     description=description,
+                    client_options=client_options,
+                    dedup_files=dedup_files,
                 )
 
             self.last_train_set_uid = run_task(fit_task, "Fitting", with_spinner=True)
@@ -256,7 +277,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             )
         return self
 
-    def predict(self, X):
+    def predict(self, X, client_options: ClientOptions | None = None):
         """Predict class labels for samples in X.
 
         Args:
@@ -267,7 +288,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         """
         return self._predict(X, output_type="preds")
 
-    def predict_proba(self, X):
+    def predict_proba(self, X, client_options: ClientOptions | None = None):
         """Predict class probabilities for X.
 
         Args:
@@ -278,7 +299,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         """
         return self._predict(X, output_type="probas")
 
-    def _predict(self, X, output_type) -> dict[str, np.ndarray]:
+    def _predict(
+        self, X, output_type, client_options: ClientOptions | None = None
+    ) -> dict[str, np.ndarray]:
         check_is_fitted(self)
         validate_data_size(X)
         _check_paper_version(self.paper_version, X)
@@ -286,6 +309,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
         estimator_param = self._get_estimator_params_with_model_path("classification")
         model_type = ModelType.TABPFN_R if self.thinking else ModelType.TABPFN
+
+        if "trace_id" not in client_options.extra_headers:
+            client_options.extra_headers["trace_id"] = self.last_trace_id
 
         def predict_task() -> PredictionResult:
             return InferenceClient.predict(
@@ -297,6 +323,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 predict_params={"output_type": output_type},
                 X_train=self.last_train_X,
                 y_train=self.last_train_y,
+                client_options=client_options,
             )
 
         result = run_task(predict_task, "Predicting", with_spinner=self.thinking)
@@ -416,12 +443,20 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.paper_version = paper_version
         self.thinking = thinking
         self.thinking_params = thinking_params
+        self.last_trace_id = None
         self.last_train_set_uid = None
         self.last_train_X = None
         self.last_train_y = None
         self.last_meta = {}
 
-    def fit(self, X, y, description: str = ""):
+    def fit(
+        self,
+        X,
+        y,
+        description: str = "",
+        client_options: ClientOptions | None = None,
+        dedup_files: bool = True,
+    ):
         # assert init() is called
         init()
 
@@ -435,6 +470,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         if Config.use_server:
             model_type = ModelType.TABPFN_R if self.thinking else ModelType.TABPFN
 
+            if "trace_id" not in client_options.extra_headers:
+                client_options.extra_headers["trace_id"] = uuid4().hex
+
+            self.last_trace_id = client_options.extra_headers["trace_id"]
+
             def fit_task() -> str:
                 return InferenceClient.fit(
                     X,
@@ -443,6 +483,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     model_type=model_type,
                     task="regression",
                     description=description,
+                    client_options=client_options,
+                    dedup_files=dedup_files,
                 )
 
             self.last_train_set_uid = run_task(fit_task, "Fitting", with_spinner=True)
@@ -463,6 +505,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             "mean", "median", "mode", "quantiles", "full", "main"
         ] = "mean",
         quantiles: Optional[list[float]] = None,
+        client_options: ClientOptions | None = None,
     ) -> Union[np.ndarray, list[np.ndarray], dict[str, np.ndarray]]:
         """Predict regression target for X.
 
@@ -501,6 +544,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         estimator_param = self._get_estimator_params_with_model_path("regression")
         model_type = ModelType.TABPFN_R if self.thinking else ModelType.TABPFN
 
+        if "trace_id" not in client_options.extra_headers:
+            client_options.extra_headers["trace_id"] = self.last_trace_id
+
         def predict_task() -> PredictionResult:
             return InferenceClient.predict(
                 X,
@@ -511,6 +557,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                 predict_params=predict_params,
                 X_train=self.last_train_X,
                 y_train=self.last_train_y,
+                client_options=client_options,
             )
 
         result = run_task(predict_task, "Predicting", with_spinner=self.thinking)

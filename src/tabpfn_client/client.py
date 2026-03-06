@@ -793,6 +793,7 @@ class ServiceClient(Singleton):
         tabpfn_config: Union[dict, None] = None,
         X_train=None,
         y_train=None,
+        client_options: ClientOptions | None = None,
     ) -> PredictionResult:
         """
         Predict the class labels for the provided data (test set).
@@ -809,6 +810,8 @@ class ServiceClient(Singleton):
         y_pred : array-like of shape (n_samples,)
             The predicted class labels.
         """
+        client_options = client_options or ClientOptions()
+
         tabpfn_config = deepcopy(tabpfn_config)
 
         x_test_serialized = common_utils.serialize_to_csv_formatted_bytes(x_test)
@@ -855,6 +858,7 @@ class ServiceClient(Singleton):
                     x_test_serialized,
                     params,
                     model_type=model_type,
+                    client_options=client_options,
                 ) as response:
                     cls._validate_response(response, "predict")
                     # Handle updates from server
@@ -957,7 +961,12 @@ class ServiceClient(Singleton):
 
     @classmethod
     def _make_prediction_request(
-        cls, test_set_uid, x_test_serialized, params, model_type: ModelType
+        cls,
+        test_set_uid,
+        x_test_serialized,
+        params,
+        model_type: ModelType,
+        client_options: ClientOptions | None = None,
     ):
         """
         Helper function to make the prediction request to the server.
@@ -972,7 +981,13 @@ class ServiceClient(Singleton):
         if test_set_uid:
             params = params.copy()
             params["test_set_uid"] = test_set_uid
-            response = cls.httpx_client.stream(method="post", url=url, params=params)
+            response = cls.httpx_client.stream(
+                method="post",
+                url=url,
+                params=params,
+                headers=client_options.extra_headers,
+                timeout=client_options.timeout,
+            )
         else:
             response = cls.httpx_client.stream(
                 method="post",
@@ -981,6 +996,8 @@ class ServiceClient(Singleton):
                 files=common_utils.to_httpx_post_file_format(
                     [("x_file", "x_test_filename", x_test_serialized)]
                 ),
+                headers=client_options.extra_headers,
+                timeout=client_options.timeout,
             )
         return response
 
