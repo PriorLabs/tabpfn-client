@@ -250,10 +250,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         if Config.use_server:
             model_type = ModelType.TABPFN_R if self.thinking else ModelType.TABPFN
 
-            if "trace_id" not in client_options.extra_headers:
-                client_options.extra_headers["trace_id"] = uuid4().hex
+            client_options = client_options or ClientOptions()
+            if "sentry-trace" not in client_options.extra_headers:
+                client_options.extra_headers["sentry-trace"] = uuid4().hex
 
-            self.last_trace_id = client_options.extra_headers["trace_id"]
+            self.last_trace_id = client_options.extra_headers["sentry-trace"]
 
             def fit_task() -> str:
                 return InferenceClient.fit(
@@ -310,8 +311,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         estimator_param = self._get_estimator_params_with_model_path("classification")
         model_type = ModelType.TABPFN_R if self.thinking else ModelType.TABPFN
 
-        if "trace_id" not in client_options.extra_headers:
-            client_options.extra_headers["trace_id"] = self.last_trace_id
+        client_options = client_options or ClientOptions()
+        if "sentry-trace" not in client_options.extra_headers:
+            client_options.extra_headers["sentry-trace"] = self.last_trace_id
 
         def predict_task() -> PredictionResult:
             return InferenceClient.predict(
@@ -470,10 +472,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         if Config.use_server:
             model_type = ModelType.TABPFN_R if self.thinking else ModelType.TABPFN
 
-            if "trace_id" not in client_options.extra_headers:
-                client_options.extra_headers["trace_id"] = uuid4().hex
+            client_options = client_options or ClientOptions()
+            if "sentry-trace" not in client_options.extra_headers:
+                client_options.extra_headers["sentry-trace"] = uuid4().hex
 
-            self.last_trace_id = client_options.extra_headers["trace_id"]
+            self.last_trace_id = client_options.extra_headers["sentry-trace"]
 
             def fit_task() -> str:
                 return InferenceClient.fit(
@@ -544,8 +547,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         estimator_param = self._get_estimator_params_with_model_path("regression")
         model_type = ModelType.TABPFN_R if self.thinking else ModelType.TABPFN
 
-        if "trace_id" not in client_options.extra_headers:
-            client_options.extra_headers["trace_id"] = self.last_trace_id
+        client_options = client_options or ClientOptions()
+        if "sentry-trace" not in client_options.extra_headers:
+            client_options.extra_headers["sentry-trace"] = self.last_trace_id
 
         def predict_task() -> PredictionResult:
             return InferenceClient.predict(

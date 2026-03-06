@@ -319,7 +319,7 @@ class ClientOptions:
     """
 
     timeout: float = _DEFAULT_HTTPX_TIMEOUT
-    extra_headers: dict[str, str] | None = None
+    extra_headers: dict[str, str] | None = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -566,14 +566,14 @@ class ServiceClient(Singleton):
                         cls._upload_to_gcs,
                         "x_train",
                         x_bytes,
-                        x_crc32c_hash,
+                        x_dedup_hash,
                         prepare_resp.x_train,
                     ),
                     pool.submit(
                         cls._upload_to_gcs,
                         "y_train",
                         y_bytes,
-                        y_crc32c_hash,
+                        y_dedup_hash,
                         prepare_resp.y_train,
                     ),
                 ]
@@ -622,8 +622,8 @@ class ServiceClient(Singleton):
         cls,
         form_data: dict[str, Any],
         query_params: dict[str, Any],
-        timeout: float | None = None,
-        extra_headers: dict[str, str] | None = None,
+        timeout: float | None,
+        extra_headers: dict[str, str] | None,
     ) -> str:
         with cls.httpx_client.stream(
             "POST",
@@ -858,7 +858,8 @@ class ServiceClient(Singleton):
                     x_test_serialized,
                     params,
                     model_type=model_type,
-                    client_options=client_options,
+                    timeout=client_options.timeout,
+                    extra_headers=client_options.extra_headers,
                 ) as response:
                     cls._validate_response(response, "predict")
                     # Handle updates from server
@@ -966,7 +967,8 @@ class ServiceClient(Singleton):
         x_test_serialized,
         params,
         model_type: ModelType,
-        client_options: ClientOptions | None = None,
+        timeout: float | None,
+        extra_headers: dict[str, str],
     ):
         """
         Helper function to make the prediction request to the server.
@@ -985,8 +987,8 @@ class ServiceClient(Singleton):
                 method="post",
                 url=url,
                 params=params,
-                headers=client_options.extra_headers,
-                timeout=client_options.timeout,
+                headers=extra_headers,
+                timeout=timeout,
             )
         else:
             response = cls.httpx_client.stream(
@@ -996,8 +998,8 @@ class ServiceClient(Singleton):
                 files=common_utils.to_httpx_post_file_format(
                     [("x_file", "x_test_filename", x_test_serialized)]
                 ),
-                headers=client_options.extra_headers,
-                timeout=client_options.timeout,
+                headers=extra_headers,
+                timeout=timeout,
             )
         return response
 
