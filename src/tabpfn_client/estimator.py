@@ -287,7 +287,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         Returns:
             The predicted class labels.
         """
-        return self._predict(X, output_type="preds")
+        return self._predict(X, output_type="preds", client_options=client_options)
 
     def predict_proba(self, X, client_options: ClientOptions | None = None):
         """Predict class probabilities for X.
@@ -298,7 +298,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         Returns:
             The class probabilities of the input samples.
         """
-        return self._predict(X, output_type="probas")
+        return self._predict(X, output_type="probas", client_options=client_options)
 
     def _predict(
         self, X, output_type, client_options: ClientOptions | None = None
