@@ -18,8 +18,6 @@ from sklearn.utils import column_or_1d
 from sklearn.utils.multiclass import check_classification_targets
 from sklearn.utils.validation import check_is_fitted
 from tabpfn_client.client import (
-    ModelType,
-    PredictionResult,
     ServiceClient,
     ClientOptions,
 )
@@ -28,6 +26,7 @@ from tabpfn_client.constants import (
     URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE,
     ModelVersion,
 )
+from tabpfn_client.api_models import PredictResponse, FitResponse
 from tabpfn_client.service_wrapper import InferenceClient
 
 try:
@@ -155,8 +154,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         ] = None,
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
-        thinking: bool = False,
-        thinking_params: Optional[dict] = None,
     ):
         """Construct a TabPFN classifier.
 
@@ -206,10 +203,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
-        thinking: bool, default=False,
-            Whether to use thinking.
-        thinking_params: dict or None, default= None
-            Additional parameters for thinking. Meant for internal use.
         """
         self.model_path = model_path
         self.n_estimators = n_estimators
@@ -222,11 +215,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.inference_config = inference_config
         self.paper_version = paper_version
         self.last_trace_id = None
-        self.last_train_set_uid = None
+        self.last_train_set_id = None
         self.last_train_X = None
         self.last_train_y = None
-        self.thinking = thinking
-        self.thinking_params = thinking_params
         self.last_meta = {}
 
     def fit(
@@ -244,31 +235,27 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         X = _clean_text_features(X)
         self._validate_targets_and_classes(y)
         _check_paper_version(self.paper_version, X)
-        _check_description(self.thinking, description)
 
         estimator_param = self._get_estimator_params_with_model_path("classification")
         if Config.use_server:
-            model_type = ModelType.TABPFN_R if self.thinking else ModelType.TABPFN
-
             client_options = client_options or ClientOptions()
             if "sentry-trace" not in client_options.headers:
                 client_options.headers["sentry-trace"] = uuid4().hex
 
             self.last_trace_id = client_options.headers["sentry-trace"]
 
-            def fit_task() -> str:
+            def fit_task() -> FitResponse:
                 return InferenceClient.fit(
                     X,
                     y,
-                    tabpfn_config=estimator_param,
-                    model_type=model_type,
                     task="classification",
+                    tabpfn_config=estimator_param,
                     description=description,
                     client_options=client_options,
                     dedup_files=dedup_files,
                 )
 
-            self.last_train_set_uid = run_task(fit_task, "Fitting", with_spinner=True)
+            self.last_train_set_id = run_task(fit_task, "Fitting", with_spinner=True)
             self.last_train_X = X
             self.last_train_y = y
             self.fitted_ = True
@@ -278,7 +265,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             )
         return self
 
-    def predict(self, X, client_options: ClientOptions | None = None):
+    def predict(
+        self, X, client_options: ClientOptions | None = None, dedup_files: bool = True
+    ):
         """Predict class labels for samples in X.
 
         Args:
@@ -287,9 +276,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         Returns:
             The predicted class labels.
         """
-        return self._predict(X, output_type="preds", client_options=client_options)
+        return self._predict(
+            X,
+            output_type="preds",
+            client_options=client_options,
+            dedup_files=dedup_files,
+        )
 
-    def predict_proba(self, X, client_options: ClientOptions | None = None):
+    def predict_proba(
+        self, X, client_options: ClientOptions | None = None, dedup_files: bool = True
+    ):
         """Predict class probabilities for X.
 
         Args:
@@ -298,10 +294,19 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         Returns:
             The class probabilities of the input samples.
         """
-        return self._predict(X, output_type="probas", client_options=client_options)
+        return self._predict(
+            X,
+            output_type="probas",
+            client_options=client_options,
+            dedup_files=dedup_files,
+        )
 
     def _predict(
-        self, X, output_type, client_options: ClientOptions | None = None
+        self,
+        X,
+        output_type,
+        client_options: ClientOptions | None = None,
+        dedup_files: bool = True,
     ) -> dict[str, np.ndarray]:
         check_is_fitted(self)
         validate_data_size(X)
@@ -309,26 +314,26 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         X = _clean_text_features(X)
 
         estimator_param = self._get_estimator_params_with_model_path("classification")
-        model_type = ModelType.TABPFN_R if self.thinking else ModelType.TABPFN
 
         client_options = client_options or ClientOptions()
         if "sentry-trace" not in client_options.headers:
             client_options.headers["sentry-trace"] = self.last_trace_id
 
-        def predict_task() -> PredictionResult:
+        def predict_task() -> PredictResponse:
             return InferenceClient.predict(
                 X,
-                model_type=model_type,
+                train_set_id=self.last_train_set_id,
+                fitted_train_set_id=self.last_fitted_train_set_id,
                 task="classification",
-                train_set_uid=self.last_train_set_uid,
                 tabpfn_config=estimator_param,
                 predict_params={"output_type": output_type},
-                X_train=self.last_train_X,
-                y_train=self.last_train_y,
+                # X_train=self.last_train_X,  # TODO
+                # y_train=self.last_train_y,
                 client_options=client_options,
+                dedup_files=dedup_files,  # TODO
             )
 
-        result = run_task(predict_task, "Predicting", with_spinner=self.thinking)
+        result = run_task(predict_task, "Predicting")
         # Unpack and store metadata
         self.last_meta = result.metadata
 
@@ -384,8 +389,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         ] = None,
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
-        thinking: bool = False,
-        thinking_params: Optional[dict] = None,
     ):
         """Construct a TabPFN regressor.
 
@@ -429,10 +432,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
-        thinking: bool, default=False,
-            Whether to use thinking.
-        thinking_params: dict or None, default= None
-            Additional parameters for thinking. Meant for internal use.
         """
         self.model_path = model_path
         self.n_estimators = n_estimators
@@ -443,10 +442,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.random_state = random_state
         self.inference_config = inference_config
         self.paper_version = paper_version
-        self.thinking = thinking
-        self.thinking_params = thinking_params
         self.last_trace_id = None
-        self.last_train_set_uid = None
+        self.last_train_set_id = None
         self.last_train_X = None
         self.last_train_y = None
         self.last_meta = {}
@@ -466,31 +463,27 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self._validate_targets(y)
         X = _clean_text_features(X)
         _check_paper_version(self.paper_version, X)
-        _check_description(self.thinking, description)
 
         estimator_param = self._get_estimator_params_with_model_path("regression")
         if Config.use_server:
-            model_type = ModelType.TABPFN_R if self.thinking else ModelType.TABPFN
-
             client_options = client_options or ClientOptions()
             if "sentry-trace" not in client_options.headers:
                 client_options.headers["sentry-trace"] = uuid4().hex
 
             self.last_trace_id = client_options.headers["sentry-trace"]
 
-            def fit_task() -> str:
+            def fit_task() -> FitResponse:
                 return InferenceClient.fit(
                     X,
                     y,
-                    tabpfn_config=estimator_param,
-                    model_type=model_type,
                     task="regression",
+                    tabpfn_config=estimator_param,
                     description=description,
                     client_options=client_options,
                     dedup_files=dedup_files,
                 )
 
-            self.last_train_set_uid = run_task(fit_task, "Fitting", with_spinner=True)
+            self.last_train_set_id = run_task(fit_task, "Fitting", with_spinner=True)
             self.last_train_X = X
             self.last_train_y = y
             self.fitted_ = True
@@ -509,6 +502,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         ] = "mean",
         quantiles: Optional[list[float]] = None,
         client_options: ClientOptions | None = None,
+        dedup_files: bool = True,
     ) -> Union[np.ndarray, list[np.ndarray], dict[str, np.ndarray]]:
         """Predict regression target for X.
 
@@ -545,26 +539,26 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         }
 
         estimator_param = self._get_estimator_params_with_model_path("regression")
-        model_type = ModelType.TABPFN_R if self.thinking else ModelType.TABPFN
 
         client_options = client_options or ClientOptions()
         if "sentry-trace" not in client_options.headers:
             client_options.headers["sentry-trace"] = self.last_trace_id
 
-        def predict_task() -> PredictionResult:
+        def predict_task() -> PredictResponse:
             return InferenceClient.predict(
                 X,
-                model_type=model_type,
+                train_set_id=self.last_train_set_id,
+                fitted_train_set_id=self.last_fitted_train_set_id,
                 task="regression",
-                train_set_uid=self.last_train_set_uid,
                 tabpfn_config=estimator_param,
                 predict_params=predict_params,
-                X_train=self.last_train_X,
-                y_train=self.last_train_y,
+                # X_train=self.last_train_X,  # TODO
+                # y_train=self.last_train_y,
                 client_options=client_options,
+                dedup_files=dedup_files,
             )
 
-        result = run_task(predict_task, "Predicting", with_spinner=self.thinking)
+        result = run_task(predict_task, "Predicting")
         # Unpack and store metadata
         self.last_meta = result.metadata
 
@@ -669,15 +663,7 @@ def _clean_text_features(X):
     return X_
 
 
-def _check_description(thinking: bool, description: str) -> None:
-    if thinking and not description:
-        raise ValueError("fit requires a description when thinking is True.")
-
-
-def run_task(task: Callable, message: str, with_spinner: bool) -> Any:
-    """
-    Run the task with a spinner if thinking is True.
-    """
+def run_task(task: Callable, message: str, with_spinner: bool = False) -> Any:
     if not with_spinner:
         result = task()
     else:

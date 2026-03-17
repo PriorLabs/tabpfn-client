@@ -8,11 +8,11 @@ import os
 from pathlib import Path
 from typing import Literal, Optional
 
-import numpy as np
-
-from tabpfn_client.client import ServiceClient, ModelType, ClientOptions
+from tabpfn_client.api_models import FitResponse, PredictResponse
+from tabpfn_client.client import ServiceClient, ClientOptions
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_common_utils.utils import Singleton
+
 
 logger = logging.getLogger(__name__)
 
@@ -252,19 +252,17 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         cls,
         X,
         y,
-        model_type: ModelType = ModelType.TABPFN,
-        tabpfn_config=None,
         task: Optional[Literal["classification", "regression"]] = None,
+        tabpfn_config=None,
         description: str = "",
         client_options: ClientOptions | None = None,
         dedup_files: bool = True,
-    ) -> str:
+    ) -> FitResponse:
         return ServiceClient.fit(
             X,
             y,
-            tabpfn_config=tabpfn_config,
-            model_type=model_type,
             task=task,
+            tabpfn_config=tabpfn_config,
             description=description,
             client_options=client_options,
             dedup_files=dedup_files,
@@ -274,23 +272,21 @@ class InferenceClient(ServiceClientWrapper, Singleton):
     def predict(
         cls,
         X,
+        train_set_id: str,
+        fitted_train_set_id: str,
         task: Literal["classification", "regression"],
-        train_set_uid: str,
-        model_type: ModelType = ModelType.TABPFN,
         tabpfn_config=None,
         predict_params=None,
-        X_train=None,
-        y_train=None,
         client_options: ClientOptions | None = None,
-    ) -> dict[str, np.ndarray]:
+        dedup_files: bool = True,
+    ) -> PredictResponse:
         return ServiceClient.predict(
-            train_set_uid=train_set_uid,
             x_test=X,
+            train_set_id=train_set_id,
+            fitted_train_set_id=fitted_train_set_id,
+            task=task,
             tabpfn_config=tabpfn_config,
             predict_params=predict_params,
-            task=task,
-            X_train=X_train,
-            y_train=y_train,
-            model_type=model_type,
             client_options=client_options,
+            dedup_files=dedup_files,
         )

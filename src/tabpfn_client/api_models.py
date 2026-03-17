@@ -4,8 +4,8 @@ from pydantic import BaseModel
 
 
 Prediction = list[Any] | dict[str, Any]
-TabPFNConfig = dict[str, Any]
-PredictParams = dict[str, Any]
+TabPFNConfig = dict[str, Any] | None
+PredictParams = dict[str, Any] | None
 
 
 class TaskConfig(BaseModel):

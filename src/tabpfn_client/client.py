@@ -555,12 +555,11 @@ class ServiceClient(Singleton):
     def predict(
         cls,
         train_set_id: str,
+        fitted_train_set_id: str,
         x_test,
         task: Literal["classification", "regression"],
         tabpfn_config: Union[dict, None] = None,
         predict_params: Union[dict, None] = None,
-        X_train=None,
-        y_train=None,
         dedup_files: bool = True,
         client_options: ClientOptions | None = None,
     ) -> PredictResponse:
@@ -571,6 +570,8 @@ class ServiceClient(Singleton):
         ----------
         train_set_id : str
             The unique ID of the train set in the server.
+        fitted_train_set_id : str
+            The unique ID of the fitted train set in the server.
         x_test : array-like of shape (n_samples, n_features)
             The test input.
         task: str, optional
@@ -640,7 +641,7 @@ class ServiceClient(Singleton):
         return cls._predict(
             req=PredictRequest(
                 test_set_upload_id=prepare_resp.test_set_upload_id,
-                fitted_train_set_id=train_set_id,
+                fitted_train_set_id=fitted_train_set_id,
                 task_config=TaskConfig(
                     task=task,
                     tabpfn_config=tabpfn_config,
