@@ -16,8 +16,8 @@ import re
 import struct
 import time
 import traceback
-from pydantic import ValidationError
-from typing import Any, Dict, Literal, Optional, Union
+from pydantic import BaseModel, ValidationError
+from typing import Any, Callable, Dict, Literal, Optional, Union, cast
 
 import google_crc32c
 
@@ -391,18 +391,21 @@ class ServiceClient(Singleton):
             ).model_dump(),
             headers=client_options.headers,
         )
-        try:
-            if res.status_code == 409:
-                return DuplicateTrainSetErrorResponse.model_validate(res.json())
-        except ValidationError:
-            res.raise_for_status()
-
-        cls._validate_response(res, "prepare_train_set_upload")  # TODO needed?
-        prepare_resp = PrepareTrainSetUploadResponse.model_validate(res.json())
+        prepare_resp = cast(
+            PrepareTrainSetUploadResponse | DuplicateTrainSetErrorResponse,
+            cls._validate_response(
+                res,
+                "prepare_train_set_upload",
+                response_models={
+                    200: PrepareTrainSetUploadResponse,
+                    409: DuplicateTrainSetErrorResponse,
+                },
+            ),
+        )
 
         if isinstance(prepare_resp, DuplicateTrainSetErrorResponse):
             logger.warning(prepare_resp.message)
-        elif isinstance(prepare_resp, PrepareTrainSetUploadResponse):
+        else:
             with ThreadPoolExecutor(max_workers=2) as pool:
                 futures = [
                     pool.submit(
@@ -440,8 +443,14 @@ class ServiceClient(Singleton):
             headers=client_options.headers,
         )
 
-        cls._validate_response(res, "fit")  # TODO needed?
-        fit_resp = FitResponse.model_validate(res.json())
+        fit_resp = cast(
+            FitResponse,
+            cls._validate_response(
+                res,
+                "fit",
+                response_models={200: FitResponse},
+            ),
+        )
 
         return fit_resp.fitted_train_set_id
 
@@ -475,6 +484,7 @@ class ServiceClient(Singleton):
             timeout=timeout,
         )
 
+    @classmethod
     def predict(
         cls,
         fitted_train_set_id: UUID,
@@ -483,8 +493,6 @@ class ServiceClient(Singleton):
         tabpfn_config: Union[dict, None] = None,
         predict_params: Union[dict, None] = None,
         client_options: ClientOptions | None = None,
-        X_train=None,
-        y_train=None,
     ) -> PredictionResult:
         """
         Predict the class labels for the provided data (test set).
@@ -545,23 +553,23 @@ class ServiceClient(Singleton):
             ).model_dump(),
             headers=client_options.headers,
         )
-        try:
-            if res.status_code == 404:
-                err_resp = ErrorResponse.model_validate(res.json())
-                if err_resp.error_code == "NOT_FOUND":
-                    raise NeedsRefittingError(err_resp.message)
-                raise RuntimeError(err_resp.message)
-            if res.status_code == 409:
-                return DuplicateTestSetErrorResponse.model_validate(res.json())
-        except ValidationError:
-            res.raise_for_status()
-
-        cls._validate_response(res, "prepare_test_set_upload")  # TODO needed?
-        prepare_resp = PrepareTestSetUploadResponse.model_validate(res.json())
+        prepare_resp = cast(
+            PrepareTestSetUploadResponse | DuplicateTestSetErrorResponse,
+            cls._validate_response(
+                res,
+                "prepare_test_set_upload",
+                response_models={
+                    200: PrepareTestSetUploadResponse,
+                    404: ErrorResponse,
+                    409: DuplicateTestSetErrorResponse,
+                },
+                handlers={404: cls._raise_not_found_error},
+            ),
+        )
 
         if isinstance(prepare_resp, DuplicateTestSetErrorResponse):
             logger.warning(prepare_resp.message)
-        elif isinstance(prepare_resp, PrepareTestSetUploadResponse):
+        else:
             cls._upload_to_gcs(
                 "x_test",
                 x_test_bytes,
@@ -581,17 +589,15 @@ class ServiceClient(Singleton):
             timeout=client_options.timeout,
             headers=client_options.headers,
         )
-        try:
-            if res.status_code == 404:
-                err_resp = ErrorResponse.model_validate(res.json())
-                if err_resp.error_code == "NOT_FOUND":
-                    raise NeedsRefittingError(err_resp.message)
-                raise RuntimeError(err_resp.message)
-        except ValidationError:
-            res.raise_for_status()
-
-        cls._validate_response(res, "predict")  # TODO needed?
-        predict_resp = PredictResponse.model_validate(res.json())
+        predict_resp = cast(
+            PredictResponse,
+            cls._validate_response(
+                res,
+                "predict",
+                response_models={200: PredictResponse, 404: ErrorResponse},
+                handlers={404: cls._raise_not_found_error},
+            ),
+        )
 
         prediction = predict_resp.prediction
 
@@ -722,11 +728,20 @@ class ServiceClient(Singleton):
         )
 
     @staticmethod
+    def _raise_not_found_error(error_response: ErrorResponse) -> None:
+        if error_response.error_code == "NOT_FOUND":
+            raise NeedsRefittingError(error_response.message)
+        raise RuntimeError(error_response.message)
+
+    @staticmethod
     def _validate_response(
-        response: httpx.Response, method_name, only_version_check=False
-    ):
-        # If status code is 200, no errors occurred on the server side.
-        if response.status_code == 200:
+        response: httpx.Response,
+        method_name: str,
+        only_version_check: bool = False,
+        response_models: dict[int, type[BaseModel]] | None = None,
+        handlers: dict[int, Callable[[BaseModel], Any]] | None = None,
+    ) -> BaseModel | None:
+        if response.status_code == 200 and response_models is None:
             return
 
         # Read response.
@@ -746,6 +761,37 @@ class ServiceClient(Singleton):
                 f"Fail to call {method_name}, response status: {response.status_code}"
             )
             raise RuntimeError(load.get("detail"))
+
+        if response_models is not None and response.status_code == 200:
+            if 200 not in response_models:
+                raise RuntimeError(
+                    f"Fail to call {method_name} with no response model configured for status 200"
+                )
+
+        if response_models is not None and response.status_code in response_models:
+            if load is None and response.status_code == 200:
+                raise RuntimeError(
+                    f"Fail to call {method_name} with invalid JSON response"
+                )
+
+            if load is not None:
+                try:
+                    parsed_response = response_models[
+                        response.status_code
+                    ].model_validate(load)
+                except ValidationError as e:
+                    if response.status_code == 200:
+                        raise RuntimeError(
+                            f"Fail to call {method_name} with invalid response schema: {e}"
+                        ) from e
+                    response.raise_for_status()
+                else:
+                    if handlers is not None and response.status_code in handlers:
+                        handlers[response.status_code](parsed_response)
+                    return parsed_response
+
+        if response.status_code == 200:
+            return
 
         # If we not only want to check the version compatibility, also raise other errors.
         if not only_version_check:
