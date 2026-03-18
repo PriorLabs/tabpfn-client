@@ -23,6 +23,7 @@ from tabpfn_client.client import (
 )
 from tabpfn_client.config import Config, init
 from tabpfn_client.constants import (
+    ci_mode_enabled,
     URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE,
     ModelVersion,
 )
@@ -224,7 +225,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self,
         X,
         y,
-        description: str = "",
+        description: str | None = None,
         client_options: ClientOptions | None = None,
         dedup_datasets: bool = True,
     ):
@@ -458,7 +459,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self,
         X,
         y,
-        description: str = "",
+        description: str | None = None,
         client_options: ClientOptions | None = None,
         dedup_datasets: bool = True,
     ):
@@ -489,7 +490,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     dedup_datasets=dedup_datasets,
                 )
 
-            self.last_train_set_id = run_task(fit_task, "Fitting", with_spinner=True)
+            self.last_train_set_id = run_task(fit_task, "Fitting")
             self.last_train_X = X
             self.last_train_y = y
             self.fitted_ = True
@@ -669,8 +670,8 @@ def _clean_text_features(X):
     return X_
 
 
-def run_task(task: Callable, message: str, with_spinner: bool = False) -> Any:
-    if not with_spinner:
+def run_task(task: Callable, message: str, with_spinner: bool = True) -> Any:
+    if not with_spinner or ci_mode_enabled():
         result = task()
     else:
         start = time.time()

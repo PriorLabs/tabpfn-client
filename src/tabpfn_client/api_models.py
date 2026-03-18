@@ -55,14 +55,15 @@ class GetDatasetLimitsResponse(BaseModel):
 # /tabpfn/prepare_train_set_upload/
 # ---------------------------------------------------------------------------
 class PrepareTrainSetUploadRequest(BaseModel):
-    x_train: FileInfo
-    y_train: FileInfo
+    x_train_info: FileInfo
+    y_train_info: FileInfo
+    description: str | None = None
 
 
 class PrepareTrainSetUploadResponse(BaseModel):
     train_set_upload_id: UUID
-    x_train: FileUploadInfo
-    y_train: FileUploadInfo
+    x_train_info: FileUploadInfo
+    y_train_info: FileUploadInfo
 
 
 class DuplicateTrainSetErrorResponse(ErrorResponse):
@@ -88,12 +89,12 @@ class FitResponse(BaseModel):
 # ---------------------------------------------------------------------------
 class PrepareTestSetUploadRequest(BaseModel):
     train_set_id: UUID
-    x_test: FileInfo
+    x_test_info: FileInfo
 
 
 class PrepareTestSetUploadResponse(BaseModel):
     test_set_upload_id: UUID
-    x_test: FileUploadInfo
+    x_test_info: FileUploadInfo
 
 
 class DuplicateTestSetErrorResponse(ErrorResponse):

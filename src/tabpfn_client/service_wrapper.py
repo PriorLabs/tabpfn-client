@@ -254,7 +254,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         y,
         task: Optional[Literal["classification", "regression"]] = None,
         tabpfn_config=None,
-        description: str = "",
+        description: str | None = None,
         client_options: ClientOptions | None = None,
         dedup_datasets: bool = True,
     ) -> FitResponse:

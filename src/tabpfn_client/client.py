@@ -10,7 +10,6 @@ from importlib.metadata import PackageNotFoundError, version
 import io
 import json
 import logging
-import os
 from pathlib import Path
 import re
 import struct
@@ -27,6 +26,7 @@ import httpx
 from httpx._transports.default import HTTPTransport
 from omegaconf import OmegaConf
 from tabpfn_client.browser_auth import BrowserAuthHandler
+from tabpfn_client.constants import dedup_datasets_enabled
 from tabpfn_common_utils import utils as common_utils
 from tabpfn_common_utils.utils import Singleton
 from tabpfn_client.api_models import (
@@ -76,25 +76,6 @@ def _on_giveup(details: Dict[str, Any]):
         f"Giving up. Exception: {details['exception']}"
     )
     logger.error(message)
-
-
-def _dedup_enabled() -> bool:
-    # TABPFN_DEDUP_DATASETS: true = enable dedup, false = disable dedup
-    # DISABLE_DS_CACHING (legacy): true = disable caching, false = enable caching
-    dedup_val = os.getenv("TABPFN_DEDUP_DATASETS")
-    disable_val = os.getenv("DISABLE_DS_CACHING")
-
-    if dedup_val is not None:
-        enabled = str(dedup_val).lower() in {"1", "true", "yes", "on"}
-    elif disable_val is not None:
-        enabled = str(disable_val).lower() not in {"1", "true", "yes", "on"}
-    else:
-        enabled = True
-
-    if not enabled:
-        logger.warning("Dataset deduplication is disabled.")
-
-    return enabled
 
 
 class GCPOverloaded(Exception):
@@ -335,7 +316,7 @@ class ServiceClient(Singleton):
         y,
         task: Optional[Literal["classification", "regression"]] = None,
         tabpfn_config: Union[dict, None] = None,
-        description: str = "",
+        description: str | None = None,
         client_options: ClientOptions | None = None,
         dedup_datasets: bool = True,
     ) -> FitResponse:
@@ -382,7 +363,7 @@ class ServiceClient(Singleton):
                         f"the server limit of {limits.max_size_bytes} bytes."
                     )
 
-        if dedup_datasets and _dedup_enabled():
+        if dedup_datasets and dedup_datasets_enabled():
             x_dedup_hash = x_crc32c_hash
             y_dedup_hash = y_crc32c_hash
         else:
@@ -392,12 +373,13 @@ class ServiceClient(Singleton):
         res = cls.httpx_client.post(
             url="/tabpfn/prepare_train_set_upload/",
             json=PrepareTrainSetUploadRequest(
-                x_train=FileInfo(
+                x_train_info=FileInfo(
                     format="parquet", hash=x_dedup_hash, size_bytes=len(x_bytes)
                 ),
-                y_train=FileInfo(
+                y_train_info=FileInfo(
                     format="parquet", hash=y_dedup_hash, size_bytes=len(y_bytes)
                 ),
+                description=description,
             ).model_dump(),
             headers=client_options.headers,
         )
@@ -416,13 +398,13 @@ class ServiceClient(Singleton):
                         cls._upload_to_gcs,
                         "x_train",
                         x_bytes,
-                        prepare_resp.x_train,
+                        prepare_resp.x_train_info,
                     ),
                     pool.submit(
                         cls._upload_to_gcs,
                         "y_train",
                         y_bytes,
-                        prepare_resp.y_train,
+                        prepare_resp.y_train_info,
                     ),
                 ]
                 try:
@@ -533,7 +515,7 @@ class ServiceClient(Singleton):
                     f"the server limit of {limits.max_size_bytes} bytes."
                 )
 
-        if dedup_datasets and _dedup_enabled():
+        if dedup_datasets and dedup_datasets_enabled():
             x_test_dedup_hash = x_test_crc32c_hash
         else:
             x_test_dedup_hash = None
@@ -542,7 +524,7 @@ class ServiceClient(Singleton):
             url="/tabpfn/prepare_test_set_upload/",
             json=PrepareTestSetUploadRequest(
                 train_set_id=train_set_id,
-                x_test=FileInfo(
+                x_test_info=FileInfo(
                     format="parquet",
                     hash=x_test_dedup_hash,
                     size_bytes=len(x_test_bytes),
@@ -562,7 +544,7 @@ class ServiceClient(Singleton):
             cls._upload_to_gcs(
                 "x_test",
                 x_test_bytes,
-                prepare_resp.x_test,
+                prepare_resp.x_test_info,
             )
 
         return cls._predict(
