@@ -327,8 +327,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 task="classification",
                 tabpfn_config=estimator_param,
                 predict_params={"output_type": output_type},
-                # X_train=self.last_train_X,  # TODO
-                # y_train=self.last_train_y,
+                X_train=self.last_train_X,
+                y_train=self.last_train_y,
                 client_options=client_options,
             )
 
@@ -547,8 +547,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                 task="regression",
                 tabpfn_config=estimator_param,
                 predict_params=predict_params,
-                # X_train=self.last_train_X,  # TODO
-                # y_train=self.last_train_y,
+                X_train=self.last_train_X,
+                y_train=self.last_train_y,
                 client_options=client_options,
             )
 

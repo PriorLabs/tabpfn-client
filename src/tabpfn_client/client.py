@@ -546,8 +546,8 @@ class ServiceClient(Singleton):
         try:
             if res.status_code == 404:
                 err_resp = ErrorResponse.model_validate(res.json())
-                if err_resp.error_code == "FITTED_TRAIN_SET_NOT_FOUND":
-                    pass  # refit
+                if err_resp.error_code == "NOT_FOUND":
+                    pass  # TODO refit
             if res.status_code == 409:
                 return DuplicateTestSetErrorResponse.model_validate(res.json())
         except ValidationError:
@@ -581,8 +581,8 @@ class ServiceClient(Singleton):
         try:
             if res.status_code == 404:
                 err_resp = ErrorResponse.model_validate(res.json())
-                if err_resp.error_code == "TEST_SET_NOT_FOUND":
-                    pass  # refit
+                if err_resp.error_code == "NOT_FOUND":
+                    pass  # TODO refit
         except ValidationError:
             res.raise_for_status()
 
