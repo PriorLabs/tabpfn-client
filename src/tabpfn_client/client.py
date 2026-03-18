@@ -17,6 +17,7 @@ import re
 import struct
 import time
 import traceback
+from pydantic import ValidationError
 from typing import Any, Dict, Literal, Optional, Union
 
 import google_crc32c
@@ -46,6 +47,7 @@ from tabpfn_client.api_models import (
     PredictRequest,
     PredictResponse,
     TaskConfig,
+    ErrorResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -387,10 +389,13 @@ class ServiceClient(Singleton):
             ).model_dump(),
             headers=client_options.headers,
         )
-        if res.status_code == 409:
-            return DuplicateTrainSetErrorResponse.model_validate(res.json())
+        try:
+            if res.status_code == 409:
+                return DuplicateTrainSetErrorResponse.model_validate(res.json())
+        except ValidationError:
+            res.raise_for_status()
 
-        cls._validate_response(res, "prepare_train_set_upload")
+        cls._validate_response(res, "prepare_train_set_upload")  # TODO needed?
         prepare_resp = PrepareTrainSetUploadResponse.model_validate(res.json())
 
         if isinstance(prepare_resp, DuplicateTrainSetErrorResponse):
@@ -423,7 +428,7 @@ class ServiceClient(Singleton):
         if tabpfn_config and tabpfn_config.get("paper_version") is True:
             tabpfn_systems = []
 
-        fit_resp = cls._fit(
+        res = cls._fit(
             req=FitRequest(
                 train_set_upload_id=prepare_resp.train_set_upload_id,
                 task=task,
@@ -432,6 +437,9 @@ class ServiceClient(Singleton):
             timeout=client_options.timeout,
             headers=client_options.headers,
         )
+
+        cls._validate_response(res, "fit")  # TODO needed?
+        fit_resp = FitResponse.model_validate(res.json())
 
         return fit_resp.fitted_train_set_id
 
@@ -457,15 +465,13 @@ class ServiceClient(Singleton):
         req: FitRequest,
         timeout: float | None = None,
         headers: dict[str, str] | None = None,
-    ) -> FitResponse:
-        resp = cls.httpx_client.post(
+    ) -> httpx.Response:
+        return cls.httpx_client.post(
             url="/tabpfn/fit/",
             json=req.model_dump(),
             headers=headers,
             timeout=timeout,
         )
-        cls._validate_response(resp, "fit")
-        return FitResponse.model_validate(resp.json())
 
     def predict(
         cls,
@@ -475,6 +481,8 @@ class ServiceClient(Singleton):
         tabpfn_config: Union[dict, None] = None,
         predict_params: Union[dict, None] = None,
         client_options: ClientOptions | None = None,
+        X_train=None,
+        y_train=None,
     ) -> PredictionResult:
         """
         Predict the class labels for the provided data (test set).
@@ -495,6 +503,10 @@ class ServiceClient(Singleton):
             Per-request options (e.g. timeout, headers) for the fitting API call
             only. Does not apply to file uploads. Because uploads can run before fitting,
             this method may return later than the timeout specified.
+        X_train: array-like of shape (n_samples, n_features), optional
+            The training input samples. Needed in case of refitting.
+        y_train: array-like of shape (n_samples,), optional
+            The target values. Needed in case of refitting.
 
         Returns
         -------
@@ -531,10 +543,17 @@ class ServiceClient(Singleton):
             ).model_dump(),
             headers=client_options.headers,
         )
-        if res.status_code == 409:
-            return DuplicateTestSetErrorResponse.model_validate(res.json())
+        try:
+            if res.status_code == 404:
+                err_resp = ErrorResponse.model_validate(res.json())
+                if err_resp.error_code == "FITTED_TRAIN_SET_NOT_FOUND":
+                    pass  # refit
+            if res.status_code == 409:
+                return DuplicateTestSetErrorResponse.model_validate(res.json())
+        except ValidationError:
+            res.raise_for_status()
 
-        cls._validate_response(res, "prepare_test_set_upload")
+        cls._validate_response(res, "prepare_test_set_upload")  # TODO needed?
         prepare_resp = PrepareTestSetUploadResponse.model_validate(res.json())
 
         if isinstance(prepare_resp, DuplicateTestSetErrorResponse):
@@ -546,7 +565,7 @@ class ServiceClient(Singleton):
                 prepare_resp.x_test_info,
             )
 
-        predict_resp = cls._predict(
+        res = cls._predict(
             req=PredictRequest(
                 test_set_upload_id=prepare_resp.test_set_upload_id,
                 fitted_train_set_id=fitted_train_set_id,
@@ -559,6 +578,16 @@ class ServiceClient(Singleton):
             timeout=client_options.timeout,
             headers=client_options.headers,
         )
+        try:
+            if res.status_code == 404:
+                err_resp = ErrorResponse.model_validate(res.json())
+                if err_resp.error_code == "TEST_SET_NOT_FOUND":
+                    pass  # refit
+        except ValidationError:
+            res.raise_for_status()
+
+        cls._validate_response(res, "predict")  # TODO needed?
+        predict_resp = PredictResponse.model_validate(res.json())
 
         prediction = predict_resp.prediction
 
@@ -569,8 +598,7 @@ class ServiceClient(Singleton):
                     result[k] = np.array(v)
                 else:
                     # The value should always be a list or list-of-lists,
-                    # leaving this here as an extra precaution in case we have
-                    # unexpected json serialization for objects like BarDistribution.
+                    # leaving this here as an extra precaution and future proofing.
                     result[k] = v
         else:
             result = np.array(prediction)
@@ -602,15 +630,13 @@ class ServiceClient(Singleton):
         req: PredictRequest,
         timeout: float | None = None,
         headers: dict[str, str] | None = None,
-    ) -> PredictResponse:
-        res = cls.httpx_client.post(
+    ) -> httpx.Response:
+        return cls.httpx_client.post(
             url="/tabpfn/predict/",
             json=req.model_dump(),
             headers=headers,
             timeout=timeout,
         )
-        cls._validate_response(res, "predict")
-        return PredictResponse.model_validate(res.json())
 
     @classmethod
     def _upload_to_gcs(cls, dataset: str, data: bytes, info: FileUploadInfo) -> None:
