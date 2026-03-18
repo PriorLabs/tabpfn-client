@@ -4,6 +4,7 @@
 import os
 import logging
 from enum import Enum
+from functools import cache
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -25,11 +26,13 @@ URL_PRIOR_LABS_TERMS_AND_CONDITIONS = (
 URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE = "https://github.com/PriorLabs/tabpfn-extensions/blob/main/src/tabpfn_extensions/many_class/many_class_classifier.py"  # noqa: E501
 
 
+@cache
 def ci_mode_enabled() -> bool:
     val = os.getenv("TABPFN_CI_MODE")
     return str(val).lower() in {"1", "true", "yes", "on"}
 
 
+@cache
 def dedup_datasets_enabled() -> bool:
     # TABPFN_DEDUP_DATASETS: true = enable dedup, false = disable dedup
     # DISABLE_DS_CACHING (legacy): true = disable caching, false = enable caching
@@ -49,6 +52,7 @@ def dedup_datasets_enabled() -> bool:
     return enabled
 
 
+@cache
 def force_reupload_enabled() -> bool:
     val = os.getenv("TABPFN_FORCE_REUPLOAD")
     return str(val).lower() in {"1", "true", "yes", "on"}

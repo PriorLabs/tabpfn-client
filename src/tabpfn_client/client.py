@@ -469,7 +469,7 @@ class ServiceClient(Singleton):
 
     def predict(
         cls,
-        fitted_train_set_id: str,
+        fitted_train_set_id: UUID,
         x_test,
         task: Literal["classification", "regression"],
         tabpfn_config: Union[dict, None] = None,
@@ -481,7 +481,7 @@ class ServiceClient(Singleton):
 
         Parameters
         ----------
-        fitted_train_set_id : str
+        fitted_train_set_id : UUID
             The unique ID of the fitted train set in the server.
         x_test : array-like of shape (n_samples, n_features)
             The test input.

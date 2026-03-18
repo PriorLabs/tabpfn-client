@@ -270,7 +270,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
     def predict(
         cls,
         X,
-        fitted_train_set_id: str,
+        fitted_train_set_id: UUID,
         task: Literal["classification", "regression"],
         tabpfn_config=None,
         predict_params=None,
