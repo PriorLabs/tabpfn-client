@@ -22,6 +22,7 @@ from tabpfn_client.client import (
     ServiceClient,
     ClientOptions,
     PredictionResult,
+    NeedsRefittingError,
 )
 from tabpfn_client.config import Config, init
 from tabpfn_client.constants import (
@@ -221,6 +222,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.last_train_X = None
         self.last_train_y = None
         self.last_meta = {}
+        self.last_train_set_description = None
 
     def fit(
         self,
@@ -244,6 +246,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 client_options.headers["sentry-trace"] = uuid4().hex
 
             self.last_trace_id = client_options.headers["sentry-trace"]
+            self.last_train_set_description = description
 
             def fit_task() -> UUID:
                 return InferenceClient.fit(
@@ -321,16 +324,32 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             client_options.headers["sentry-trace"] = self.last_trace_id
 
         def predict_task() -> PredictionResult:
-            return InferenceClient.predict(
-                X,
-                fitted_train_set_id=self.last_fitted_train_set_id,
-                task="classification",
-                tabpfn_config=estimator_param,
-                predict_params={"output_type": output_type},
-                X_train=self.last_train_X,
-                y_train=self.last_train_y,
-                client_options=client_options,
-            )
+            exc = None
+            refit_attempts = 0
+            while True:
+                if refit_attempts > 1:
+                    raise RuntimeError("Failed to predict after refitting") from exc
+                try:
+                    return InferenceClient.predict(
+                        X,
+                        fitted_train_set_id=self.last_fitted_train_set_id,
+                        task="classification",
+                        tabpfn_config=estimator_param,
+                        predict_params={"output_type": output_type},
+                        X_train=self.last_train_X,
+                        y_train=self.last_train_y,
+                        client_options=client_options,
+                    )
+                except NeedsRefittingError as exc:
+                    refit_attempts += 1
+                    self.last_fitted_train_set_id = InferenceClient.fit(
+                        self.last_train_X,
+                        self.last_train_y,
+                        task="classification",
+                        tabpfn_config=estimator_param,
+                        description=self.last_train_set_description,
+                        client_options=client_options,
+                    )
 
         result = run_task(predict_task, "Predicting")
         # Unpack and store metadata
@@ -446,6 +465,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.last_train_X = None
         self.last_train_y = None
         self.last_meta = {}
+        self.last_train_set_description = None
 
     def fit(
         self,
@@ -469,6 +489,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                 client_options.headers["sentry-trace"] = uuid4().hex
 
             self.last_trace_id = client_options.headers["sentry-trace"]
+            self.last_train_set_description = description
 
             def fit_task() -> UUID:
                 return InferenceClient.fit(
@@ -541,16 +562,32 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             client_options.headers["sentry-trace"] = self.last_trace_id
 
         def predict_task() -> PredictionResult:
-            return InferenceClient.predict(
-                X,
-                fitted_train_set_id=self.last_fitted_train_set_id,
-                task="regression",
-                tabpfn_config=estimator_param,
-                predict_params=predict_params,
-                X_train=self.last_train_X,
-                y_train=self.last_train_y,
-                client_options=client_options,
-            )
+            exc = None
+            refit_attempts = 0
+            while True:
+                if refit_attempts > 1:
+                    raise RuntimeError("Failed to predict after refitting") from exc
+                try:
+                    return InferenceClient.predict(
+                        X,
+                        fitted_train_set_id=self.last_fitted_train_set_id,
+                        task="regression",
+                        tabpfn_config=estimator_param,
+                        predict_params=predict_params,
+                        X_train=self.last_train_X,
+                        y_train=self.last_train_y,
+                        client_options=client_options,
+                    )
+                except NeedsRefittingError as exc:
+                    refit_attempts += 1
+                    self.last_fitted_train_set_id = InferenceClient.fit(
+                        self.last_train_X,
+                        self.last_train_y,
+                        task="regression",
+                        tabpfn_config=estimator_param,
+                        description=self.last_train_set_description,
+                        client_options=client_options,
+                    )
 
         result = run_task(predict_task, "Predicting")
         # Unpack and store metadata

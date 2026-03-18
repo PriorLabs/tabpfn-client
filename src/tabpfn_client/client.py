@@ -6,7 +6,6 @@ from uuid import UUID
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from enum import Enum, auto
 from importlib.metadata import PackageNotFoundError, version
 import io
 import json
@@ -119,11 +118,6 @@ SERVER_CONFIG_FILE = Path(__file__).parent.resolve() / "server_config.yaml"
 SERVER_CONFIG = OmegaConf.load(SERVER_CONFIG_FILE)
 
 
-class ModelType(Enum):
-    TABPFN = auto()
-    TABPFN_R = auto()
-
-
 def get_client_version() -> str:
     try:
         return version("tabpfn_client")
@@ -146,6 +140,14 @@ def _serialize_to_parquet(data) -> tuple[bytes, str]:
     dataset_bytes = buf.getvalue()
     crc32c_b64 = _get_crc32c_hash(dataset_bytes)
     return dataset_bytes, crc32c_b64
+
+
+class NeedsRefittingError(Exception):
+    """
+    Exception raised when the server is not able to predict given the current state.
+    """
+
+    pass
 
 
 @dataclass
@@ -547,7 +549,8 @@ class ServiceClient(Singleton):
             if res.status_code == 404:
                 err_resp = ErrorResponse.model_validate(res.json())
                 if err_resp.error_code == "NOT_FOUND":
-                    pass  # TODO refit
+                    raise NeedsRefittingError(err_resp.message)
+                raise RuntimeError(err_resp.message)
             if res.status_code == 409:
                 return DuplicateTestSetErrorResponse.model_validate(res.json())
         except ValidationError:
@@ -582,7 +585,8 @@ class ServiceClient(Singleton):
             if res.status_code == 404:
                 err_resp = ErrorResponse.model_validate(res.json())
                 if err_resp.error_code == "NOT_FOUND":
-                    pass  # TODO refit
+                    raise NeedsRefittingError(err_resp.message)
+                raise RuntimeError(err_resp.message)
         except ValidationError:
             res.raise_for_status()
 
