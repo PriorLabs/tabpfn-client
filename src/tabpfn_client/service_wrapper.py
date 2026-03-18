@@ -8,8 +8,8 @@ import os
 from pathlib import Path
 from typing import Literal, Optional
 
-from tabpfn_client.api_models import FitResponse, PredictResponse
-from tabpfn_client.client import ServiceClient, ClientOptions
+from tabpfn_client.api_models import FitResponse
+from tabpfn_client.client import ServiceClient, ClientOptions, PredictionResult
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_common_utils.utils import Singleton
 
@@ -256,7 +256,6 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         tabpfn_config=None,
         description: str | None = None,
         client_options: ClientOptions | None = None,
-        dedup_datasets: bool = True,
     ) -> FitResponse:
         return ServiceClient.fit(
             X,
@@ -265,7 +264,6 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             tabpfn_config=tabpfn_config,
             description=description,
             client_options=client_options,
-            dedup_datasets=dedup_datasets,
         )
 
     @classmethod
@@ -278,8 +276,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         tabpfn_config=None,
         predict_params=None,
         client_options: ClientOptions | None = None,
-        dedup_datasets: bool = True,
-    ) -> PredictResponse:
+    ) -> PredictionResult:
         return ServiceClient.predict(
             x_test=X,
             train_set_id=train_set_id,
@@ -288,5 +285,4 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             tabpfn_config=tabpfn_config,
             predict_params=predict_params,
             client_options=client_options,
-            dedup_datasets=dedup_datasets,
         )

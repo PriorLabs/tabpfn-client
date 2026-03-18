@@ -20,6 +20,7 @@ from sklearn.utils.validation import check_is_fitted
 from tabpfn_client.client import (
     ServiceClient,
     ClientOptions,
+    PredictionResult,
 )
 from tabpfn_client.config import Config, init
 from tabpfn_client.constants import (
@@ -27,7 +28,7 @@ from tabpfn_client.constants import (
     URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE,
     ModelVersion,
 )
-from tabpfn_client.api_models import PredictResponse, FitResponse
+from tabpfn_client.api_models import FitResponse
 from tabpfn_client.service_wrapper import InferenceClient
 
 try:
@@ -227,7 +228,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         y,
         description: str | None = None,
         client_options: ClientOptions | None = None,
-        dedup_datasets: bool = True,
     ):
         # assert init() is called
         init()
@@ -253,7 +253,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                     tabpfn_config=estimator_param,
                     description=description,
                     client_options=client_options,
-                    dedup_datasets=dedup_datasets,
                 )
 
             self.last_train_set_id = run_task(fit_task, "Fitting", with_spinner=True)
@@ -270,7 +269,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self,
         X,
         client_options: ClientOptions | None = None,
-        dedup_datasets: bool = True,
     ):
         """Predict class labels for samples in X.
 
@@ -284,14 +282,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             X,
             output_type="preds",
             client_options=client_options,
-            dedup_datasets=dedup_datasets,
         )
 
     def predict_proba(
         self,
         X,
         client_options: ClientOptions | None = None,
-        dedup_datasets: bool = True,
     ):
         """Predict class probabilities for X.
 
@@ -305,7 +301,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             X,
             output_type="probas",
             client_options=client_options,
-            dedup_datasets=dedup_datasets,
         )
 
     def _predict(
@@ -313,7 +308,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         X,
         output_type,
         client_options: ClientOptions | None = None,
-        dedup_datasets: bool = True,
     ) -> dict[str, np.ndarray]:
         check_is_fitted(self)
         validate_data_size(X)
@@ -326,7 +320,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         if "sentry-trace" not in client_options.headers:
             client_options.headers["sentry-trace"] = self.last_trace_id
 
-        def predict_task() -> PredictResponse:
+        def predict_task() -> PredictionResult:
             return InferenceClient.predict(
                 X,
                 train_set_id=self.last_train_set_id,
@@ -337,7 +331,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 # X_train=self.last_train_X,  # TODO
                 # y_train=self.last_train_y,
                 client_options=client_options,
-                dedup_datasets=dedup_datasets,  # TODO
             )
 
         result = run_task(predict_task, "Predicting")
@@ -461,7 +454,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         y,
         description: str | None = None,
         client_options: ClientOptions | None = None,
-        dedup_datasets: bool = True,
     ):
         # assert init() is called
         init()
@@ -487,7 +479,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     tabpfn_config=estimator_param,
                     description=description,
                     client_options=client_options,
-                    dedup_datasets=dedup_datasets,
                 )
 
             self.last_train_set_id = run_task(fit_task, "Fitting")
@@ -509,7 +500,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         ] = "mean",
         quantiles: Optional[list[float]] = None,
         client_options: ClientOptions | None = None,
-        dedup_datasets: bool = True,
     ) -> Union[np.ndarray, list[np.ndarray], dict[str, np.ndarray]]:
         """Predict regression target for X.
 
@@ -551,7 +541,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         if "sentry-trace" not in client_options.headers:
             client_options.headers["sentry-trace"] = self.last_trace_id
 
-        def predict_task() -> PredictResponse:
+        def predict_task() -> PredictionResult:
             return InferenceClient.predict(
                 X,
                 train_set_id=self.last_train_set_id,
@@ -562,7 +552,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                 # X_train=self.last_train_X,  # TODO
                 # y_train=self.last_train_y,
                 client_options=client_options,
-                dedup_datasets=dedup_datasets,
             )
 
         result = run_task(predict_task, "Predicting")

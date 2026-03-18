@@ -2,9 +2,12 @@ from uuid import UUID
 from typing import Any
 from pydantic import BaseModel
 
+Prediction = (
+    list[float] | list[list[float]] | dict[str, list[float] | list[list[float]]]
+)
 
-Prediction = list[Any] | dict[str, Any]
 TabPFNConfig = dict[str, Any] | None
+
 PredictParams = dict[str, Any] | None
 
 
@@ -58,6 +61,7 @@ class PrepareTrainSetUploadRequest(BaseModel):
     x_train_info: FileInfo
     y_train_info: FileInfo
     description: str | None = None
+    force_upload: bool = False
 
 
 class PrepareTrainSetUploadResponse(BaseModel):
@@ -90,6 +94,7 @@ class FitResponse(BaseModel):
 class PrepareTestSetUploadRequest(BaseModel):
     train_set_id: UUID
     x_test_info: FileInfo
+    force_upload: bool = False
 
 
 class PrepareTestSetUploadResponse(BaseModel):

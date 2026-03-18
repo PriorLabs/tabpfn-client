@@ -47,3 +47,8 @@ def dedup_datasets_enabled() -> bool:
         logger.warning("Dataset deduplication is disabled.")
 
     return enabled
+
+
+def force_upload_enabled() -> bool:
+    val = os.getenv("TABPFN_FORCE_UPLOAD")
+    return str(val).lower() in {"1", "true", "yes", "on"}

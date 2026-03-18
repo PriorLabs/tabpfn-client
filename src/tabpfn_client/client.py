@@ -11,6 +11,7 @@ import io
 import json
 import logging
 from pathlib import Path
+import numpy as np
 import re
 import struct
 import time
@@ -26,7 +27,7 @@ import httpx
 from httpx._transports.default import HTTPTransport
 from omegaconf import OmegaConf
 from tabpfn_client.browser_auth import BrowserAuthHandler
-from tabpfn_client.constants import dedup_datasets_enabled
+from tabpfn_client.constants import dedup_datasets_enabled, force_upload_enabled
 from tabpfn_common_utils import utils as common_utils
 from tabpfn_common_utils.utils import Singleton
 from tabpfn_client.api_models import (
@@ -160,6 +161,12 @@ class ClientOptions:
 
     timeout: float = _DEFAULT_HTTPX_TIMEOUT
     headers: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PredictionResult:
+    y_pred: Union[np.ndarray, list[np.ndarray], dict[str, np.ndarray]]
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class SelectiveHTTP2Transport(HTTPTransport):
@@ -318,7 +325,6 @@ class ServiceClient(Singleton):
         tabpfn_config: Union[dict, None] = None,
         description: str | None = None,
         client_options: ClientOptions | None = None,
-        dedup_datasets: bool = True,
     ) -> FitResponse:
         """
         Upload a train set to server and return the train set UID if successful.
@@ -339,10 +345,6 @@ class ServiceClient(Singleton):
             Per-request options (e.g. timeout, headers) for the fitting API call
             only. Does not apply to file uploads. Because uploads can run before fitting,
             this method may return later than the timeout specified.
-        dedup_datasets: bool, optional
-            If True, the client will check if the same files (identified by their content hash)
-            have already been uploaded and return the corresponding upload_id. Default is True.
-            This is only used if DISABLE_DS_CACHING is False.
 
         Returns
         -------
@@ -363,7 +365,7 @@ class ServiceClient(Singleton):
                         f"the server limit of {limits.max_size_bytes} bytes."
                     )
 
-        if dedup_datasets and dedup_datasets_enabled():
+        if dedup_datasets_enabled():
             x_dedup_hash = x_crc32c_hash
             y_dedup_hash = y_crc32c_hash
         else:
@@ -380,6 +382,7 @@ class ServiceClient(Singleton):
                     format="parquet", hash=y_dedup_hash, size_bytes=len(y_bytes)
                 ),
                 description=description,
+                force_upload=force_upload_enabled(),
             ).model_dump(),
             headers=client_options.headers,
         )
@@ -469,9 +472,8 @@ class ServiceClient(Singleton):
         task: Literal["classification", "regression"],
         tabpfn_config: Union[dict, None] = None,
         predict_params: Union[dict, None] = None,
-        dedup_datasets: bool = True,
         client_options: ClientOptions | None = None,
-    ) -> PredictResponse:
+    ) -> PredictionResult:
         """
         Predict the class labels for the provided data (test set).
 
@@ -493,15 +495,11 @@ class ServiceClient(Singleton):
             Per-request options (e.g. timeout, headers) for the fitting API call
             only. Does not apply to file uploads. Because uploads can run before fitting,
             this method may return later than the timeout specified.
-        dedup_datasets: bool, optional
-            If True, the client will check if the same files (identified by their content hash)
-            have already been uploaded and return the corresponding upload_id. Default is True.
-            This is only used if DISABLE_DS_CACHING is False.
 
         Returns
         -------
-        predict_resp : PredictResponse
-            The response from the predict API call containing the prediction and metadata.
+        prediction_result : PredictionResult
+            The result from the predict API call containing the prediction and metadata.
         """
         client_options = client_options or ClientOptions()
 
@@ -515,7 +513,7 @@ class ServiceClient(Singleton):
                     f"the server limit of {limits.max_size_bytes} bytes."
                 )
 
-        if dedup_datasets and dedup_datasets_enabled():
+        if dedup_datasets_enabled():
             x_test_dedup_hash = x_test_crc32c_hash
         else:
             x_test_dedup_hash = None
@@ -529,6 +527,7 @@ class ServiceClient(Singleton):
                     hash=x_test_dedup_hash,
                     size_bytes=len(x_test_bytes),
                 ),
+                force_upload=force_upload_enabled(),
             ).model_dump(),
             headers=client_options.headers,
         )
@@ -547,7 +546,7 @@ class ServiceClient(Singleton):
                 prepare_resp.x_test_info,
             )
 
-        return cls._predict(
+        predict_resp = cls._predict(
             req=PredictRequest(
                 test_set_upload_id=prepare_resp.test_set_upload_id,
                 fitted_train_set_id=fitted_train_set_id,
@@ -559,6 +558,26 @@ class ServiceClient(Singleton):
             ),
             timeout=client_options.timeout,
             headers=client_options.headers,
+        )
+
+        prediction = predict_resp.prediction
+
+        if isinstance(prediction, dict):
+            result = {}
+            for k, v in prediction.items():
+                if isinstance(v, list):
+                    result[k] = np.array(v)
+                else:
+                    # The value should always be a list or list-of-lists,
+                    # leaving this here as an extra precaution in case we have
+                    # unexpected json serialization for objects like BarDistribution.
+                    result[k] = v
+        else:
+            result = np.array(prediction)
+
+        return PredictionResult(
+            y_pred=result,
+            metadata=predict_resp.metadata.model_dump(),
         )
 
     @classmethod
