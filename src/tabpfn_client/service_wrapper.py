@@ -256,7 +256,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         tabpfn_config=None,
         description: str = "",
         client_options: ClientOptions | None = None,
-        dedup_files: bool = True,
+        dedup_datasets: bool = True,
     ) -> FitResponse:
         return ServiceClient.fit(
             X,
@@ -265,7 +265,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             tabpfn_config=tabpfn_config,
             description=description,
             client_options=client_options,
-            dedup_files=dedup_files,
+            dedup_datasets=dedup_datasets,
         )
 
     @classmethod
@@ -278,7 +278,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         tabpfn_config=None,
         predict_params=None,
         client_options: ClientOptions | None = None,
-        dedup_files: bool = True,
+        dedup_datasets: bool = True,
     ) -> PredictResponse:
         return ServiceClient.predict(
             x_test=X,
@@ -288,5 +288,5 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             tabpfn_config=tabpfn_config,
             predict_params=predict_params,
             client_options=client_options,
-            dedup_files=dedup_files,
+            dedup_datasets=dedup_datasets,
         )

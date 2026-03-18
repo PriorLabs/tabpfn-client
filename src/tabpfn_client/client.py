@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 import base64
-from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -28,10 +27,8 @@ import httpx
 from httpx._transports.default import HTTPTransport
 from omegaconf import OmegaConf
 from tabpfn_client.browser_auth import BrowserAuthHandler
-from tabpfn_client.constants import CACHE_DIR
 from tabpfn_common_utils import utils as common_utils
 from tabpfn_common_utils.utils import Singleton
-import xxhash
 from tabpfn_client.api_models import (
     GetDatasetLimitsResponse,
     PrepareTrainSetUploadRequest,
@@ -81,12 +78,23 @@ def _on_giveup(details: Dict[str, Any]):
     logger.error(message)
 
 
-def _caching_disabled() -> bool:
-    val = os.getenv("DISABLE_DS_CACHING", "")
-    disabled = str(val).lower() in {"1", "true", "yes", "on"}
-    if disabled:
-        logger.warning("Dataset caching is disabled.")
-    return disabled
+def _dedup_enabled() -> bool:
+    # TABPFN_DEDUP_DATASETS: true = enable dedup, false = disable dedup
+    # DISABLE_DS_CACHING (legacy): true = disable caching, false = enable caching
+    dedup_val = os.getenv("TABPFN_DEDUP_DATASETS")
+    disable_val = os.getenv("DISABLE_DS_CACHING")
+
+    if dedup_val is not None:
+        enabled = str(dedup_val).lower() in {"1", "true", "yes", "on"}
+    elif disable_val is not None:
+        enabled = str(disable_val).lower() not in {"1", "true", "yes", "on"}
+    else:
+        enabled = True
+
+    if not enabled:
+        logger.warning("Dataset deduplication is disabled.")
+
+    return enabled
 
 
 class GCPOverloaded(Exception):
@@ -115,86 +123,6 @@ class SensitiveDataFilter(logging.Filter):
             )
             record.args = (record.args[0], filtered_query, *record.args[2:])
         return True
-
-
-class DatasetUIDCacheManager:
-    """
-    Manages a cache of the last 50 uploaded datasets, tracking dataset hashes and their UIDs.
-
-    Can be disabled using the environment variable 'DISABLE_DS_CACHING'.
-    """
-
-    def __init__(self):
-        self.file_path = CACHE_DIR / "dataset_cache"
-        self.cache_limit = 50
-        self.disable_ds_caching = _caching_disabled()
-
-        self.cache = self.load_cache() if not self.disable_ds_caching else OrderedDict()
-
-    def load_cache(self):
-        """
-        Loads the cache from disk if it exists, otherwise initializes an empty cache.
-        """
-        if os.path.exists(self.file_path):
-            with open(self.file_path, "r") as file:
-                data = json.load(file)
-                return OrderedDict(data)
-        return OrderedDict()
-
-    def _compute_hash(self, *args):
-        combined_bytes = b"".join(
-            item if isinstance(item, bytes) else str.encode(item) for item in args
-        )
-        return xxhash.xxh64(combined_bytes).hexdigest()
-
-    def get_dataset_uid(self, *args):
-        """
-        Generates hash by all received arguments and returns cached dataset uid if in cache, otherwise None.
-        """
-        dataset_hash = self._compute_hash(*args)
-        if str(dataset_hash) in self.cache and not self.disable_ds_caching:
-            self.cache.move_to_end(dataset_hash)
-            return self.cache[dataset_hash], dataset_hash
-        else:
-            return None, dataset_hash
-
-    def add_dataset_uid(self, hash: str, dataset_uid: str):
-        """
-        Adds a new dataset to the cache, removing the oldest item if the cache exceeds 50 entries.
-        Assumes the dataset is not already in the cache.
-        """
-        self.cache[hash] = dataset_uid
-        # Move to end for the case that hash already was stored in the cache
-        self.cache.move_to_end(hash)
-        if len(self.cache) > self.cache_limit:
-            self.cache.popitem(last=False)
-
-        if not self.disable_ds_caching:
-            self.save_cache()
-
-    def save_cache(self):
-        """
-        Saves the current cache to disk.
-        """
-        os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
-        with open(self.file_path, "w") as file:
-            json.dump(self.cache, file)
-
-    def delete_uid(self, dataset_uid: str) -> Optional[str]:
-        """
-        Deletes an entry from the cache based on the dataset UID.
-        """
-        hash_to_delete = None
-        for hash, uid in self.cache.items():
-            if uid == dataset_uid:
-                hash_to_delete = hash
-                break
-
-        if hash_to_delete:
-            del self.cache[hash_to_delete]
-            self.save_cache()
-            return hash_to_delete
-        return None
 
 
 # Apply the custom filter to the httpx logger
@@ -289,7 +217,6 @@ class ServiceClient(Singleton):
     _access_token = None
     _dataset_limits: GetDatasetLimitsResponse | None = None
     _dataset_limits_ts: float = 0.0
-    dataset_uid_cache_manager = DatasetUIDCacheManager()
 
     @staticmethod
     def _process_tabpfn_config(
@@ -410,7 +337,7 @@ class ServiceClient(Singleton):
         tabpfn_config: Union[dict, None] = None,
         description: str = "",
         client_options: ClientOptions | None = None,
-        dedup_files: bool = True,
+        dedup_datasets: bool = True,
     ) -> FitResponse:
         """
         Upload a train set to server and return the train set UID if successful.
@@ -431,7 +358,7 @@ class ServiceClient(Singleton):
             Per-request options (e.g. timeout, headers) for the fitting API call
             only. Does not apply to file uploads. Because uploads can run before fitting,
             this method may return later than the timeout specified.
-        dedup_files: bool, optional
+        dedup_datasets: bool, optional
             If True, the client will check if the same files (identified by their content hash)
             have already been uploaded and return the corresponding upload_id. Default is True.
             This is only used if DISABLE_DS_CACHING is False.
@@ -455,7 +382,7 @@ class ServiceClient(Singleton):
                         f"the server limit of {limits.max_size_bytes} bytes."
                     )
 
-        if dedup_files and not _caching_disabled():
+        if dedup_datasets and _dedup_enabled():
             x_dedup_hash = x_crc32c_hash
             y_dedup_hash = y_crc32c_hash
         else:
@@ -560,7 +487,7 @@ class ServiceClient(Singleton):
         task: Literal["classification", "regression"],
         tabpfn_config: Union[dict, None] = None,
         predict_params: Union[dict, None] = None,
-        dedup_files: bool = True,
+        dedup_datasets: bool = True,
         client_options: ClientOptions | None = None,
     ) -> PredictResponse:
         """
@@ -584,7 +511,7 @@ class ServiceClient(Singleton):
             Per-request options (e.g. timeout, headers) for the fitting API call
             only. Does not apply to file uploads. Because uploads can run before fitting,
             this method may return later than the timeout specified.
-        dedup_files: bool, optional
+        dedup_datasets: bool, optional
             If True, the client will check if the same files (identified by their content hash)
             have already been uploaded and return the corresponding upload_id. Default is True.
             This is only used if DISABLE_DS_CACHING is False.
@@ -606,7 +533,7 @@ class ServiceClient(Singleton):
                     f"the server limit of {limits.max_size_bytes} bytes."
                 )
 
-        if dedup_files and not _caching_disabled():
+        if dedup_datasets and _dedup_enabled():
             x_test_dedup_hash = x_test_crc32c_hash
         else:
             x_test_dedup_hash = None
