@@ -2,6 +2,7 @@
 #  Licensed under the Apache License, Version 2.0
 
 from __future__ import annotations
+from uuid import UUID
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -325,7 +326,7 @@ class ServiceClient(Singleton):
         tabpfn_config: Union[dict, None] = None,
         description: str | None = None,
         client_options: ClientOptions | None = None,
-    ) -> FitResponse:
+    ) -> UUID:
         """
         Upload a train set to server and return the train set UID if successful.
 
@@ -348,8 +349,8 @@ class ServiceClient(Singleton):
 
         Returns
         -------
-        FitResponse
-            The response from the fit API call containing the train set ID and fitted train set ID.
+        fitted_train_set_id: UUID
+            The unique ID of the fitted train set in the server.
         """
         client_options = client_options or ClientOptions()
 
@@ -422,7 +423,7 @@ class ServiceClient(Singleton):
         if tabpfn_config and tabpfn_config.get("paper_version") is True:
             tabpfn_systems = []
 
-        return cls._fit(
+        fit_resp = cls._fit(
             req=FitRequest(
                 train_set_upload_id=prepare_resp.train_set_upload_id,
                 task=task,
@@ -431,6 +432,8 @@ class ServiceClient(Singleton):
             timeout=client_options.timeout,
             headers=client_options.headers,
         )
+
+        return fit_resp.fitted_train_set_id
 
     @classmethod
     @backoff.on_exception(
@@ -466,7 +469,6 @@ class ServiceClient(Singleton):
 
     def predict(
         cls,
-        train_set_id: str,
         fitted_train_set_id: str,
         x_test,
         task: Literal["classification", "regression"],
@@ -479,8 +481,6 @@ class ServiceClient(Singleton):
 
         Parameters
         ----------
-        train_set_id : str
-            The unique ID of the train set in the server.
         fitted_train_set_id : str
             The unique ID of the fitted train set in the server.
         x_test : array-like of shape (n_samples, n_features)
@@ -521,7 +521,7 @@ class ServiceClient(Singleton):
         res = cls.httpx_client.post(
             url="/tabpfn/prepare_test_set_upload/",
             json=PrepareTestSetUploadRequest(
-                train_set_id=train_set_id,
+                fitted_train_set_id=fitted_train_set_id,
                 x_test_info=FileInfo(
                     format="parquet",
                     hash=x_test_dedup_hash,

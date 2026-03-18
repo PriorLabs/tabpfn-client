@@ -10,6 +10,7 @@ from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, Literal, Optional, Union
 from typing_extensions import Self
+from uuid import UUID
 
 import numpy as np
 import pandas as pd
@@ -28,7 +29,6 @@ from tabpfn_client.constants import (
     URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE,
     ModelVersion,
 )
-from tabpfn_client.api_models import FitResponse
 from tabpfn_client.service_wrapper import InferenceClient
 
 try:
@@ -217,7 +217,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.inference_config = inference_config
         self.paper_version = paper_version
         self.last_trace_id = None
-        self.last_train_set_id = None
+        self.last_fitted_train_set_id = None
         self.last_train_X = None
         self.last_train_y = None
         self.last_meta = {}
@@ -245,7 +245,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
             self.last_trace_id = client_options.headers["sentry-trace"]
 
-            def fit_task() -> FitResponse:
+            def fit_task() -> UUID:
                 return InferenceClient.fit(
                     X,
                     y,
@@ -255,7 +255,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                     client_options=client_options,
                 )
 
-            self.last_train_set_id = run_task(fit_task, "Fitting", with_spinner=True)
+            self.last_fitted_train_set_id = run_task(fit_task, "Fitting")
             self.last_train_X = X
             self.last_train_y = y
             self.fitted_ = True
@@ -323,7 +323,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         def predict_task() -> PredictionResult:
             return InferenceClient.predict(
                 X,
-                train_set_id=self.last_train_set_id,
                 fitted_train_set_id=self.last_fitted_train_set_id,
                 task="classification",
                 tabpfn_config=estimator_param,
@@ -443,7 +442,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.inference_config = inference_config
         self.paper_version = paper_version
         self.last_trace_id = None
-        self.last_train_set_id = None
+        self.last_fitted_train_set_id = None
         self.last_train_X = None
         self.last_train_y = None
         self.last_meta = {}
@@ -471,7 +470,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
             self.last_trace_id = client_options.headers["sentry-trace"]
 
-            def fit_task() -> FitResponse:
+            def fit_task() -> UUID:
                 return InferenceClient.fit(
                     X,
                     y,
@@ -481,7 +480,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     client_options=client_options,
                 )
 
-            self.last_train_set_id = run_task(fit_task, "Fitting")
+            self.last_fitted_train_set_id = run_task(fit_task, "Fitting")
             self.last_train_X = X
             self.last_train_y = y
             self.fitted_ = True
@@ -544,7 +543,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         def predict_task() -> PredictionResult:
             return InferenceClient.predict(
                 X,
-                train_set_id=self.last_train_set_id,
                 fitted_train_set_id=self.last_fitted_train_set_id,
                 task="regression",
                 tabpfn_config=estimator_param,

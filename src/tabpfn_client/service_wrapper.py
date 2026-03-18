@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Literal, Optional
 
-from tabpfn_client.api_models import FitResponse
+from uuid import UUID
 from tabpfn_client.client import ServiceClient, ClientOptions, PredictionResult
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_common_utils.utils import Singleton
@@ -256,7 +256,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         tabpfn_config=None,
         description: str | None = None,
         client_options: ClientOptions | None = None,
-    ) -> FitResponse:
+    ) -> UUID:
         return ServiceClient.fit(
             X,
             y,
@@ -270,7 +270,6 @@ class InferenceClient(ServiceClientWrapper, Singleton):
     def predict(
         cls,
         X,
-        train_set_id: str,
         fitted_train_set_id: str,
         task: Literal["classification", "regression"],
         tabpfn_config=None,
@@ -279,7 +278,6 @@ class InferenceClient(ServiceClientWrapper, Singleton):
     ) -> PredictionResult:
         return ServiceClient.predict(
             x_test=X,
-            train_set_id=train_set_id,
             fitted_train_set_id=fitted_train_set_id,
             task=task,
             tabpfn_config=tabpfn_config,

@@ -84,7 +84,6 @@ class FitRequest(BaseModel):
 
 
 class FitResponse(BaseModel):
-    train_set_id: UUID
     fitted_train_set_id: UUID
 
 
@@ -92,7 +91,7 @@ class FitResponse(BaseModel):
 # /tabpfn/prepare_test_set_upload/
 # ---------------------------------------------------------------------------
 class PrepareTestSetUploadRequest(BaseModel):
-    train_set_id: UUID
+    fitted_train_set_id: UUID
     x_test_info: FileInfo
     force_reupload: bool = False
 
