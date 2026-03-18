@@ -61,7 +61,7 @@ class PrepareTrainSetUploadRequest(BaseModel):
     x_train_info: FileInfo
     y_train_info: FileInfo
     description: str | None = None
-    force_upload: bool = False
+    force_reupload: bool = False
 
 
 class PrepareTrainSetUploadResponse(BaseModel):
@@ -94,7 +94,7 @@ class FitResponse(BaseModel):
 class PrepareTestSetUploadRequest(BaseModel):
     train_set_id: UUID
     x_test_info: FileInfo
-    force_upload: bool = False
+    force_reupload: bool = False
 
 
 class PrepareTestSetUploadResponse(BaseModel):

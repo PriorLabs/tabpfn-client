@@ -49,6 +49,6 @@ def dedup_datasets_enabled() -> bool:
     return enabled
 
 
-def force_upload_enabled() -> bool:
-    val = os.getenv("TABPFN_FORCE_UPLOAD")
+def force_reupload_enabled() -> bool:
+    val = os.getenv("TABPFN_FORCE_REUPLOAD")
     return str(val).lower() in {"1", "true", "yes", "on"}

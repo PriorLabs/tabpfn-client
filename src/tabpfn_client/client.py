@@ -27,7 +27,7 @@ import httpx
 from httpx._transports.default import HTTPTransport
 from omegaconf import OmegaConf
 from tabpfn_client.browser_auth import BrowserAuthHandler
-from tabpfn_client.constants import dedup_datasets_enabled, force_upload_enabled
+from tabpfn_client.constants import dedup_datasets_enabled, force_reupload_enabled
 from tabpfn_common_utils import utils as common_utils
 from tabpfn_common_utils.utils import Singleton
 from tabpfn_client.api_models import (
@@ -382,7 +382,7 @@ class ServiceClient(Singleton):
                     format="parquet", hash=y_dedup_hash, size_bytes=len(y_bytes)
                 ),
                 description=description,
-                force_upload=force_upload_enabled(),
+                force_reupload=force_reupload_enabled(),
             ).model_dump(),
             headers=client_options.headers,
         )
@@ -527,7 +527,7 @@ class ServiceClient(Singleton):
                     hash=x_test_dedup_hash,
                     size_bytes=len(x_test_bytes),
                 ),
-                force_upload=force_upload_enabled(),
+                force_reupload=force_reupload_enabled(),
             ).model_dump(),
             headers=client_options.headers,
         )
