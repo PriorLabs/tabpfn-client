@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 import io
+import os
 import json
 import logging
 from pathlib import Path
@@ -201,7 +202,7 @@ class ServiceClient(Singleton):
     base_url = f"{server_config.protocol}://{server_config.host}:{server_config.port}"
     fit_path = SERVER_CONFIG["endpoints"]["fit"]["path"]
     httpx_client = httpx.Client(
-        base_url=base_url,
+        base_url=os.getenv("TABPFN_API_URL", base_url),
         timeout=_DEFAULT_HTTPX_TIMEOUT,
         headers={"client-version": get_client_version()},
         transport=SelectiveHTTP2Transport(http2_paths=[fit_path]),

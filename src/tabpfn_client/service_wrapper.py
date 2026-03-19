@@ -46,6 +46,7 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
     def set_token(cls, access_token: str):
         ServiceClient.authorize(access_token)
 
+        # XXX: TABPFN_TOKEN
         # Mitigate parallel writes by checking if the token is already set to
         # the same value. We'll consider using fcntl if this problem persists.
         try:
@@ -92,6 +93,7 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
     @classmethod
     def try_reuse_existing_token(cls) -> tuple[bool, str or None]:
         if ServiceClient.get_access_token() is None:
+            # XXX: TABPFN_TOKEN
             if not cls.CACHED_TOKEN_FILE.exists():
                 return False, None
 
@@ -122,6 +124,7 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
 
     @classmethod
     def _reset_token(cls):
+        # XXX: TABPFN_TOKEN
         ServiceClient.reset_authorization()
         cls.CACHED_TOKEN_FILE.unlink(missing_ok=True)
 
