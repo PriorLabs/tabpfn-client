@@ -48,8 +48,8 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
 
 # Chunks are usually 32 MB in size, at maximum 16 threads we achieve full parallelization
-# up to 512 MB.
-_DEFAULT_MAX_UPLOAD_PARALLELISM = 16
+# up to 256 MB.
+_DEFAULT_MAX_UPLOAD_PARALLELISM = 8
 _DEFAULT_HTTPX_TIMEOUT = 900.0  # 15 minutes
 
 
