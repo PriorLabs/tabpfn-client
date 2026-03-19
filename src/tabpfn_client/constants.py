@@ -33,26 +33,28 @@ def ci_mode_enabled() -> bool:
 
 
 @cache
-def dedup_datasets_enabled() -> bool:
-    # TABPFN_DEDUP_DATASETS: true = enable dedup, false = disable dedup
-    # DISABLE_DS_CACHING (legacy): true = disable caching, false = enable caching
-    dedup_val = os.getenv("TABPFN_DEDUP_DATASETS")
-    disable_val = os.getenv("DISABLE_DS_CACHING")
+def force_reupload_enabled() -> bool:
+    # `DISABLE_DS_CACHING` is legacy, we keep it for backward compatibility.
+    # Note: The new env var has the opposite meaning.
+    force_reupload = os.getenv("TABPFN_FORCE_REUPLOAD")
+    disable_caching = os.getenv("DISABLE_DS_CACHING")
 
-    if dedup_val is not None:
-        enabled = str(dedup_val).lower() in {"1", "true", "yes", "on"}
-    elif disable_val is not None:
-        enabled = str(disable_val).lower() not in {"1", "true", "yes", "on"}
+    if force_reupload is not None:
+        enabled = str(force_reupload).lower() in {"1", "true", "yes", "on"}
+    elif disable_caching is not None:
+        enabled = str(disable_caching).lower() not in {"1", "true", "yes", "on"}
     else:
         enabled = True
-
-    if not enabled:
-        logger.warning("Dataset deduplication is disabled.")
 
     return enabled
 
 
 @cache
-def force_reupload_enabled() -> bool:
-    val = os.getenv("TABPFN_FORCE_REUPLOAD")
-    return str(val).lower() in {"1", "true", "yes", "on"}
+def dedup_datasets_enabled() -> bool:
+    val = os.getenv("TABPFN_DEDUP_DATASETS", True)
+    enabled = str(val).lower() in {"1", "true", "yes", "on"}
+
+    if not enabled:
+        logger.warning("Force reupload is disabled.")
+
+    return enabled
