@@ -47,7 +47,9 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
 
-_DEFAULT_CHUNK_UPLOAD_PARALLELISM = 16
+# Chunks are usually 32 MB in size, at maximum 16 threads we achieve full parallelization
+# up to 512 MB.
+_DEFAULT_MAX_UPLOAD_PARALLELISM = 16
 _DEFAULT_HTTPX_TIMEOUT = 900.0  # 15 minutes
 
 
@@ -703,7 +705,7 @@ class ServiceClient(Singleton):
         chunk_hashes = [_get_crc32c_hash(c) for c in chunks]
 
         with ThreadPoolExecutor(
-            max_workers=min(_DEFAULT_CHUNK_UPLOAD_PARALLELISM, num_chunks)
+            max_workers=min(_DEFAULT_MAX_UPLOAD_PARALLELISM, num_chunks)
         ) as pool:
             futures = {
                 pool.submit(
