@@ -10,7 +10,7 @@ from typing import Literal, Optional
 
 from uuid import UUID
 from tabpfn_client.client import ServiceClient, ClientOptions, PredictionResult
-from tabpfn_client.constants import CACHE_DIR
+from tabpfn_client.constants import CACHE_DIR, TABPFN_TOKEN
 from tabpfn_common_utils.utils import Singleton
 
 
@@ -46,7 +46,6 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
     def set_token(cls, access_token: str):
         ServiceClient.authorize(access_token)
 
-        # XXX: TABPFN_TOKEN
         # Mitigate parallel writes by checking if the token is already set to
         # the same value. We'll consider using fcntl if this problem persists.
         try:
@@ -93,18 +92,18 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
     @classmethod
     def try_reuse_existing_token(cls) -> tuple[bool, str or None]:
         if ServiceClient.get_access_token() is None:
-            # XXX: TABPFN_TOKEN
-            if not cls.CACHED_TOKEN_FILE.exists():
-                return False, None
-
-            access_token = cls.CACHED_TOKEN_FILE.read_text()
-
+            if TABPFN_TOKEN:
+                access_token = TABPFN_TOKEN
+            else:
+                if not cls.CACHED_TOKEN_FILE.exists():
+                    return False, None
+                access_token = cls.CACHED_TOKEN_FILE.read_text()
         else:
             access_token = ServiceClient.get_access_token()
 
         is_valid = ServiceClient.is_auth_token_outdated(access_token)
         if is_valid is False:
-            cls._reset_token()
+            cls._reset_token()  # it will also unset the TABPFN_TOKEN var
             return False, None
         elif is_valid is None:
             return False, access_token
@@ -124,9 +123,12 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
 
     @classmethod
     def _reset_token(cls):
-        # XXX: TABPFN_TOKEN
         ServiceClient.reset_authorization()
         cls.CACHED_TOKEN_FILE.unlink(missing_ok=True)
+        # The TABPFN_TOKEN var is always set externally in the environment, in
+        # the client it can only be used or unset, never set.
+        global TABPFN_TOKEN
+        TABPFN_TOKEN = None
 
     @classmethod
     def retrieve_greeting_messages(cls):
