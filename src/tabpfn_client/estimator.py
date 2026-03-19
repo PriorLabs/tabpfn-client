@@ -349,7 +349,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 raise ValueError(
                     f"Number of classes {len(self.classes_)} exceeds the maximal number of "
                     f"{limits.max_classes} classes supported by TabPFN. Consider using "
-                    "a strategy to reduce the number of classes. For code see "
+                    "the many_class extension to reduce the number of classes. For code see "
                     f"{URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE}"
                 )
 
