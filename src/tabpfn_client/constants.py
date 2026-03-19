@@ -25,6 +25,9 @@ URL_PRIOR_LABS_TERMS_AND_CONDITIONS = (
 )
 URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE = "https://github.com/PriorLabs/tabpfn-extensions/blob/main/src/tabpfn_extensions/many_class/many_class_classifier.py"  # noqa: E501
 
+TABPFN_MAX_THREAD_PER_UPLOAD = os.getenv("TABPFN_MAX_THREAD_PER_UPLOAD", 8)
+TABPFN_CLIENT_TIMEOUT = os.getenv("TABPFN_CLIENT_TIMEOUT", 900.0)
+
 
 @cache
 def ci_mode_enabled() -> bool:

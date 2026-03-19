@@ -29,7 +29,12 @@ import httpx
 from httpx._transports.default import HTTPTransport
 from omegaconf import OmegaConf
 from tabpfn_client.browser_auth import BrowserAuthHandler
-from tabpfn_client.constants import dedup_datasets_enabled, force_reupload_enabled
+from tabpfn_client.constants import (
+    dedup_datasets_enabled,
+    force_reupload_enabled,
+    TABPFN_MAX_THREAD_PER_UPLOAD,
+    TABPFN_CLIENT_TIMEOUT,
+)
 from tabpfn_common_utils import utils as common_utils
 from tabpfn_common_utils.utils import Singleton
 from tabpfn_client.api_models import (
@@ -55,11 +60,6 @@ logger = logging.getLogger(__name__)
 # avoid logging of httpx and httpcore on client side
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
-
-# Chunks are usually 32 MB in size, at maximum 16 threads we achieve full parallelization
-# up to 256 MB.
-_DEFAULT_MAX_UPLOAD_PARALLELISM = 8
-_DEFAULT_HTTPX_TIMEOUT = 900.0  # 15 minutes
 
 
 def _on_backoff(details: Dict[str, Any]):
@@ -165,7 +165,9 @@ class ClientOptions:
         Headers for the request overriding the default headers.
     """
 
-    timeout: float = _DEFAULT_HTTPX_TIMEOUT
+    # Note: timeout=None does not fallback to the client default, rather it disables
+    # the timeout altogether.
+    timeout: float = TABPFN_CLIENT_TIMEOUT
     headers: dict[str, str] = field(default_factory=dict)
 
 
@@ -203,7 +205,7 @@ class ServiceClient(Singleton):
     fit_path = SERVER_CONFIG["endpoints"]["fit"]["path"]
     httpx_client = httpx.Client(
         base_url=os.getenv("TABPFN_API_URL", base_url),
-        timeout=_DEFAULT_HTTPX_TIMEOUT,
+        timeout=TABPFN_CLIENT_TIMEOUT,
         headers={"client-version": get_client_version()},
         transport=SelectiveHTTP2Transport(http2_paths=[fit_path]),
         follow_redirects=True,
@@ -475,7 +477,7 @@ class ServiceClient(Singleton):
     def _fit(
         cls,
         req: FitRequest,
-        timeout: float | None = None,
+        timeout: float,
         headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         return cls.httpx_client.post(
@@ -639,7 +641,7 @@ class ServiceClient(Singleton):
     def _predict(
         cls,
         req: PredictRequest,
-        timeout: float | None = None,
+        timeout: float,
         headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         return cls.httpx_client.post(
@@ -669,7 +671,7 @@ class ServiceClient(Singleton):
             return
 
         with ThreadPoolExecutor(
-            max_workers=min(_DEFAULT_MAX_UPLOAD_PARALLELISM, num_chunks)
+            max_workers=min(TABPFN_MAX_THREAD_PER_UPLOAD, num_chunks)
         ) as pool:
             futures = {
                 pool.submit(
