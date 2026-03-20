@@ -27,8 +27,8 @@ URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE = "https://github.com/PriorLabs/tab
 
 TABPFN_TOKEN = os.getenv("TABPFN_TOKEN")
 TABPFN_API_URL = os.getenv("TABPFN_API_URL")
-TABPFN_MAX_THREAD_PER_UPLOAD = os.getenv("TABPFN_MAX_THREAD_PER_UPLOAD", 8)
-TABPFN_CLIENT_TIMEOUT = os.getenv("TABPFN_CLIENT_TIMEOUT", 900.0)
+TABPFN_MAX_THREAD_PER_UPLOAD = int(os.getenv("TABPFN_MAX_THREAD_PER_UPLOAD", 8))
+TABPFN_CLIENT_TIMEOUT = float(os.getenv("TABPFN_CLIENT_TIMEOUT", 900.0))
 
 
 @cache
@@ -47,9 +47,9 @@ def force_reupload_enabled() -> bool:
     if force_reupload is not None:
         enabled = str(force_reupload).lower() in {"1", "true", "yes", "on"}
     elif disable_caching is not None:
-        enabled = str(disable_caching).lower() not in {"1", "true", "yes", "on"}
+        enabled = str(disable_caching).lower() in {"1", "true", "yes", "on"}
     else:
-        enabled = True
+        enabled = False
 
     return enabled
 
@@ -60,6 +60,6 @@ def dedup_datasets_enabled() -> bool:
     enabled = str(val).lower() in {"1", "true", "yes", "on"}
 
     if not enabled:
-        logger.warning("Force reupload is disabled.")
+        logger.warning("Dataset deduplication is disabled.")
 
     return enabled

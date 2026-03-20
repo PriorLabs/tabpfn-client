@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal
 
 from uuid import UUID
 from tabpfn_client.client import ServiceClient, ClientOptions, PredictionResult
@@ -257,7 +257,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         cls,
         X,
         y,
-        task: Optional[Literal["classification", "regression"]] = None,
+        task: Literal["classification", "regression"],
         tabpfn_config=None,
         description: str | None = None,
         client_options: ClientOptions | None = None,

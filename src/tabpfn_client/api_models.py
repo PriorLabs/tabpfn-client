@@ -1,6 +1,6 @@
 from uuid import UUID
 from typing import Any
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 Prediction = (
     list[float] | list[list[float]] | dict[str, list[float] | list[list[float]]]
@@ -39,7 +39,7 @@ class FileInfo(BaseModel):
 
 
 class FileUploadInfo(BaseModel):
-    signed_urls: list[str]
+    signed_urls: list[str] = Field(..., min_length=1)
     expires_at: float
     required_headers: dict[str, str]
 

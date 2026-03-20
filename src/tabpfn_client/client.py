@@ -17,7 +17,7 @@ import struct
 import time
 import traceback
 from pydantic import BaseModel, ValidationError
-from typing import Any, Callable, Dict, Literal, Optional, Union, cast
+from typing import Any, Callable, Dict, Literal, Union, cast
 
 import google_crc32c
 
@@ -201,10 +201,13 @@ class ServiceClient(Singleton):
 
     server_config = SERVER_CONFIG
     server_endpoints = SERVER_CONFIG["endpoints"]
-    base_url = f"{server_config.protocol}://{server_config.host}:{server_config.port}"
+    base_url = (
+        TABPFN_API_URL
+        or f"{server_config.protocol}://{server_config.host}:{server_config.port}"
+    )
     fit_path = SERVER_CONFIG["endpoints"]["fit"]["path"]
     httpx_client = httpx.Client(
-        base_url=TABPFN_API_URL or base_url,
+        base_url=base_url,
         timeout=TABPFN_CLIENT_TIMEOUT,
         headers={"client-version": get_client_version()},
         transport=SelectiveHTTP2Transport(http2_paths=[fit_path]),
@@ -213,76 +216,6 @@ class ServiceClient(Singleton):
     _access_token = None
     _dataset_limits: GetDatasetLimitsResponse | None = None
     _dataset_limits_ts: float = 0.0
-
-    @staticmethod
-    def _process_tabpfn_config(
-        tabpfn_config: Union[dict, None],
-    ) -> tuple[bool, list[str], Union[dict, None], Optional[dict]]:
-        """
-        Process tabpfn_config to extract paper_version, tabpfn_systems and tabpfnr_params.
-
-        Parameters
-        ----------
-        tabpfn_config : dict or None
-            Configuration dict that may contain a 'paper_version' key.
-
-        Returns
-        -------
-        paper_version : bool
-            Whether to use paper version (affects tabpfn_systems).
-        tabpfn_systems : list[str]
-            List of systems to use (empty if paper_version, otherwise ["preprocessing", "text"]).
-        processed_config : dict or None
-            The config dict with paper_version removed (if present), or None if input was None.
-        tabpfnr_params:
-        """
-        tabpfnr_params: Optional[dict[str, any]]
-        if tabpfn_config is None:
-            paper_version = False
-            processed_config = None
-            tabpfnr_params = None
-        else:
-            # Make a copy to avoid modifying the original
-            processed_config = tabpfn_config.copy()
-            paper_version = processed_config.pop("paper_version", False)
-
-            # Thinking params are only used during fit and are not accepted by the underlying model.
-            processed_config.pop("thinking", None)
-            tabpfnr_params = processed_config.pop("thinking_params", None)
-
-        tabpfn_systems = [] if paper_version else ["preprocessing", "text"]
-        return paper_version, tabpfn_systems, processed_config, tabpfnr_params
-
-    @staticmethod
-    def _build_tabpfn_params(tabpfn_config: Union[dict, None]) -> dict:
-        """
-        Build parameters dict for tabpfn_config and tabpfn_systems.
-
-        This is a unified helper for both fit and predict methods to ensure
-        consistent parameter handling.
-
-        Parameters
-        ----------
-        tabpfn_config : dict or None
-            Configuration dict that may contain a 'paper_version' key.
-
-        Returns
-        -------
-        params : dict
-            Dictionary containing 'tabpfn_systems' and optionally 'tabpfn_config'.
-        """
-        _, tabpfn_systems, processed_config, _ = ServiceClient._process_tabpfn_config(
-            tabpfn_config
-        )
-
-        params = {"tabpfn_systems": json.dumps(tabpfn_systems)}
-
-        if processed_config is not None:
-            params["tabpfn_config"] = json.dumps(
-                processed_config, default=lambda x: x.to_dict()
-            )
-
-        return params
 
     @classmethod
     def get_access_token(cls):
@@ -329,7 +262,7 @@ class ServiceClient(Singleton):
         cls,
         X,
         y,
-        task: Optional[Literal["classification", "regression"]] = None,
+        task: Literal["classification", "regression"],
         tabpfn_config: Union[dict, None] = None,
         description: str | None = None,
         client_options: ClientOptions | None = None,
@@ -343,7 +276,7 @@ class ServiceClient(Singleton):
             The training input samples.
         y : array-like of shape (n_samples,) or (n_samples, n_outputs)
             The target values.
-        task: str, optional
+        task: str
             Task type: "classification" or "regression"
         tabpfn_config : dict, optional
             Configuration for the fit method. Includes tabpfn_systems, paper_version and thinking params.
@@ -359,6 +292,9 @@ class ServiceClient(Singleton):
         fitted_train_set_id: UUID
             The unique ID of the fitted train set in the server.
         """
+        if task not in {"classification", "regression"}:
+            raise ValueError("task must be either 'classification' or 'regression'.")
+
         client_options = client_options or ClientOptions()
 
         x_bytes, x_crc32c_hash = _serialize_to_parquet(X)
@@ -391,7 +327,7 @@ class ServiceClient(Singleton):
                 ),
                 description=description,
                 force_reupload=force_reupload_enabled(),
-            ).model_dump(),
+            ).model_dump(mode="json"),
             headers=client_options.headers,
         )
         prepare_resp = cast(
@@ -482,7 +418,7 @@ class ServiceClient(Singleton):
     ) -> httpx.Response:
         return cls.httpx_client.post(
             url="/tabpfn/fit/",
-            json=req.model_dump(),
+            json=req.model_dump(mode="json"),
             headers=headers,
             timeout=timeout,
         )
@@ -516,10 +452,6 @@ class ServiceClient(Singleton):
             Per-request options (e.g. timeout, headers) for the fitting API call
             only. Does not apply to file uploads. Because uploads can run before fitting,
             this method may return later than the timeout specified.
-        X_train: array-like of shape (n_samples, n_features), optional
-            The training input samples. Needed in case of refitting.
-        y_train: array-like of shape (n_samples,), optional
-            The target values. Needed in case of refitting.
 
         Returns
         -------
@@ -553,7 +485,7 @@ class ServiceClient(Singleton):
                     size_bytes=len(x_test_bytes),
                 ),
                 force_reupload=force_reupload_enabled(),
-            ).model_dump(),
+            ).model_dump(mode="json"),
             headers=client_options.headers,
         )
         prepare_resp = cast(
@@ -618,7 +550,7 @@ class ServiceClient(Singleton):
 
         return PredictionResult(
             y_pred=result,
-            metadata=predict_resp.metadata.model_dump(),
+            metadata=predict_resp.metadata.model_dump(mode="json"),
         )
 
     @classmethod
@@ -646,7 +578,7 @@ class ServiceClient(Singleton):
     ) -> httpx.Response:
         return cls.httpx_client.post(
             url="/tabpfn/predict/",
-            json=req.model_dump(),
+            json=req.model_dump(mode="json"),
             headers=headers,
             timeout=timeout,
         )
