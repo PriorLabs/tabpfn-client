@@ -279,7 +279,8 @@ class ServiceClient(Singleton):
         task: str
             Task type: "classification" or "regression"
         tabpfn_config : dict, optional
-            Configuration for the fit method. Includes tabpfn_systems, paper_version and thinking params.
+            Configuration for the fit method. Supported keys currently include
+            `paper_version`.
         description: str, optional
             Description of the dataset and task for the server.
         client_options : ClientOptions, optional
@@ -510,6 +511,12 @@ class ServiceClient(Singleton):
                 x_test_bytes,
                 prepare_resp.x_test_info,
             )
+
+        # Strip client-only keys that the server does not expect.
+        if tabpfn_config is not None:
+            tabpfn_config = {
+                k: v for k, v in tabpfn_config.items() if k not in {"paper_version"}
+            }
 
         res = cls._predict(
             req=PredictRequest(
