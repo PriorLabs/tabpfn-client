@@ -2,8 +2,15 @@ from uuid import UUID
 from typing import Any
 from pydantic import BaseModel, Field
 
+# Classification output_type="preds" preserves the original label type, so
+# scalar predictions must allow non-numeric JSON scalars in addition to floats.
+# see: tabpfn/preprocessing/label_encoder.py:66
+PredictionScalar = str | int | bool
 Prediction = (
-    list[float] | list[list[float]] | dict[str, list[float] | list[list[float]]]
+    list[PredictionScalar]
+    | list[float]
+    | list[list[float]]
+    | dict[str, list[float] | list[list[float]]]
 )
 
 TabPFNConfig = dict[str, Any] | None
