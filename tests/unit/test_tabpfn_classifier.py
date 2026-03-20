@@ -1,3 +1,4 @@
+import time
 import unittest
 from unittest.mock import patch
 import shutil
@@ -16,7 +17,11 @@ from tabpfn_client.service_wrapper import UserAuthenticationClient, InferenceCli
 from tests.mock_tabpfn_server import with_mock_server
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client import config
-from tabpfn_client.client import PredictionResult
+from tabpfn_client.client import (
+    GetDatasetLimitsResponse,
+    PredictionResult,
+    ServiceClient,
+)
 
 
 class TestTabPFNClassifierInit(unittest.TestCase):
@@ -25,12 +30,15 @@ class TestTabPFNClassifierInit(unittest.TestCase):
     def setUp(self):
         # set up dummy data
         reset()
+        ServiceClient.reset_authorization()
+        ServiceClient._dataset_limits = None
         X, y = load_breast_cancer(return_X_y=True)
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
             X, y, test_size=0.33
         )
 
     def tearDown(self):
+        ServiceClient._dataset_limits = None
         # remove cache dir
         shutil.rmtree(CACHE_DIR, ignore_errors=True)
 
@@ -43,13 +51,23 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         mock_prompt_and_set_token,
         mock_webbrowser_open,
     ):
-        mock_prompt_and_set_token.side_effect = (
-            lambda: UserAuthenticationClient.set_token(self.dummy_token)
-        )
+        def _set_token_and_return_true():
+            UserAuthenticationClient.set_token(self.dummy_token)
+            return True
+
+        mock_prompt_and_set_token.side_effect = _set_token_and_return_true
 
         # mock server connection
         mock_server.router.get(mock_server.endpoints.root.path).respond(200)
-        mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
+        mock_server.router.post("/tabpfn/prepare_train_set_upload/").respond(
+            409,
+            json={
+                "detail": {
+                    "message": "duplicate",
+                    "upload_id": "00000000-0000-0000-0000-000000000001",
+                }
+            },
+        )
         mock_server.router.post(mock_server.endpoints.fit.path).respond(
             200, json={"train_set_uid": "5"}
         )
@@ -57,6 +75,15 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
+        mock_server.router.get("/tabpfn/get_dataset_limits/").respond(
+            200,
+            json={
+                "max_cells": 100_000_000,
+                "max_cols": 2000,
+                "max_size_bytes": 100_000_000,
+                "max_classes": 10,
+            },
+        )
 
         mock_predict_response = [1, 0, 1]
         predict_route = mock_server.router.post(mock_server.endpoints.predict.path)
@@ -87,11 +114,19 @@ class TestTabPFNClassifierInit(unittest.TestCase):
     @with_mock_server()
     def test_reuse_saved_access_token(self, mock_server):
         # mock connection and authentication
-        mock_server.router.get(mock_server.endpoints.root.path).respond(200)
         mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
+        mock_server.router.get("/tabpfn/get_dataset_limits/").respond(
+            200,
+            json={
+                "max_cells": 100_000_000,
+                "max_cols": 2000,
+                "max_size_bytes": 100_000_000,
+                "max_classes": 10,
+            },
+        )
 
         # create dummy token file
         token_file = UserAuthenticationClient.CACHED_TOKEN_FILE
@@ -129,11 +164,19 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         token_file.write_text(self.dummy_token)
 
         # init classifier as usual
-        mock_server.router.get(mock_server.endpoints.root.path).respond(200)
         mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
+        mock_server.router.get("/tabpfn/get_dataset_limits/").respond(
+            200,
+            json={
+                "max_cells": 100_000_000,
+                "max_cols": 2000,
+                "max_size_bytes": 100_000_000,
+                "max_classes": 10,
+            },
+        )
         init(use_server=True)
 
         # check if access token is saved
@@ -181,28 +224,51 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         Check that the dataset cached is different for different paper_version
         and similar for the same paper_version
         """
+
+        def _set_token_and_return_true():
+            UserAuthenticationClient.set_token(self.dummy_token)
+            return True
+
         # a bit out of place but we don't want to skip init for this test
-        mock_prompt_and_set_token.side_effect = (
-            lambda: UserAuthenticationClient.set_token(self.dummy_token)
-        )
+        mock_prompt_and_set_token.side_effect = _set_token_and_return_true
 
         # mock server connection
         mock_server.router.get(mock_server.endpoints.root.path).respond(200)
-        mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
+        mock_server.router.post("/tabpfn/prepare_train_set_upload/").respond(
+            409,
+            json={
+                "detail": {
+                    "message": "duplicate",
+                    "upload_id": "00000000-0000-0000-0000-000000000001",
+                }
+            },
+        )
         fit_route = mock_server.router.post(mock_server.endpoints.fit.path)
         fit_route.respond(200, json={"train_set_uid": "5"})
 
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
+        mock_server.router.get("/tabpfn/get_dataset_limits/").respond(
+            200,
+            json={
+                "max_cells": 100_000_000,
+                "max_cols": 2000,
+                "max_size_bytes": 100_000_000,
+                "max_classes": 10,
+            },
+        )
 
         mock_predict_response = [[1, 0.0], [0.9, 0.1], [0.01, 0.99]]
-        predict_route = mock_server.router.post(mock_server.endpoints.predict.path)
-        predict_route.respond(
+        mock_server.router.post(mock_server.endpoints.predict.path).respond(
             200,
             content=f"data: {json.dumps({'event': 'result', 'data': {'classification': mock_predict_response, 'test_set_uid': '6'}})}\n\n",
             headers={"Content-Type": "text/event-stream"},
         )
+
+        # Ensure no cached token so we go through the full login flow
+        UserAuthenticationClient.CACHED_TOKEN_FILE.unlink(missing_ok=True)
+        ServiceClient.reset_authorization()
 
         init(use_server=True)
 
@@ -220,11 +286,12 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         tabpfn_true.fit(X, y)
         tabpfn_true.predict(test_X)
 
-        # Ensure fit endpoint is not called again
+        # Fit endpoint is called every time (no client-side caching),
+        # but prepare_train_set_upload returns 409 to avoid re-uploading.
         self.assertEqual(
             fit_route.call_count,
-            1,
-            "Fit endpoint should not be called again with the same paper_version",
+            2,
+            "Fit endpoint should be called each time",
         )
 
         # Initialize with paper_version=False
@@ -233,10 +300,9 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         tabpfn_false.fit(X, y)
         tabpfn_false.predict(test_X)
 
-        # check fit is called
         self.assertEqual(
             fit_route.call_count,
-            2,
+            3,
             "Fit endpoint should be called again with a different paper_version",
         )
 
@@ -244,27 +310,11 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         tabpfn_false.fit(X, y)
         tabpfn_false.predict(test_X)
 
-        # Ensure fit endpoint is not called again
         self.assertEqual(
             fit_route.call_count,
-            2,
-            "Fit endpoint should not be called again with the same paper_version",
+            4,
+            "Fit endpoint should be called each time",
         )
-
-        # TODO: fix this
-        # # Check that different cache entries are created for training set
-        # cache_manager = ServiceClient.dataset_uid_cache_manager
-        # X_serialized = common_utils.serialize_to_csv_formatted_bytes(X)
-        # y_serialized = common_utils.serialize_to_csv_formatted_bytes(y)
-        # uid_true_train, hash_true_train = cache_manager.get_dataset_uid(
-        #     X_serialized, y_serialized, self.dummy_token, "_".join([])
-        # )
-        # uid_false_train, hash_false_train = cache_manager.get_dataset_uid(
-        #     X_serialized,
-        #     y_serialized,
-        #     self.dummy_token,
-        #     "_".join(["preprocessing", "text"]),
-        # )
 
         # self.assertNotEqual(
         #     hash_true_train,
@@ -309,8 +359,14 @@ class TestTabPFNClassifierInference(unittest.TestCase):
     def setUp(self):
         # skip init
         config.Config.is_initialized = True
+        ServiceClient._dataset_limits = GetDatasetLimitsResponse(
+            max_cells=100_000, max_cols=2000, max_size_bytes=100_000_000, max_classes=10
+        )
+        ServiceClient._dataset_limits_ts = time.monotonic()
 
     def tearDown(self):
+        ServiceClient._dataset_limits = None
+        ServiceClient._dataset_limits_ts = 0.0
         # undo setUp
         config.reset()
 
@@ -325,27 +381,30 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             tabpfn.fit(X, y)
 
     def test_data_size_check_on_train_with_oversized_data_raise_error(self):
-        X = np.random.randn(50_001, 2001)
-        y = np.random.randint(0, 2, 50_001)
-
+        # max_cols=2000, max_cells=100_000
         tabpfn = TabPFNClassifier()
 
-        # test oversized columns
+        # test oversized columns: 10 * 2001 = 20_010 cells (under limit) but 2001 > max_cols
+        X_wide = np.random.randn(10, 2001)
+        y_wide = np.random.randint(0, 2, 10)
         with self.assertRaises(ValueError):
-            tabpfn.fit(X[:10], y[:10])
+            tabpfn.fit(X_wide, y_wide)
 
-        # test oversized rows
+        # test oversized cells: 1000 * 101 = 101_000 > max_cells=100_000
+        X_big = np.random.randn(1000, 101)
+        y_big = np.random.randint(0, 2, 1000)
         with self.assertRaises(ValueError):
-            tabpfn.fit(X[:, :10], y)
+            tabpfn.fit(X_big, y_big)
 
     def test_data_size_check_on_predict_with_oversized_data_raise_error(self):
-        test_X = np.random.randn(50_001, 5)
+        # 1000 * 101 = 101_000 > max_cells=100_000
+        test_X = np.random.randn(1000, 101)
         tabpfn = TabPFNClassifier()
 
         # skip fitting
         tabpfn.fitted_ = True
 
-        # test oversized rows
+        # test oversized cells
         with self.assertRaises(ValueError):
             tabpfn.predict(test_X)
 
