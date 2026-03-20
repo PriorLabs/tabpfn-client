@@ -6,13 +6,13 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal
 
-import numpy as np
-
-from tabpfn_client.client import ServiceClient, ModelType, ClientOptions
-from tabpfn_client.constants import CACHE_DIR
+from uuid import UUID
+from tabpfn_client.client import ServiceClient, ClientOptions, PredictionResult
+from tabpfn_client.constants import CACHE_DIR, TABPFN_TOKEN
 from tabpfn_common_utils.utils import Singleton
+
 
 logger = logging.getLogger(__name__)
 
@@ -92,17 +92,18 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
     @classmethod
     def try_reuse_existing_token(cls) -> tuple[bool, str or None]:
         if ServiceClient.get_access_token() is None:
-            if not cls.CACHED_TOKEN_FILE.exists():
-                return False, None
-
-            access_token = cls.CACHED_TOKEN_FILE.read_text()
-
+            if TABPFN_TOKEN:
+                access_token = TABPFN_TOKEN
+            else:
+                if not cls.CACHED_TOKEN_FILE.exists():
+                    return False, None
+                access_token = cls.CACHED_TOKEN_FILE.read_text()
         else:
             access_token = ServiceClient.get_access_token()
 
         is_valid = ServiceClient.is_auth_token_outdated(access_token)
         if is_valid is False:
-            cls._reset_token()
+            cls._reset_token()  # it will also unset the TABPFN_TOKEN var
             return False, None
         elif is_valid is None:
             return False, access_token
@@ -124,6 +125,10 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
     def _reset_token(cls):
         ServiceClient.reset_authorization()
         cls.CACHED_TOKEN_FILE.unlink(missing_ok=True)
+        # The TABPFN_TOKEN var is always set externally in the environment, in
+        # the client it can only be used or unset, never set.
+        global TABPFN_TOKEN
+        TABPFN_TOKEN = None
 
     @classmethod
     def retrieve_greeting_messages(cls):
@@ -252,45 +257,37 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         cls,
         X,
         y,
-        model_type: ModelType = ModelType.TABPFN,
+        task: Literal["classification", "regression"],
         tabpfn_config=None,
-        task: Optional[Literal["classification", "regression"]] = None,
-        description: str = "",
+        description: str | None = None,
         client_options: ClientOptions | None = None,
-        dedup_files: bool = True,
-    ) -> str:
+        is_refitting: bool = False,
+    ) -> UUID:
         return ServiceClient.fit(
             X,
             y,
-            tabpfn_config=tabpfn_config,
-            model_type=model_type,
             task=task,
+            tabpfn_config=tabpfn_config,
             description=description,
             client_options=client_options,
-            dedup_files=dedup_files,
+            is_refitting=is_refitting,
         )
 
     @classmethod
     def predict(
         cls,
         X,
+        fitted_train_set_id: UUID,
         task: Literal["classification", "regression"],
-        train_set_uid: str,
-        model_type: ModelType = ModelType.TABPFN,
         tabpfn_config=None,
         predict_params=None,
-        X_train=None,
-        y_train=None,
         client_options: ClientOptions | None = None,
-    ) -> dict[str, np.ndarray]:
+    ) -> PredictionResult:
         return ServiceClient.predict(
-            train_set_uid=train_set_uid,
             x_test=X,
+            fitted_train_set_id=fitted_train_set_id,
+            task=task,
             tabpfn_config=tabpfn_config,
             predict_params=predict_params,
-            task=task,
-            X_train=X_train,
-            y_train=y_train,
-            model_type=model_type,
             client_options=client_options,
         )
