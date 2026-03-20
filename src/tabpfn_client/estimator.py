@@ -324,11 +324,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             client_options.headers["sentry-trace"] = self.last_trace_id
 
         def predict_task() -> PredictionResult:
-            exc = None
+            last_exc = None
             refit_attempts = 0
             while True:
                 if refit_attempts > 1:
-                    raise RuntimeError("Failed to predict after refitting") from exc
+                    raise RuntimeError(
+                        "Failed to predict after refitting"
+                    ) from last_exc
                 try:
                     return InferenceClient.predict(
                         X,
@@ -339,6 +341,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                         client_options=client_options,
                     )
                 except NeedsRefittingError as exc:
+                    last_exc = exc
                     refit_attempts += 1
                     self.last_fitted_train_set_id = InferenceClient.fit(
                         self.last_train_X,
@@ -560,11 +563,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             client_options.headers["sentry-trace"] = self.last_trace_id
 
         def predict_task() -> PredictionResult:
-            exc = None
+            last_exc = None
             refit_attempts = 0
             while True:
                 if refit_attempts > 1:
-                    raise RuntimeError("Failed to predict after refitting") from exc
+                    raise RuntimeError(
+                        "Failed to predict after refitting"
+                    ) from last_exc
                 try:
                     return InferenceClient.predict(
                         X,
@@ -575,6 +580,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                         client_options=client_options,
                     )
                 except NeedsRefittingError as exc:
+                    last_exc = exc
                     refit_attempts += 1
                     self.last_fitted_train_set_id = InferenceClient.fit(
                         self.last_train_X,
