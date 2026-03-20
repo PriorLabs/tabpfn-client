@@ -745,7 +745,9 @@ class ServiceClient(Singleton):
                 )
                 raise RetryableServerError(error_msg)
             if load is not None:
-                raise RuntimeError(f"Fail to call {method_name} with error: {load}")
+                raise RuntimeError(
+                    f"Fail to call {method_name} with error: {json.dumps(load)}"
+                )
             logger.error(
                 f"Fail to call {method_name}, response status: {response.status_code}"
             )
