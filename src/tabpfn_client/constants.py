@@ -38,19 +38,13 @@ def ci_mode_enabled() -> bool:
 
 
 @cache
-def force_rerun_enabled() -> bool:
-    """
-    Force re-run includes both re-uploading and re-transforming.
-    """
-    force_rerun = os.getenv("TABPFN_FORCE_RERUN")
-    return str(force_rerun).lower() in {"1", "true", "yes", "on"}
+def force_retransform_enabled() -> bool:
+    force_retransform = os.getenv("TABPFN_FORCE_RETRANSFORM")
+    return str(force_retransform).lower() in {"1", "true", "yes", "on"}
 
 
 @cache
 def force_reupload_enabled() -> bool:
-    if force_rerun_enabled():
-        return True
-
     # `DISABLE_DS_CACHING` is legacy, we keep it for backward compatibility.
     # Note: The new env var has the opposite meaning.
     force_reupload = os.getenv("TABPFN_FORCE_REUPLOAD")
