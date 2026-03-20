@@ -30,7 +30,7 @@ from omegaconf import OmegaConf
 from tabpfn_client.browser_auth import BrowserAuthHandler
 from tabpfn_client.constants import (
     dedup_datasets_enabled,
-    force_reupload_enabled,
+    force_rerun_enabled,
     TABPFN_MAX_THREAD_PER_UPLOAD,
     TABPFN_CLIENT_TIMEOUT,
     TABPFN_API_URL,
@@ -266,6 +266,7 @@ class ServiceClient(Singleton):
         tabpfn_config: Union[dict, None] = None,
         description: str | None = None,
         client_options: ClientOptions | None = None,
+        is_refitting: bool = False,
     ) -> UUID:
         """
         Upload a train set to server and return the train set UID if successful.
@@ -317,18 +318,19 @@ class ServiceClient(Singleton):
             x_dedup_hash = None
             y_dedup_hash = None
 
+        prepare_req = PrepareTrainSetUploadRequest(
+            x_train_info=FileInfo(
+                format="parquet", hash=x_dedup_hash, size_bytes=len(x_bytes)
+            ),
+            y_train_info=FileInfo(
+                format="parquet", hash=y_dedup_hash, size_bytes=len(y_bytes)
+            ),
+            description=description,
+            force_reupload=force_rerun_enabled(),
+        )
         res = cls.httpx_client.post(
             url="/tabpfn/prepare_train_set_upload/",
-            json=PrepareTrainSetUploadRequest(
-                x_train_info=FileInfo(
-                    format="parquet", hash=x_dedup_hash, size_bytes=len(x_bytes)
-                ),
-                y_train_info=FileInfo(
-                    format="parquet", hash=y_dedup_hash, size_bytes=len(y_bytes)
-                ),
-                description=description,
-                force_reupload=force_reupload_enabled(),
-            ).model_dump(mode="json"),
+            json=prepare_req.model_dump(mode="json"),
             headers=client_options.headers,
         )
         prepare_resp = cast(
@@ -378,11 +380,11 @@ class ServiceClient(Singleton):
                 train_set_upload_id=prepare_resp.train_set_upload_id,
                 task=task,
                 tabpfn_systems=tabpfn_systems,
+                force_retransform=is_refitting or force_rerun_enabled(),
             ),
             timeout=client_options.timeout,
             headers=client_options.headers,
         )
-
         fit_resp = cast(
             FitResponse,
             cls._validate_response(
@@ -476,17 +478,18 @@ class ServiceClient(Singleton):
         else:
             x_test_dedup_hash = None
 
+        prepare_req = PrepareTestSetUploadRequest(
+            fitted_train_set_id=fitted_train_set_id,
+            x_test_info=FileInfo(
+                format="parquet",
+                hash=x_test_dedup_hash,
+                size_bytes=len(x_test_bytes),
+            ),
+            force_reupload=force_rerun_enabled(),
+        )
         res = cls.httpx_client.post(
             url="/tabpfn/prepare_test_set_upload/",
-            json=PrepareTestSetUploadRequest(
-                fitted_train_set_id=fitted_train_set_id,
-                x_test_info=FileInfo(
-                    format="parquet",
-                    hash=x_test_dedup_hash,
-                    size_bytes=len(x_test_bytes),
-                ),
-                force_reupload=force_reupload_enabled(),
-            ).model_dump(mode="json"),
+            json=prepare_req.model_dump(mode="json"),
             headers=client_options.headers,
         )
         prepare_resp = cast(
@@ -527,6 +530,7 @@ class ServiceClient(Singleton):
                     tabpfn_config=tabpfn_config,
                     predict_params=predict_params,
                 ),
+                force_retransform=force_rerun_enabled(),
             ),
             timeout=client_options.timeout,
             headers=client_options.headers,

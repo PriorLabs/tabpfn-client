@@ -261,6 +261,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         tabpfn_config=None,
         description: str | None = None,
         client_options: ClientOptions | None = None,
+        is_refitting: bool = False,
     ) -> UUID:
         return ServiceClient.fit(
             X,
@@ -269,6 +270,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             tabpfn_config=tabpfn_config,
             description=description,
             client_options=client_options,
+            is_refitting=is_refitting,
         )
 
     @classmethod

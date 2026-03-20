@@ -88,6 +88,7 @@ class FitRequest(BaseModel):
     train_set_upload_id: UUID
     task: str
     tabpfn_systems: list[str]
+    force_retransform: bool = False
 
 
 class FitResponse(BaseModel):
@@ -119,6 +120,7 @@ class PredictRequest(BaseModel):
     test_set_upload_id: UUID
     fitted_train_set_id: UUID
     task_config: TaskConfig
+    force_retransform: bool = False
 
 
 class PredictResponse(BaseModel):

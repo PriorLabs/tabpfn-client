@@ -350,6 +350,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                         tabpfn_config=estimator_param,
                         description=self.last_train_set_description,
                         client_options=client_options,
+                        is_refitting=True,
                     )
 
         result = run_task(predict_task, "Predicting")
@@ -589,6 +590,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                         tabpfn_config=estimator_param,
                         description=self.last_train_set_description,
                         client_options=client_options,
+                        is_refitting=True,
                     )
 
         result = run_task(predict_task, "Predicting")

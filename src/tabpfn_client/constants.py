@@ -38,10 +38,10 @@ def ci_mode_enabled() -> bool:
 
 
 @cache
-def force_reupload_enabled() -> bool:
+def force_rerun_enabled() -> bool:
     # `DISABLE_DS_CACHING` is legacy, we keep it for backward compatibility.
     # Note: The new env var has the opposite meaning.
-    force_reupload = os.getenv("TABPFN_FORCE_REUPLOAD")
+    force_reupload = os.getenv("TABPFN_FORCE_RERUN")
     disable_caching = os.getenv("DISABLE_DS_CACHING")
 
     if force_reupload is not None:
