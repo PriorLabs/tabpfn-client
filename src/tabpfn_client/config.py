@@ -33,11 +33,11 @@ def init(use_server=True):
     """
     Initializes the TabPFN client and handles user authentication.
 
-    This function checks for existing credentials, prompts for login/registration 
-    if necessary, and verifies email status. It must be called before performing 
+    This function checks for existing credentials, prompts for login/registration
+    if necessary, and verifies email status. It must be called before performing
     any inference tasks.
 
-    :param use_server: Whether to use the TabPFN cloud service. Currently, only 
+    :param use_server: Whether to use the TabPFN cloud service. Currently, only
                        True is supported.
     :raises RuntimeError: If local inference is requested or if the server is unreachable.
     """
@@ -56,14 +56,11 @@ def init(use_server=True):
         except ConnectError:
             raise CONNECTION_ERROR
 
-        # TODO: no need to check connection again if token is valid, need to
-        # adjust tests accordingly.
-        if not UserAuthenticationClient.is_accessible_connection():
-            raise CONNECTION_ERROR
-
         if is_valid_token:
             PromptAgent.prompt_reusing_existing_token()
         elif access_token is not None:
+            if not UserAuthenticationClient.is_accessible_connection():
+                raise CONNECTION_ERROR
             # token holds invalid due to user email verification
             console.print()
             warn("Email not verified")
@@ -83,6 +80,8 @@ def init(use_server=True):
                 return
             # else: result is True, verification successful, continue to greeting messages
         else:
+            if not UserAuthenticationClient.is_accessible_connection():
+                raise CONNECTION_ERROR
             PromptAgent.prompt_welcome()
             # prompt for login / register
             success = PromptAgent.prompt_and_set_token()
@@ -95,6 +94,8 @@ def init(use_server=True):
             UserAuthenticationClient.retrieve_greeting_messages()
         )
 
+        _ = ServiceClient.get_dataset_limits()
+
         Config.use_server = True
         Config.is_initialized = True
     else:
@@ -105,7 +106,7 @@ def reset():
     """
     Resets the client state and clears local authentication caches.
 
-    Use this function if you need to log out or clear stored session data 
+    Use this function if you need to log out or clear stored session data
     from the local machine.
     """
     Config.is_initialized = False
@@ -134,10 +135,10 @@ def set_access_token(access_token: str):
     Manually sets the access token for the session.
 
     This is useful for non-interactive environments
-    (e.g., CI/CD, Notebooks) where you want to skip 
+    (e.g., CI/CD, Notebooks) where you want to skip
     the interactive login prompt.
-    
-    You can obtain your access token via the TabPFN 
+
+    You can obtain your access token via the TabPFN
     UX as explained at:
     https://docs.priorlabs.ai/api-reference/getting-started#1-get-your-access-token
 
@@ -151,7 +152,7 @@ def get_api_usage() -> str:
     """
     Fetches and formats the current API usage statistics for the user.
 
-    :return: A human-readable string detailing current credit usage, 
+    :return: A human-readable string detailing current credit usage,
              the total limit, and when the limit resets.
     """
     access_token = get_access_token()
