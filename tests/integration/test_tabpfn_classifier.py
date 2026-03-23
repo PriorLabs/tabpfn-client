@@ -28,7 +28,6 @@ class TestTabPFNClassifier(unittest.TestCase):
         token_file.write_text("dummy token")
 
         # mock connection and authentication
-        mock_server.router.get(mock_server.endpoints.root.path).respond(200)
         mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
@@ -38,6 +37,15 @@ class TestTabPFNClassifier(unittest.TestCase):
         tabpfn = TabPFNClassifier()
 
         # mock fitting
+        mock_server.router.post("/tabpfn/prepare_train_set_upload/").respond(
+            409,
+            json={
+                "detail": {
+                    "message": "duplicate",
+                    "upload_id": "00000000-0000-0000-0000-000000000001",
+                }
+            },
+        )
         mock_server.router.post(mock_server.endpoints.fit.path).respond(
             200, json={"train_set_uid": "5"}
         )

@@ -39,7 +39,9 @@ dependencies = [
     "xxhash>=1.1.0,<=3.6.0",
     "backoff>=2.2.0,<=2.2.1",
     "rich>=13.7.0,<=14.3.2",
-    "tabpfn-common-utils>=0.2.10,<=0.2.16"
+    "tabpfn-common-utils>=0.2.10,<=0.2.16",
+    "google-crc32c>=1.5.0,<=1.8.0",
+    "pyarrow>=14.0.0,<=23.0.1",
 ]
 
 [project.urls]
@@ -64,9 +66,9 @@ norecursedirs = [
 
 [dependency-groups]
 dev = [
-    "pre-commit==4.2.0",
+    "pre-commit==4.3.0",
     "pytest==8.4.2",
     "respx==0.22.0",
-    "ruff==0.11.9",
+    "ruff==0.15.1",
     "licensecheck==2025.1.0"
 ]
