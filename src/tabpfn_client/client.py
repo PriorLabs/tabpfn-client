@@ -243,11 +243,9 @@ class ServiceClient(Singleton):
             cls._constraints = GetConstraintsResponse.model_validate(response.json())
 
             if cls._constraints:
-                supported_client_version = Version(
-                    cls._constraints.supported_client_version
-                )
+                min_client_version = Version(cls._constraints.min_client_version)
                 current_client_version = Version(get_client_version())
-                if supported_client_version > current_client_version:
+                if min_client_version > current_client_version:
                     cls._is_tabpfn_client_deprecated = True
 
             cls._constraints_ts = time.monotonic()

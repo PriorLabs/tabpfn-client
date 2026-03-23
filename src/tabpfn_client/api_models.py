@@ -62,7 +62,7 @@ class DatasetConstraints(BaseModel):
 
 
 class GetConstraintsResponse(BaseModel):
-    supported_client_version: str
+    min_client_version: str
     datasets: DatasetConstraints
 
 
