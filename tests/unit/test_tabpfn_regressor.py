@@ -19,7 +19,7 @@ from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client import config
 import json
 from tabpfn_client.client import (
-    GetDatasetLimitsResponse,
+    GetConstraintsResponse,
     PredictionResult,
     ServiceClient,
 )
@@ -32,14 +32,14 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         # set up dummy data
         reset()
         ServiceClient.reset_authorization()
-        ServiceClient._dataset_limits = None
+        ServiceClient._constraints = None
         X, y = load_diabetes(return_X_y=True)
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
             X, y, test_size=0.33
         )
 
     def tearDown(self):
-        ServiceClient._dataset_limits = None
+        ServiceClient._constraints = None
         # remove cache dir
         shutil.rmtree(CACHE_DIR, ignore_errors=True)
 
@@ -75,7 +75,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_dataset_limits/").respond(
+        mock_server.router.get("/tabpfn/get_constraints/").respond(
             200,
             json={
                 "max_cells": 100_000_000,
@@ -123,7 +123,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_dataset_limits/").respond(
+        mock_server.router.get("/tabpfn/get_constraints/").respond(
             200,
             json={
                 "max_cells": 100_000_000,
@@ -173,7 +173,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_dataset_limits/").respond(
+        mock_server.router.get("/tabpfn/get_constraints/").respond(
             200,
             json={
                 "max_cells": 100_000_000,
@@ -248,7 +248,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_dataset_limits/").respond(
+        mock_server.router.get("/tabpfn/get_constraints/").respond(
             200,
             json={
                 "max_cells": 100_000_000,
@@ -363,14 +363,14 @@ class TestTabPFNRegressorInference(unittest.TestCase):
     def setUp(self):
         # skip init
         config.Config.is_initialized = True
-        ServiceClient._dataset_limits = GetDatasetLimitsResponse(
+        ServiceClient._constraints = GetConstraintsResponse(
             max_cells=100_000, max_cols=2000, max_size_bytes=100_000_000, max_classes=10
         )
-        ServiceClient._dataset_limits_ts = time.monotonic()
+        ServiceClient._constraints_ts = time.monotonic()
 
     def tearDown(self):
-        ServiceClient._dataset_limits = None
-        ServiceClient._dataset_limits_ts = 0.0
+        ServiceClient._constraints = None
+        ServiceClient._constraints_ts = 0.0
         # undo setUp
         config.reset()
 

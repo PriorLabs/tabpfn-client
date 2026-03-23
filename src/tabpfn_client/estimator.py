@@ -368,12 +368,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         # TODO: should pass this from the server
         self.classes_ = np.unique(y_)
         # TODO: these things should ideally be shared with the local package
-        limits = ServiceClient.get_dataset_limits()
+        limits = ServiceClient.get_constraints()
         if limits is not None:
-            if len(self.classes_) > limits.max_classes:
+            if len(self.classes_) > limits.datasets.max_classes:
                 raise ValueError(
                     f"Number of classes {len(self.classes_)} exceeds the maximal number of "
-                    f"{limits.max_classes} classes supported by TabPFN. Consider using "
+                    f"{limits.datasets.max_classes} classes supported by TabPFN. Consider using "
                     "the many_class extension to reduce the number of classes. For code see "
                     f"{URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE}"
                 )
@@ -634,18 +634,18 @@ def validate_data_size(X: np.ndarray, y: Union[np.ndarray, None] = None):
         if X.shape[0] != y.shape[0]:
             raise ValueError("X and y must have the same number of samples")
 
-    limits = ServiceClient.get_dataset_limits()
+    limits = ServiceClient.get_constraints()
     if limits is None:
         return
 
     n_cells = X.shape[0] * X.shape[1]
-    if n_cells > limits.max_cells:
+    if n_cells > limits.datasets.max_cells:
         raise ValueError(
-            f"The number of cells ({n_cells}) exceeds the maximum of {limits.max_cells}."
+            f"The number of cells ({n_cells}) exceeds the maximum of {limits.datasets.max_cells}."
         )
-    if X.shape[1] > limits.max_cols:
+    if X.shape[1] > limits.datasets.max_cols:
         raise ValueError(
-            f"The number of columns ({X.shape[1]}) exceeds the maximum of {limits.max_cols}."
+            f"The number of columns ({X.shape[1]}) exceeds the maximum of {limits.datasets.max_cols}."
         )
 
 

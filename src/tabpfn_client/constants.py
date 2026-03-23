@@ -24,6 +24,10 @@ URL_PRIOR_LABS_TERMS_AND_CONDITIONS = (
     "https://priorlabs.ai/general-terms-and-conditions"
 )
 URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE = "https://github.com/PriorLabs/tabpfn-extensions/blob/main/src/tabpfn_extensions/many_class/many_class_classifier.py"  # noqa: E501
+DEPRECATION_MESSAGE = """
+This TabPFN client version is deprecated and will be removed in a future version.
+Please upgrade to the latest version.
+"""
 
 TABPFN_TOKEN = os.getenv("TABPFN_TOKEN")
 TABPFN_API_URL = os.getenv("TABPFN_API_URL")

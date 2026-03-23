@@ -27,6 +27,7 @@ import backoff
 import httpx
 from httpx._transports.default import HTTPTransport
 from omegaconf import OmegaConf
+from packaging.version import Version
 from tabpfn_client.browser_auth import BrowserAuthHandler
 from tabpfn_client.constants import (
     dedup_datasets_enabled,
@@ -35,11 +36,12 @@ from tabpfn_client.constants import (
     TABPFN_MAX_THREAD_PER_UPLOAD,
     TABPFN_CLIENT_TIMEOUT,
     TABPFN_API_URL,
+    DEPRECATION_MESSAGE,
 )
 from tabpfn_common_utils import utils as common_utils
 from tabpfn_common_utils.utils import Singleton
 from tabpfn_client.api_models import (
-    GetDatasetLimitsResponse,
+    GetConstraintsResponse,
     PrepareTrainSetUploadRequest,
     PrepareTrainSetUploadResponse,
     DuplicateTrainSetErrorResponse,
@@ -215,36 +217,45 @@ class ServiceClient(Singleton):
         follow_redirects=True,
     )
     _access_token = None
-    _dataset_limits: GetDatasetLimitsResponse | None = None
-    _dataset_limits_ts: float = 0.0
+    _constraints: GetConstraintsResponse | None = None
+    _constraints_ts: float = 0.0
+    _is_tabpfn_client_deprecated: bool = False
 
     @classmethod
     def get_access_token(cls):
         return cls._access_token
 
     @classmethod
-    def get_dataset_limits(cls) -> GetDatasetLimitsResponse | None:
-        """Fetch and cache dataset limits. The cache expires after 30 minutes.
+    def get_constraints(cls) -> GetConstraintsResponse | None:
+        """Fetch and cache constraints. The cache expires after 30 minutes.
 
         Not thread-safe, but concurrent calls are benign: duplicates fetch the
         same data and the reference assignment is atomic under the GIL."""
         ttl = 1800.0  # 30 minutes
         if (
-            cls._dataset_limits is not None
-            and (time.monotonic() - cls._dataset_limits_ts) < ttl
+            cls._constraints is not None
+            and (time.monotonic() - cls._constraints_ts) < ttl
         ):
-            return cls._dataset_limits
+            return cls._constraints
         try:
-            response = cls.httpx_client.get("/tabpfn/get_dataset_limits/")
+            response = cls.httpx_client.get("/tabpfn/get_constraints/")
             response.raise_for_status()
-            cls._dataset_limits = GetDatasetLimitsResponse.model_validate(
-                response.json()
-            )
-            cls._dataset_limits_ts = time.monotonic()
-            return cls._dataset_limits
+            cls._constraints = GetConstraintsResponse.model_validate(response.json())
+
+            if cls._constraints:
+                supported_client_version = Version(
+                    cls._constraints.supported_client_version
+                )
+                current_client_version = Version(get_client_version())
+                if supported_client_version > current_client_version:
+                    cls._is_tabpfn_client_deprecated = True
+
+            cls._constraints_ts = time.monotonic()
+
+            return cls._constraints
         except Exception:
-            logger.debug("Failed to fetch dataset limits", exc_info=True)
-            return cls._dataset_limits  # return stale value if available
+            logger.debug("Failed to fetch constraints", exc_info=True)
+            return cls._constraints
 
     @classmethod
     def authorize(cls, access_token: str):
@@ -295,6 +306,9 @@ class ServiceClient(Singleton):
         fitted_train_set_id: UUID
             The unique ID of the fitted train set in the server.
         """
+        if cls._is_tabpfn_client_deprecated:
+            logger.warning(DEPRECATION_MESSAGE)
+
         if task not in {"classification", "regression"}:
             raise ValueError("task must be either 'classification' or 'regression'.")
 
@@ -303,13 +317,13 @@ class ServiceClient(Singleton):
         x_bytes, x_crc32c_hash = _serialize_to_parquet(X)
         y_bytes, y_crc32c_hash = _serialize_to_parquet(y)
 
-        limits = cls.get_dataset_limits()
+        limits = cls.get_constraints()
         if limits is not None:
             for name, data in [("x_train", x_bytes), ("y_train", y_bytes)]:
-                if len(data) > limits.max_size_bytes:
+                if len(data) > limits.datasets.max_size_bytes:
                     raise ValueError(
                         f"Compressed size of {name} ({len(data)} bytes) exceeds "
-                        f"the server limit of {limits.max_size_bytes} bytes."
+                        f"the server limit of {limits.datasets.max_size_bytes} bytes."
                     )
 
         if dedup_datasets_enabled():
@@ -462,16 +476,19 @@ class ServiceClient(Singleton):
         prediction_result : PredictionResult
             The result from the predict API call containing the prediction and metadata.
         """
+        if cls._is_tabpfn_client_deprecated:
+            logger.warning(DEPRECATION_MESSAGE)
+
         client_options = client_options or ClientOptions()
 
         x_test_bytes, x_test_crc32c_hash = _serialize_to_parquet(x_test)
 
-        limits = cls.get_dataset_limits()
+        limits = cls.get_constraints()
         if limits is not None:
-            if len(x_test_bytes) > limits.max_size_bytes:
+            if len(x_test_bytes) > limits.datasets.max_size_bytes:
                 raise ValueError(
                     f"Compressed size of x_test ({len(x_test_bytes)} bytes) exceeds "
-                    f"the server limit of {limits.max_size_bytes} bytes."
+                    f"the server limit of {limits.datasets.max_size_bytes} bytes."
                 )
 
         if dedup_datasets_enabled():
