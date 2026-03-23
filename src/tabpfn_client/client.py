@@ -315,13 +315,13 @@ class ServiceClient(Singleton):
         x_bytes, x_crc32c_hash = _serialize_to_parquet(X)
         y_bytes, y_crc32c_hash = _serialize_to_parquet(y)
 
-        limits = cls.get_constraints()
-        if limits is not None:
+        constr = cls.get_constraints()
+        if constr is not None:
             for name, data in [("x_train", x_bytes), ("y_train", y_bytes)]:
-                if len(data) > limits.datasets.max_size_bytes:
+                if len(data) > constr.datasets.max_size_bytes:
                     raise ValueError(
                         f"Compressed size of {name} ({len(data)} bytes) exceeds "
-                        f"the server limit of {limits.datasets.max_size_bytes} bytes."
+                        f"the server limit of {constr.datasets.max_size_bytes} bytes."
                     )
 
         if dedup_datasets_enabled():
@@ -481,12 +481,12 @@ class ServiceClient(Singleton):
 
         x_test_bytes, x_test_crc32c_hash = _serialize_to_parquet(x_test)
 
-        limits = cls.get_constraints()
-        if limits is not None:
-            if len(x_test_bytes) > limits.datasets.max_size_bytes:
+        constr = cls.get_constraints()
+        if constr is not None:
+            if len(x_test_bytes) > constr.datasets.max_size_bytes:
                 raise ValueError(
                     f"Compressed size of x_test ({len(x_test_bytes)} bytes) exceeds "
-                    f"the server limit of {limits.datasets.max_size_bytes} bytes."
+                    f"the server limit of {constr.datasets.max_size_bytes} bytes."
                 )
 
         if dedup_datasets_enabled():

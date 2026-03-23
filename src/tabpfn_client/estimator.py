@@ -368,12 +368,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         # TODO: should pass this from the server
         self.classes_ = np.unique(y_)
         # TODO: these things should ideally be shared with the local package
-        limits = ServiceClient.get_constraints()
-        if limits is not None:
-            if len(self.classes_) > limits.datasets.max_classes:
+        constr = ServiceClient.get_constraints()
+        if constr is not None:
+            if len(self.classes_) > constr.datasets.max_classes:
                 raise ValueError(
                     f"Number of classes {len(self.classes_)} exceeds the maximal number of "
-                    f"{limits.datasets.max_classes} classes supported by TabPFN. Consider using "
+                    f"{constr.datasets.max_classes} classes supported by TabPFN. Consider using "
                     "the many_class extension to reduce the number of classes. For code see "
                     f"{URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE}"
                 )

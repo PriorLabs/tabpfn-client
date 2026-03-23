@@ -54,7 +54,7 @@ class FileUploadInfo(BaseModel):
 # ---------------------------------------------------------------------------
 # /tabpfn/get_constraints/
 # ---------------------------------------------------------------------------
-class DatasetConstraints(BaseModel):
+class DatasetLimits(BaseModel):
     max_size_bytes: int
     max_cells: int
     max_cols: int
@@ -63,7 +63,7 @@ class DatasetConstraints(BaseModel):
 
 class GetConstraintsResponse(BaseModel):
     min_client_version: str
-    datasets: DatasetConstraints
+    datasets: DatasetLimits
 
 
 # ---------------------------------------------------------------------------
