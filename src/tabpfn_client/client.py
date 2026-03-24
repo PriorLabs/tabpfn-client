@@ -12,6 +12,7 @@ import json
 import logging
 from pathlib import Path
 import numpy as np
+import warnings
 import re
 import struct
 import time
@@ -305,7 +306,7 @@ class ServiceClient(Singleton):
             The unique ID of the fitted train set in the server.
         """
         if cls._is_tabpfn_client_deprecated:
-            logger.warning(DEPRECATION_MESSAGE)
+            warnings.warn(DEPRECATION_MESSAGE, category=DeprecationWarning)
 
         if task not in {"classification", "regression"}:
             raise ValueError("task must be either 'classification' or 'regression'.")
@@ -475,7 +476,7 @@ class ServiceClient(Singleton):
             The result from the predict API call containing the prediction and metadata.
         """
         if cls._is_tabpfn_client_deprecated:
-            logger.warning(DEPRECATION_MESSAGE)
+            warnings.warn(DEPRECATION_MESSAGE, category=DeprecationWarning)
 
         client_options = client_options or ClientOptions()
 
