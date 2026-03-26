@@ -1,21 +1,21 @@
 from uuid import UUID
-from typing import Any
+from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field
 
 # Classification output_type="preds" preserves the original label type, so
 # scalar predictions must allow non-numeric JSON scalars in addition to floats.
 # see: tabpfn/preprocessing/label_encoder.py:66
-PredictionScalar = str | int | bool
-Prediction = (
-    list[PredictionScalar]
-    | list[float]
-    | list[list[float]]
-    | dict[str, list[float] | list[list[float]]]
-)
+PredictionScalar = Union[str, int, bool]
+Prediction = Union[
+    List[PredictionScalar],
+    List[float],
+    List[List[float]],
+    Dict[str, Union[List[float], List[List[float]]]],
+]
 
-TabPFNConfig = dict[str, Any] | None
+TabPFNConfig = Optional[Dict[str, Any]]
 
-PredictParams = dict[str, Any] | None
+PredictParams = Optional[Dict[str, Any]]
 
 
 class TaskConfig(BaseModel):
@@ -35,20 +35,20 @@ class Metadata(BaseModel):
 class ErrorResponse(BaseModel):
     message: str
     error_code: str
-    trace_id: str | None = None
+    trace_id: Optional[str] = None
 
 
 class FileInfo(BaseModel):
     format: str
-    hash: str | None = None
-    size_bytes: int | None = None
+    hash: Optional[str] = None
+    size_bytes: Optional[int] = None
     use_chunks: bool = False
 
 
 class FileUploadInfo(BaseModel):
-    signed_urls: list[str] = Field(..., min_length=1)
+    signed_urls: List[str] = Field(..., min_length=1)
     expires_at: float
-    required_headers: dict[str, str]
+    required_headers: Dict[str, str]
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +67,7 @@ class GetDatasetLimitsResponse(BaseModel):
 class PrepareTrainSetUploadRequest(BaseModel):
     x_train_info: FileInfo
     y_train_info: FileInfo
-    description: str | None = None
+    description: Optional[str] = None
     force_reupload: bool = False
 
 
@@ -87,7 +87,7 @@ class DuplicateTrainSetErrorResponse(ErrorResponse):
 class FitRequest(BaseModel):
     train_set_upload_id: UUID
     task: str
-    tabpfn_systems: list[str]
+    tabpfn_systems: List[str]
     force_retransform: bool = False
 
 
