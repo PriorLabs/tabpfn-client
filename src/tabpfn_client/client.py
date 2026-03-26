@@ -259,19 +259,19 @@ class FileUploadInfo(BaseModel):
 
 
 class PrepareTrainSetUploadRequest(BaseModel):
-    x_train: FileInfo
-    y_train: FileInfo
+    x_train_info: FileInfo
+    y_train_info: FileInfo
 
 
 class PrepareTrainSetUploadResponse(BaseModel):
-    upload_id: UUID
-    x_train: FileUploadInfo
-    y_train: FileUploadInfo
+    train_set_upload_id: UUID
+    x_train_info: FileUploadInfo
+    y_train_info: FileUploadInfo
 
 
 class DuplicateFilesUploadedResponse(BaseModel):
     message: str
-    upload_id: UUID
+    train_set_upload_id: UUID
 
 
 # From: apps/gapi/routers/tabpfn/get_dataset_limits.py
@@ -548,10 +548,10 @@ class ServiceClient(Singleton):
 
         prepare_resp = cls._prepare_train_set_upload(
             req=PrepareTrainSetUploadRequest(
-                x_train=FileInfo(
+                x_train_info=FileInfo(
                     format="parquet", hash=x_dedup_hash, size_bytes=len(x_bytes)
                 ),
-                y_train=FileInfo(
+                y_train_info=FileInfo(
                     format="parquet", hash=y_dedup_hash, size_bytes=len(y_bytes)
                 ),
             ),
@@ -569,14 +569,14 @@ class ServiceClient(Singleton):
                         "x_train",
                         x_bytes,
                         x_dedup_hash,
-                        prepare_resp.x_train,
+                        prepare_resp.x_train_info,
                     ),
                     pool.submit(
                         cls._upload_to_gcs,
                         "y_train",
                         y_bytes,
                         y_dedup_hash,
-                        prepare_resp.y_train,
+                        prepare_resp.y_train_info,
                     ),
                 ]
                 try:
@@ -590,7 +590,7 @@ class ServiceClient(Singleton):
         form_data = {"desc": description}
         query_params = cls._build_tabpfn_params(tabpfn_config)
         query_params["task"] = task
-        query_params["upload_id"] = str(prepare_resp.upload_id)
+        query_params["upload_id"] = str(prepare_resp.train_set_upload_id)
 
         train_set_uid = cls._fit(
             form_data=form_data,
@@ -678,9 +678,7 @@ class ServiceClient(Singleton):
         return PrepareTrainSetUploadResponse.model_validate(resp.json())
 
     @classmethod
-    def _upload_to_gcs(
-        cls, dataset: str, data: bytes, crc32c_hash: str | None, info: FileUploadInfo
-    ) -> None:
+    def _upload_to_gcs(cls, dataset: str, data: bytes, info: FileUploadInfo) -> None:
         num_chunks = len(info.signed_urls)
         chunk_size = len(data) // num_chunks
         chunks = []
@@ -695,14 +693,8 @@ class ServiceClient(Singleton):
                 chunk=chunks[0],
                 headers=info.required_headers,
                 dataset=dataset,
-                crc32c_hash=crc32c_hash,
             )
             return
-
-        # CRC32C hashes are computed to verify the integrity of the uploaded data.
-        # When uploading multiple chunks we want to compute per-chunk CRC32C hashes.
-        # We compute them once so retries don't recalculate.
-        chunk_hashes = [_get_crc32c_hash(c) for c in chunks]
 
         with ThreadPoolExecutor(
             max_workers=min(_DEFAULT_MAX_UPLOAD_PARALLELISM, num_chunks)
@@ -714,7 +706,6 @@ class ServiceClient(Singleton):
                     chunk=chunks[i],
                     headers=info.required_headers,
                     dataset=dataset,
-                    crc32c_hash=chunk_hashes[i],
                     chunk_index=i,
                 ): i
                 for i in range(num_chunks)
@@ -745,11 +736,8 @@ class ServiceClient(Singleton):
         chunk: bytes,
         headers: dict[str, str],
         dataset: str,
-        crc32c_hash: str | None,
         chunk_index: int = 0,
     ) -> None:
-        if crc32c_hash is not None:
-            headers = {**headers, "x-goog-hash": f"crc32c={crc32c_hash}"}
         resp = cls.httpx_client.put(
             url,
             content=chunk,

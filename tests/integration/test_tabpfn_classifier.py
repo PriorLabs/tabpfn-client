@@ -42,7 +42,7 @@ class TestTabPFNClassifier(unittest.TestCase):
             json={
                 "detail": {
                     "message": "duplicate",
-                    "upload_id": "00000000-0000-0000-0000-000000000001",
+                    "train_set_upload_id": "00000000-0000-0000-0000-000000000001",
                 }
             },
         )
