@@ -1,41 +1,73 @@
-import os
+import time
 import unittest
+from uuid import UUID
 from unittest.mock import Mock, patch
 
+import numpy as np
 from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
-import numpy as np
-import json
 
 from tabpfn_client.client import (
+    GetDatasetLimitsResponse,
+    NeedsRefittingError,
     ServiceClient,
-    ModelType,
-    DuplicateFilesUploadedResponse,
 )
-from tabpfn_client.constants import CACHE_DIR
 from tests.mock_tabpfn_server import with_mock_server
 
 
 class TestServiceClient(unittest.TestCase):
     def setUp(self):
-        # setup data
         X, y = load_breast_cancer(return_X_y=True)
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
             X, y, test_size=0.33, random_state=42
         )
 
-        ServiceClient.dataset_uid_cache_manager.file_path = (
-            CACHE_DIR / "test_dataset_cache"
+        ServiceClient.reset_authorization()
+        ServiceClient._dataset_limits = GetDatasetLimitsResponse(
+            max_cells=100_000_000,
+            max_cols=2_000,
+            max_size_bytes=100_000_000,
+            max_classes=10,
         )
-        ServiceClient.dataset_uid_cache_manager.cache = (
-            ServiceClient.dataset_uid_cache_manager.load_cache()
-        )
+        ServiceClient._dataset_limits_ts = time.monotonic()
 
     def tearDown(self):
-        try:
-            os.remove(CACHE_DIR / "test_dataset_cache")
-        except OSError:
-            pass
+        ServiceClient.reset_authorization()
+        ServiceClient._dataset_limits = None
+        ServiceClient._dataset_limits_ts = 0.0
+
+    @staticmethod
+    def _upload_info(url: str) -> dict:
+        return {
+            "signed_urls": [url],
+            "expires_at": 1_700_000_000.0,
+            "required_headers": {"x-test-header": "1"},
+        }
+
+    def _prepare_train_set_upload_response(self, train_set_upload_id: str) -> dict:
+        return {
+            "train_set_upload_id": train_set_upload_id,
+            "x_train_info": self._upload_info("https://upload.example/x_train"),
+            "y_train_info": self._upload_info("https://upload.example/y_train"),
+        }
+
+    def _prepare_test_set_upload_response(self, test_set_upload_id: str) -> dict:
+        return {
+            "test_set_upload_id": test_set_upload_id,
+            "x_test_info": self._upload_info("https://upload.example/x_test"),
+        }
+
+    def _predict_response(self, prediction) -> dict:
+        return {
+            "prediction": prediction,
+            "metadata": {
+                "task": "classification",
+                "package_version": "0.2.9rc6",
+                "tabpfn_config": None,
+                "test_set_num_rows": len(self.X_test),
+                "test_set_num_cols": self.X_test.shape[1],
+            },
+        }
 
     @with_mock_server()
     def test_try_connection(self, mock_server):
@@ -63,16 +95,16 @@ class TestServiceClient(unittest.TestCase):
         mock_server.router.post(mock_server.endpoints.validate_email.path).respond(
             200, json={"message": "dummy_message"}
         )
-        self.assertTrue(ServiceClient.validate_email("dummy_email")[0])
+        self.assertEqual(ServiceClient.validate_email("dummy_email"), (True, ""))
 
     @with_mock_server()
     def test_validate_email_invalid(self, mock_server):
         mock_server.router.post(mock_server.endpoints.validate_email.path).respond(
             401, json={"detail": "dummy_message"}
         )
-        self.assertFalse(ServiceClient.validate_email("dummy_email")[0])
         self.assertEqual(
-            "dummy_message", ServiceClient.validate_email("dummy_email")[1]
+            ServiceClient.validate_email("dummy_email"),
+            (False, "dummy_message"),
         )
 
     @with_mock_server()
@@ -80,7 +112,7 @@ class TestServiceClient(unittest.TestCase):
         mock_server.router.post(mock_server.endpoints.register.path).respond(
             200, json={"message": "dummy_message", "token": "DUMMY_TOKEN"}
         )
-        self.assertTrue(
+        self.assertEqual(
             ServiceClient.register(
                 "dummy_email",
                 "dummy_password",
@@ -92,7 +124,8 @@ class TestServiceClient(unittest.TestCase):
                     "role": "dummy_role",
                     "contact_via_email": False,
                 },
-            )[0]
+            ),
+            (True, "dummy_message", "DUMMY_TOKEN"),
         )
 
     @with_mock_server()
@@ -100,7 +133,7 @@ class TestServiceClient(unittest.TestCase):
         mock_server.router.post(mock_server.endpoints.register.path).respond(
             401, json={"detail": "dummy_message", "token": None}
         )
-        self.assertFalse(
+        self.assertEqual(
             ServiceClient.register(
                 "dummy_email",
                 "dummy_password",
@@ -112,47 +145,8 @@ class TestServiceClient(unittest.TestCase):
                     "role": "dummy_role",
                     "contact_via_email": False,
                 },
-            )[0]
-        )
-
-    @with_mock_server()
-    def test_register_user_with_invalid_validation_link(self, mock_server):
-        mock_server.router.post(mock_server.endpoints.register.path).respond(
-            401, json={"detail": "dummy_message", "token": None}
-        )
-        self.assertFalse(
-            ServiceClient.register(
-                "dummy_email",
-                "dummy_password",
-                "dummy_password",
-                "dummy_validation",
-                {
-                    "company": "dummy_company",
-                    "use_case": "dummy_usecase",
-                    "role": "dummy_role",
-                    "contact_via_email": False,
-                },
-            )[0]
-        )
-
-    @with_mock_server()
-    def test_register_user_with_limit_reached(self, mock_server):
-        mock_server.router.post(mock_server.endpoints.register.path).respond(
-            401, json={"detail": "dummy_message", "token": "DUMMY_TOKEN"}
-        )
-        self.assertFalse(
-            ServiceClient.register(
-                "dummy_email",
-                "dummy_password",
-                "dummy_password",
-                "dummy_validation",
-                {
-                    "company": "dummy_company",
-                    "use_case": "dummy_usecase",
-                    "role": "dummy_role",
-                    "contact_via_email": False,
-                },
-            )[0]
+            ),
+            (False, "dummy_message", None),
         )
 
     @with_mock_server()
@@ -196,36 +190,47 @@ class TestServiceClient(unittest.TestCase):
 
     @with_mock_server()
     def test_predict_with_valid_train_set_and_test_set(self, mock_server):
-        dummy_json = {"train_set_uid": "5"}
         mock_server.router.post("/tabpfn/prepare_train_set_upload/").respond(
-            409,
-            json={
-                "detail": {
-                    "message": "duplicate",
-                    "train_set_upload_id": "00000000-0000-0000-0000-000000000001",
-                }
-            },
-        )
-        mock_server.router.post(mock_server.endpoints.fit.path).respond(
-            200, json=dummy_json
-        )
-        ServiceClient.authorize("dummy_token")
-        ServiceClient.fit(self.X_train, self.y_train, model_type=ModelType.TABPFN)
-
-        dummy_result = {"test_set_uid": "dummy_uid", "classification": [1, 2, 3]}
-        mock_server.router.post(mock_server.endpoints.predict.path).respond(
             200,
-            content=f"data: {json.dumps({'event': 'result', 'data': dummy_result})}\n\n",
-            headers={"Content-Type": "text/event-stream"},
+            json=self._prepare_train_set_upload_response(
+                "00000000-0000-0000-0000-000000000001"
+            ),
+        )
+        mock_server.router.post("/tabpfn/fit/").respond(
+            200,
+            json={"fitted_train_set_id": "00000000-0000-0000-0000-000000000002"},
+        )
+        mock_server.router.post("/tabpfn/prepare_test_set_upload/").respond(
+            200,
+            json=self._prepare_test_set_upload_response(
+                "00000000-0000-0000-0000-000000000003"
+            ),
+        )
+        mock_server.router.post("/tabpfn/predict/").respond(
+            200,
+            json=self._predict_response([1, 0, 1]),
         )
 
-        pred = ServiceClient.predict(
-            train_set_uid=dummy_json["train_set_uid"],
-            x_test=self.X_test,
-            model_type=ModelType.TABPFN,
-            task="classification",
+        ServiceClient.authorize("dummy_token")
+
+        with patch.object(ServiceClient, "_upload_to_gcs") as mock_upload:
+            fitted_train_set_id = ServiceClient.fit(
+                self.X_train,
+                self.y_train,
+                task="classification",
+            )
+            pred = ServiceClient.predict(
+                fitted_train_set_id=fitted_train_set_id,
+                x_test=self.X_test,
+                task="classification",
+            )
+
+        self.assertEqual(
+            fitted_train_set_id, UUID("00000000-0000-0000-0000-000000000002")
         )
-        self.assertTrue(np.array_equal(pred.y_pred, dummy_result["classification"]))
+        self.assertTrue(np.array_equal(pred.y_pred, [1, 0, 1]))
+        self.assertEqual(pred.metadata["task"], "classification")
+        self.assertEqual(mock_upload.call_count, 3)
 
     def test_validate_response_no_error(self):
         response = Mock()
@@ -235,14 +240,13 @@ class TestServiceClient(unittest.TestCase):
 
     def test_validate_response(self):
         response = Mock()
-        # Test for "Client version too old." error
+
         response.status_code = 426
         response.json.return_value = {"detail": "Client version too old."}
         with self.assertRaises(RuntimeError) as cm:
             ServiceClient._validate_response(response, "test")
         self.assertEqual(str(cm.exception), "Client version too old.")
 
-        # Test for "Some other error" which is translated to a generic failure message
         response.status_code = 400
         response.json.return_value = {"detail": "Some other error"}
         with self.assertRaises(RuntimeError) as cm:
@@ -257,284 +261,135 @@ class TestServiceClient(unittest.TestCase):
             ServiceClient._validate_response(response, "test", only_version_check=True)
         self.assertEqual(str(cm.exception), "Client version too old.")
 
-        # Errors that have nothing to do with client version should be skipped.
-        response = Mock()
         response.status_code = 400
         response.json.return_value = {"detail": "Some other error"}
         r = ServiceClient._validate_response(response, "test", only_version_check=True)
         self.assertIsNone(r)
 
     @with_mock_server()
-    def test_fit_with_caching(self, mock_server):
-        """
-        Test that calling fit with the same training set multiple times calls
-        prepare_train_set_upload (which handles deduplication server-side) and
-        the fit endpoint each time.
-        """
+    def test_fit_calls_prepare_and_fit_each_time(self, mock_server):
+        prepare_route = mock_server.router.post("/tabpfn/prepare_train_set_upload/")
+        prepare_route.respond(
+            200,
+            json=self._prepare_train_set_upload_response(
+                "00000000-0000-0000-0000-000000000001"
+            ),
+        )
+        fit_route = mock_server.router.post("/tabpfn/fit/")
+        fit_route.respond(
+            200,
+            json={"fitted_train_set_id": "00000000-0000-0000-0000-000000000002"},
+        )
+
         ServiceClient.authorize("dummy_access_token")
 
-        mock_server.router.post("/tabpfn/prepare_train_set_upload/").respond(
-            409,
-            json={
-                "detail": {
-                    "message": "duplicate",
-                    "train_set_upload_id": "00000000-0000-0000-0000-000000000001",
-                }
-            },
-        )
-        fit_route = mock_server.router.post(mock_server.endpoints.fit.path)
-        fit_route.respond(
-            200, json={"status": "complete", "train_set_uid": "dummy_train_set_uid"}
-        )
+        with patch.object(ServiceClient, "_upload_to_gcs"):
+            fitted_train_set_id_1 = ServiceClient.fit(
+                self.X_train,
+                self.y_train,
+                task="classification",
+            )
+            fitted_train_set_id_2 = ServiceClient.fit(
+                self.X_train,
+                self.y_train,
+                task="classification",
+            )
 
-        # First upload
-        train_set_uid1 = ServiceClient.fit(
-            self.X_train, self.y_train, model_type=ModelType.TABPFN
-        )
-
-        # Second upload with the same data
-        train_set_uid2 = ServiceClient.fit(
-            self.X_train, self.y_train, model_type=ModelType.TABPFN
-        )
-
-        # The train_set_uid should be the same
-        self.assertEqual(train_set_uid1, train_set_uid2)
-
-        # Fit endpoint is called each time (no client-side caching)
+        self.assertEqual(fitted_train_set_id_1, fitted_train_set_id_2)
+        self.assertEqual(prepare_route.call_count, 2)
         self.assertEqual(fit_route.call_count, 2)
 
-    def test_predict_with_caching(self):
-        """
-        Test that making predictions with the same test set uses the cache and
-        avoids re-uploading the test set.
-        """
-        ServiceClient.authorize("dummy_access_token")
-
-        # Mock _prepare_train_set_upload and the streaming endpoints
-        mock_prepare = Mock(
-            return_value=DuplicateFilesUploadedResponse(
-                message="duplicate",
-                train_set_upload_id="00000000-0000-0000-0000-000000000001",
-            )
+    @with_mock_server()
+    def test_predict_with_same_test_set_calls_prepare_and_predict_each_time(
+        self, mock_server
+    ):
+        prepare_route = mock_server.router.post("/tabpfn/prepare_test_set_upload/")
+        prepare_route.respond(
+            200,
+            json=self._prepare_test_set_upload_response(
+                "00000000-0000-0000-0000-000000000003"
+            ),
+        )
+        predict_route = mock_server.router.post("/tabpfn/predict/")
+        predict_route.respond(
+            200,
+            json=self._predict_response([1, 0, 1]),
         )
 
-        with (
-            patch.object(ServiceClient, "_prepare_train_set_upload", mock_prepare),
-            patch.object(
-                ServiceClient.httpx_client,
-                "stream",
-                wraps=ServiceClient.httpx_client.stream,
-            ) as mock_stream,
-        ):
-            # Mock responses
-            def side_effect(*args, **kwargs):
-                if kwargs.get("url") == "/fit/":
-                    response = Mock()
-                    response.status_code = 200
-                    response.iter_lines = Mock(
-                        return_value=[
-                            '{"status": "complete", "train_set_uid": "dummy_train_set_uid"}'
-                        ]
-                    )
-                    response.__enter__ = Mock(return_value=response)
-                    response.__exit__ = Mock(return_value=None)
-                    return response
-                elif kwargs.get("url") == "/predict/":
-                    response = Mock()
-                    response.status_code = 200
-                    response.headers = {"Content-Type": "text/event-stream"}
-                    response.iter_bytes = Mock(
-                        return_value=iter(
-                            [
-                                'data: {"event": "result", "data": {"classification": [1, 2, 3], "test_set_uid": "dummy_test_set_uid"}}\n\n'.encode()
-                            ]
-                        )
-                    )
-                    response.__enter__ = Mock(return_value=response)
-                    response.__exit__ = Mock(return_value=None)
-                    return response
-                else:
-                    return Mock(status_code=404)
+        fitted_train_set_id = UUID("00000000-0000-0000-0000-000000000002")
 
-            mock_stream.side_effect = side_effect
-
-            # Upload train set
-            train_set_uid = ServiceClient.fit(
-                self.X_train, self.y_train, model_type=ModelType.TABPFN
-            )
-
-            # First prediction
-            pred1 = ServiceClient.predict(
-                train_set_uid=train_set_uid,
+        with patch.object(ServiceClient, "_upload_to_gcs"):
+            pred_1 = ServiceClient.predict(
+                fitted_train_set_id=fitted_train_set_id,
                 x_test=self.X_test,
-                model_type=ModelType.TABPFN,
+                task="classification",
+            )
+            pred_2 = ServiceClient.predict(
+                fitted_train_set_id=fitted_train_set_id,
+                x_test=self.X_test,
                 task="classification",
             )
 
-            # Second prediction with the same test set
-            pred2 = ServiceClient.predict(
-                train_set_uid=train_set_uid,
-                x_test=self.X_test,
-                model_type=ModelType.TABPFN,
-                task="classification",
-            )
+        self.assertTrue(np.array_equal(pred_1.y_pred, pred_2.y_pred))
+        self.assertEqual(prepare_route.call_count, 2)
+        self.assertEqual(predict_route.call_count, 2)
 
-            # The predictions should be the same
-            self.assertTrue(np.array_equal(pred1.y_pred, pred2.y_pred))
-
-            # 1 for fit + 2 for predict
-            self.assertEqual(mock_stream.call_count, 3)
-
-    def test_predict_with_invalid_cached_uids(self):
-        """
-        Test that when the cached UIDs are invalid, the client re-uploads the datasets
-        and retries the prediction.
-        """
-        ServiceClient.authorize("dummy_access_token")
-
-        mock_prepare = Mock(
-            return_value=DuplicateFilesUploadedResponse(
-                message="duplicate",
-                train_set_upload_id="00000000-0000-0000-0000-000000000001",
-            )
+    @with_mock_server()
+    def test_predict_with_missing_fitted_train_set_raises_needs_refitting(
+        self, mock_server
+    ):
+        mock_server.router.post("/tabpfn/prepare_test_set_upload/").respond(
+            404,
+            json={
+                "message": "fitted train set missing",
+                "error_code": "NOT_FOUND",
+                "trace_id": "trace-123",
+            },
         )
 
-        with (
-            patch.object(ServiceClient, "_prepare_train_set_upload", mock_prepare),
-            patch.object(
-                ServiceClient.httpx_client,
-                "stream",
-                wraps=ServiceClient.httpx_client.stream,
-            ) as mock_stream,
-        ):
-            # Mock responses with side effects to simulate invalid cached UIDs
-            def side_effect(*args, **kwargs):
-                if kwargs.get("url") == "/fit/":
-                    response = Mock()
-                    response.status_code = 200
-                    response.iter_lines = Mock(
-                        return_value=[
-                            '{"status": "complete", "train_set_uid": "dummy_train_set_uid"}'
-                        ]
-                    )
-                    response.__enter__ = Mock(return_value=response)
-                    response.__exit__ = Mock(return_value=None)
-                    return response
-                elif kwargs.get("url") == "/predict/":
-                    # Simulate invalid UID on first call, success on second
-                    if side_effect.call_count == 2:
-                        response = Mock()
-                        response.status_code = 400
-                        response.json.return_value = {
-                            "detail": "Invalid train or test set uid"
-                        }
-                        response.__enter__ = Mock(return_value=response)
-                        response.__exit__ = Mock(return_value=None)
-                        return response
-                    else:
-                        # Successful prediction after re-upload
-                        response = Mock()
-                        response.status_code = 200
-                        response.headers = {"Content-Type": "text/event-stream"}
-                        response.iter_bytes = Mock(
-                            return_value=iter(
-                                [
-                                    'data: {"event": "result", "data": {"classification": [1, 2, 3], "test_set_uid": "new_dummy_test_set_uid"}}\n\n'.encode()
-                                ]
-                            )
-                        )
-                        response.__enter__ = Mock(return_value=response)
-                        response.__exit__ = Mock(return_value=None)
-                        return response
-                else:
-                    return Mock(status_code=404)
-
-            side_effect.call_count = 0
-
-            def side_effect_counter(*args, **kwargs):
-                side_effect.call_count += 1
-                return side_effect(*args, **kwargs)
-
-            mock_stream.side_effect = side_effect_counter
-
-            # Upload train set
-            train_set_uid = ServiceClient.fit(
-                self.X_train, self.y_train, model_type=ModelType.TABPFN
-            )
-
-            # Attempt prediction, which should fail and trigger retry
-            pred = ServiceClient.predict(
-                train_set_uid=train_set_uid,
+        with self.assertRaises(NeedsRefittingError):
+            ServiceClient.predict(
+                fitted_train_set_id=UUID("00000000-0000-0000-0000-000000000002"),
                 x_test=self.X_test,
-                model_type=ModelType.TABPFN,
                 task="classification",
-                X_train=self.X_train,
-                y_train=self.y_train,
             )
 
-            # The predictions should be as expected
-            self.assertTrue(np.array_equal(pred.y_pred, [1, 2, 3]))
+    def test_get_dataset_limits_uses_cache(self):
+        ServiceClient._dataset_limits = None
+        ServiceClient._dataset_limits_ts = 0.0
 
-            # 1 fit + 2 predict + 1 re-fit
-            self.assertEqual(mock_stream.call_count, 4)
+        response = Mock()
+        response.raise_for_status = Mock()
+        response.json.return_value = {
+            "max_cells": 123,
+            "max_cols": 12,
+            "max_size_bytes": 456,
+            "max_classes": 7,
+        }
 
-            # Ensure that fit was called again (re-upload)
-            upload_calls = [
-                call
-                for call in mock_stream.call_args_list
-                if call.kwargs.get("url") == "/fit/"
-            ]
-            self.assertEqual(len(upload_calls), 2)
+        with patch.object(
+            ServiceClient.httpx_client, "get", return_value=response
+        ) as m:
+            first = ServiceClient.get_dataset_limits()
+            second = ServiceClient.get_dataset_limits()
 
-    def test_dataset_cache_manager(self):
-        """
-        Test the DatasetCacheManager's basic functionality: adding, retrieving,
-        and deleting dataset UIDs based on hashes.
-        """
-        # Create a fresh cache manager
-        cache_manager = ServiceClient.dataset_uid_cache_manager
+        self.assertEqual(first.max_size_bytes, 456)
+        self.assertIs(first, second)
+        self.assertEqual(m.call_count, 1)
 
-        # Mock dataset hashes and UIDs
-        dataset_1 = "data1"
-        dataset_uid_1 = "uid1"
-        dataset_2 = "data2"
-        dataset_uid_2 = "uid2"
+    def test_get_dataset_limits_returns_stale_value_on_failure(self):
+        stale = GetDatasetLimitsResponse(
+            max_cells=100,
+            max_cols=20,
+            max_size_bytes=300,
+            max_classes=4,
+        )
+        ServiceClient._dataset_limits = stale
+        ServiceClient._dataset_limits_ts = time.monotonic() - 1_900
 
-        # Get hash by trying to get dataset_uid from cache
-        _, dataset_hash_1 = cache_manager.get_dataset_uid(dataset_1)
-        _, dataset_hash_2 = cache_manager.get_dataset_uid(dataset_2)
+        with patch.object(
+            ServiceClient.httpx_client, "get", side_effect=RuntimeError("boom")
+        ):
+            result = ServiceClient.get_dataset_limits()
 
-        # Add datasets to cache
-        cache_manager.add_dataset_uid(dataset_hash_1, dataset_uid_1)
-        cache_manager.add_dataset_uid(dataset_hash_2, dataset_uid_2)
-
-        # Retrieve datasets from cache
-        retrieved_uid_1, _ = cache_manager.get_dataset_uid(dataset_1)
-        retrieved_uid_2, _ = cache_manager.get_dataset_uid(dataset_2)
-        self.assertEqual(retrieved_uid_1, dataset_uid_1)
-        self.assertEqual(retrieved_uid_2, dataset_uid_2)
-
-        # Delete a dataset by UID
-        deleted_hash = cache_manager.delete_uid(dataset_uid_1)
-        self.assertEqual(deleted_hash, dataset_hash_1)
-
-        # Ensure the deleted dataset is no longer in the cache
-        self.assertIsNone(cache_manager.get_dataset_uid(dataset_1)[0])
-
-    def test_cache_limit(self):
-        """
-        Test that the cache does not exceed its limit and evicts the oldest entries.
-        """
-        cache_manager = ServiceClient.dataset_uid_cache_manager
-        cache_manager.cache_limit = 3  # Set a small limit for testing
-
-        # Add more datasets than the cache limit
-        for i in range(5):
-            cache_manager.add_dataset_uid(f"hash{i}", f"uid{i}")
-
-        # The cache should only contain the last 3 added datasets
-        expected_hashes = ["hash2", "hash3", "hash4"]
-        actual_hashes = list(cache_manager.cache.keys())
-
-        self.assertEqual(actual_hashes, expected_hashes)
-        self.assertEqual(len(cache_manager.cache), 3)
+        self.assertIs(result, stale)

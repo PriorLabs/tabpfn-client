@@ -2,55 +2,65 @@
 #  Licensed under the Apache License, Version 2.0
 
 from __future__ import annotations
+from uuid import UUID
 import base64
-from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from copy import deepcopy
 from dataclasses import dataclass, field
-from enum import Enum, auto
 from importlib.metadata import PackageNotFoundError, version
 import io
 import json
 import logging
-import os
 from pathlib import Path
+import numpy as np
 import re
 import struct
-import threading
 import time
 import traceback
-from typing import Annotated, Any, Dict, Literal, Optional, Union
+from pydantic import BaseModel, ValidationError
+from typing import Any, Callable, Dict, Literal, Union, cast
 
 import google_crc32c
 
 import pandas as pd
-from uuid import UUID
-
-from tqdm import tqdm
 
 import backoff
 import httpx
 from httpx._transports.default import HTTPTransport
-import numpy as np
 from omegaconf import OmegaConf
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
-import sseclient
 from tabpfn_client.browser_auth import BrowserAuthHandler
-from tabpfn_client.constants import CACHE_DIR
+from tabpfn_client.constants import (
+    dedup_datasets_enabled,
+    force_retransform_enabled,
+    force_reupload_enabled,
+    TABPFN_MAX_THREAD_PER_UPLOAD,
+    TABPFN_CLIENT_TIMEOUT,
+    TABPFN_API_URL,
+)
 from tabpfn_common_utils import utils as common_utils
 from tabpfn_common_utils.utils import Singleton
-import xxhash
+from tabpfn_client.api_models import (
+    GetDatasetLimitsResponse,
+    PrepareTrainSetUploadRequest,
+    PrepareTrainSetUploadResponse,
+    DuplicateTrainSetErrorResponse,
+    PrepareTestSetUploadRequest,
+    PrepareTestSetUploadResponse,
+    DuplicateTestSetErrorResponse,
+    FileUploadInfo,
+    FileInfo,
+    FitRequest,
+    FitResponse,
+    PredictRequest,
+    PredictResponse,
+    TaskConfig,
+    ErrorResponse,
+)
 
 logger = logging.getLogger(__name__)
 
 # avoid logging of httpx and httpcore on client side
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
-
-# Chunks are usually 32 MB in size, at maximum 16 threads we achieve full parallelization
-# up to 256 MB.
-_DEFAULT_MAX_UPLOAD_PARALLELISM = 8
-_DEFAULT_HTTPX_TIMEOUT = 900.0  # 15 minutes
 
 
 def _on_backoff(details: Dict[str, Any]):
@@ -71,14 +81,6 @@ def _on_giveup(details: Dict[str, Any]):
         f"Giving up. Exception: {details['exception']}"
     )
     logger.error(message)
-
-
-def _caching_disabled() -> bool:
-    val = os.getenv("DISABLE_DS_CACHING", "")
-    disabled = str(val).lower() in {"1", "true", "yes", "on"}
-    if disabled:
-        logger.warning("Dataset caching is disabled.")
-    return disabled
 
 
 class GCPOverloaded(Exception):
@@ -109,86 +111,6 @@ class SensitiveDataFilter(logging.Filter):
         return True
 
 
-class DatasetUIDCacheManager:
-    """
-    Manages a cache of the last 50 uploaded datasets, tracking dataset hashes and their UIDs.
-
-    Can be disabled using the environment variable 'DISABLE_DS_CACHING'.
-    """
-
-    def __init__(self):
-        self.file_path = CACHE_DIR / "dataset_cache"
-        self.cache_limit = 50
-        self.disable_ds_caching = _caching_disabled()
-
-        self.cache = self.load_cache() if not self.disable_ds_caching else OrderedDict()
-
-    def load_cache(self):
-        """
-        Loads the cache from disk if it exists, otherwise initializes an empty cache.
-        """
-        if os.path.exists(self.file_path):
-            with open(self.file_path, "r") as file:
-                data = json.load(file)
-                return OrderedDict(data)
-        return OrderedDict()
-
-    def _compute_hash(self, *args):
-        combined_bytes = b"".join(
-            item if isinstance(item, bytes) else str.encode(item) for item in args
-        )
-        return xxhash.xxh64(combined_bytes).hexdigest()
-
-    def get_dataset_uid(self, *args):
-        """
-        Generates hash by all received arguments and returns cached dataset uid if in cache, otherwise None.
-        """
-        dataset_hash = self._compute_hash(*args)
-        if str(dataset_hash) in self.cache and not self.disable_ds_caching:
-            self.cache.move_to_end(dataset_hash)
-            return self.cache[dataset_hash], dataset_hash
-        else:
-            return None, dataset_hash
-
-    def add_dataset_uid(self, hash: str, dataset_uid: str):
-        """
-        Adds a new dataset to the cache, removing the oldest item if the cache exceeds 50 entries.
-        Assumes the dataset is not already in the cache.
-        """
-        self.cache[hash] = dataset_uid
-        # Move to end for the case that hash already was stored in the cache
-        self.cache.move_to_end(hash)
-        if len(self.cache) > self.cache_limit:
-            self.cache.popitem(last=False)
-
-        if not self.disable_ds_caching:
-            self.save_cache()
-
-    def save_cache(self):
-        """
-        Saves the current cache to disk.
-        """
-        os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
-        with open(self.file_path, "w") as file:
-            json.dump(self.cache, file)
-
-    def delete_uid(self, dataset_uid: str) -> Optional[str]:
-        """
-        Deletes an entry from the cache based on the dataset UID.
-        """
-        hash_to_delete = None
-        for hash, uid in self.cache.items():
-            if uid == dataset_uid:
-                hash_to_delete = hash
-                break
-
-        if hash_to_delete:
-            del self.cache[hash_to_delete]
-            self.save_cache()
-            return hash_to_delete
-        return None
-
-
 # Apply the custom filter to the httpx logger
 httpx_logger = logging.getLogger("httpx")
 httpx_logger.setLevel(logging.WARNING)
@@ -198,11 +120,6 @@ SERVER_CONFIG_FILE = Path(__file__).parent.resolve() / "server_config.yaml"
 SERVER_CONFIG = OmegaConf.load(SERVER_CONFIG_FILE)
 
 
-class ModelType(Enum):
-    TABPFN = auto()
-    TABPFN_R = auto()
-
-
 def get_client_version() -> str:
     try:
         return version("tabpfn_client")
@@ -210,85 +127,6 @@ def get_client_version() -> str:
         # Package not found, should only happen during development. Execute 'pip install -e .' to use the actual
         # version number during development. Otherwise, simply return a version number that is large enough.
         return "5.5.5"
-
-
-class FitProgressEvent(BaseModel):
-    """
-    Update to the progress of fitting the model.
-    """
-
-    status: Literal["in_progress"] = "in_progress"
-    estimated_time_remaining_sec: float
-    total_steps: int
-    current_step: int
-    message: str
-
-
-class FitCompleteEvent(BaseModel):
-    status: Literal["complete"] = "complete"
-    # Identifies the dataset and thus the model
-    train_set_uid: str
-
-
-class FitErrorEvent(BaseModel):
-    """
-    Error event emitted by the server during fitting.
-    """
-
-    status: Literal["error"] = "error"
-    message: str
-
-
-###############################################################
-## Gapi models                                               ##
-###############################################################
-
-
-# From: apps/gapi/routers/tabpfn/prepare_train_set_upload.py
-class FileInfo(BaseModel):
-    format: Literal["csv", "parquet"]
-    hash: Optional[str] = None
-    size_bytes: int
-    use_chunks: bool = True
-
-
-class FileUploadInfo(BaseModel):
-    signed_urls: list[str]
-    expires_at: float
-    required_headers: dict[str, str]
-
-
-class PrepareTrainSetUploadRequest(BaseModel):
-    x_train_info: FileInfo
-    y_train_info: FileInfo
-
-
-class PrepareTrainSetUploadResponse(BaseModel):
-    train_set_upload_id: UUID
-    x_train_info: FileUploadInfo
-    y_train_info: FileUploadInfo
-
-
-class DuplicateFilesUploadedResponse(BaseModel):
-    message: str
-    train_set_upload_id: UUID
-
-
-# From: apps/gapi/routers/tabpfn/get_dataset_limits.py
-class GetDatasetLimitsResponse(BaseModel):
-    max_size_bytes: int
-    max_cells: int
-    max_cols: int
-    max_classes: int
-
-
-###############################################################
-
-ResponseEvents = Annotated[
-    Union[FitCompleteEvent, FitProgressEvent, FitErrorEvent],
-    Field(discriminator="status"),
-]
-ResponseEventAdapter = TypeAdapter(ResponseEvents)
 
 
 def _get_crc32c_hash(data: bytes) -> str:
@@ -306,6 +144,14 @@ def _serialize_to_parquet(data) -> tuple[bytes, str]:
     return dataset_bytes, crc32c_b64
 
 
+class NeedsRefittingError(Exception):
+    """
+    Exception raised when the server is not able to predict given the current state.
+    """
+
+    pass
+
+
 @dataclass
 class ClientOptions:
     """
@@ -320,7 +166,9 @@ class ClientOptions:
         Headers for the request overriding the default headers.
     """
 
-    timeout: float = _DEFAULT_HTTPX_TIMEOUT
+    # Note: timeout=None does not fallback to the client default, rather it disables
+    # the timeout altogether.
+    timeout: float = TABPFN_CLIENT_TIMEOUT
     headers: dict[str, str] = field(default_factory=dict)
 
 
@@ -354,11 +202,14 @@ class ServiceClient(Singleton):
 
     server_config = SERVER_CONFIG
     server_endpoints = SERVER_CONFIG["endpoints"]
-    base_url = f"{server_config.protocol}://{server_config.host}:{server_config.port}"
+    base_url = (
+        TABPFN_API_URL
+        or f"{server_config.protocol}://{server_config.host}:{server_config.port}"
+    )
     fit_path = SERVER_CONFIG["endpoints"]["fit"]["path"]
     httpx_client = httpx.Client(
         base_url=base_url,
-        timeout=_DEFAULT_HTTPX_TIMEOUT,
+        timeout=TABPFN_CLIENT_TIMEOUT,
         headers={"client-version": get_client_version()},
         transport=SelectiveHTTP2Transport(http2_paths=[fit_path]),
         follow_redirects=True,
@@ -366,77 +217,6 @@ class ServiceClient(Singleton):
     _access_token = None
     _dataset_limits: GetDatasetLimitsResponse | None = None
     _dataset_limits_ts: float = 0.0
-    dataset_uid_cache_manager = DatasetUIDCacheManager()
-
-    @staticmethod
-    def _process_tabpfn_config(
-        tabpfn_config: Union[dict, None],
-    ) -> tuple[bool, list[str], Union[dict, None], Optional[dict]]:
-        """
-        Process tabpfn_config to extract paper_version, tabpfn_systems and tabpfnr_params.
-
-        Parameters
-        ----------
-        tabpfn_config : dict or None
-            Configuration dict that may contain a 'paper_version' key.
-
-        Returns
-        -------
-        paper_version : bool
-            Whether to use paper version (affects tabpfn_systems).
-        tabpfn_systems : list[str]
-            List of systems to use (empty if paper_version, otherwise ["preprocessing", "text"]).
-        processed_config : dict or None
-            The config dict with paper_version removed (if present), or None if input was None.
-        tabpfnr_params:
-        """
-        tabpfnr_params: Optional[dict[str, any]]
-        if tabpfn_config is None:
-            paper_version = False
-            processed_config = None
-            tabpfnr_params = None
-        else:
-            # Make a copy to avoid modifying the original
-            processed_config = tabpfn_config.copy()
-            paper_version = processed_config.pop("paper_version", False)
-
-            # Thinking params are only used during fit and are not accepted by the underlying model.
-            processed_config.pop("thinking", None)
-            tabpfnr_params = processed_config.pop("thinking_params", None)
-
-        tabpfn_systems = [] if paper_version else ["preprocessing", "text"]
-        return paper_version, tabpfn_systems, processed_config, tabpfnr_params
-
-    @staticmethod
-    def _build_tabpfn_params(tabpfn_config: Union[dict, None]) -> dict:
-        """
-        Build parameters dict for tabpfn_config and tabpfn_systems.
-
-        This is a unified helper for both fit and predict methods to ensure
-        consistent parameter handling.
-
-        Parameters
-        ----------
-        tabpfn_config : dict or None
-            Configuration dict that may contain a 'paper_version' key.
-
-        Returns
-        -------
-        params : dict
-            Dictionary containing 'tabpfn_systems' and optionally 'tabpfn_config'.
-        """
-        _, tabpfn_systems, processed_config, _ = ServiceClient._process_tabpfn_config(
-            tabpfn_config
-        )
-
-        params = {"tabpfn_systems": json.dumps(tabpfn_systems)}
-
-        if processed_config is not None:
-            params["tabpfn_config"] = json.dumps(
-                processed_config, default=lambda x: x.to_dict()
-            )
-
-        return params
 
     @classmethod
     def get_access_token(cls):
@@ -483,13 +263,12 @@ class ServiceClient(Singleton):
         cls,
         X,
         y,
-        model_type: ModelType,
+        task: Literal["classification", "regression"],
         tabpfn_config: Union[dict, None] = None,
-        task: Optional[Literal["classification", "regression"]] = None,
-        description: str = "",
+        description: str | None = None,
         client_options: ClientOptions | None = None,
-        dedup_files: bool = True,
-    ) -> str:
+        is_refitting: bool = False,
+    ) -> UUID:
         """
         Upload a train set to server and return the train set UID if successful.
 
@@ -499,33 +278,27 @@ class ServiceClient(Singleton):
             The training input samples.
         y : array-like of shape (n_samples,) or (n_samples, n_outputs)
             The target values.
-        model_type : ModelType
-            Whether to fit a TabPFN or TabPFN-R model.
-        tabpfn_config : dict, optional
-            Configuration for the fit method. Includes tabpfn_systems, paper_version and thinking params.
-        task: str, optional
+        task: str
             Task type: "classification" or "regression"
+        tabpfn_config : dict, optional
+            Configuration for the fit method. Supported keys currently include
+            `paper_version`.
         description: str, optional
             Description of the dataset and task for the server.
         client_options : ClientOptions, optional
             Per-request options (e.g. timeout, headers) for the fitting API call
             only. Does not apply to file uploads. Because uploads can run before fitting,
             this method may return later than the timeout specified.
-        dedup_files: bool, optional
-            If True, the client will check if the same files (identified by their content hash)
-            have already been uploaded and return the corresponding upload_id. Default is True.
-            This is only used if DISABLE_DS_CACHING is False.
 
         Returns
         -------
-        train_set_uid : str
-            The unique ID of the train set in the server.
-
+        fitted_train_set_id: UUID
+            The unique ID of the fitted train set in the server.
         """
-        client_options = client_options or ClientOptions()
+        if task not in {"classification", "regression"}:
+            raise ValueError("task must be either 'classification' or 'regression'.")
 
-        if model_type == ModelType.TABPFN_R:
-            raise NotImplementedError("TABPFN-R is no longer supported")
+        client_options = client_options or ClientOptions()
 
         x_bytes, x_crc32c_hash = _serialize_to_parquet(X)
         y_bytes, y_crc32c_hash = _serialize_to_parquet(y)
@@ -539,43 +312,58 @@ class ServiceClient(Singleton):
                         f"the server limit of {limits.max_size_bytes} bytes."
                     )
 
-        if dedup_files and not _caching_disabled():
+        if dedup_datasets_enabled():
             x_dedup_hash = x_crc32c_hash
             y_dedup_hash = y_crc32c_hash
         else:
             x_dedup_hash = None
             y_dedup_hash = None
 
-        prepare_resp = cls._prepare_train_set_upload(
-            req=PrepareTrainSetUploadRequest(
-                x_train_info=FileInfo(
-                    format="parquet", hash=x_dedup_hash, size_bytes=len(x_bytes)
-                ),
-                y_train_info=FileInfo(
-                    format="parquet", hash=y_dedup_hash, size_bytes=len(y_bytes)
-                ),
+        prepare_req = PrepareTrainSetUploadRequest(
+            x_train_info=FileInfo(
+                format="parquet", hash=x_dedup_hash, size_bytes=len(x_bytes)
             ),
+            y_train_info=FileInfo(
+                format="parquet", hash=y_dedup_hash, size_bytes=len(y_bytes)
+            ),
+            description=description,
+            force_reupload=force_reupload_enabled(),
+        )
+        res = cls.httpx_client.post(
+            url="/tabpfn/prepare_train_set_upload/",
+            json=prepare_req.model_dump(mode="json"),
             headers=client_options.headers,
         )
+        prepare_resp = cast(
+            Union[
+                PrepareTrainSetUploadResponse,
+                DuplicateTrainSetErrorResponse,
+            ],
+            cls._validate_response(
+                res,
+                "prepare_train_set_upload",
+                response_models={
+                    200: PrepareTrainSetUploadResponse,
+                    409: DuplicateTrainSetErrorResponse,
+                },
+            ),
+        )
 
-        if isinstance(prepare_resp, DuplicateFilesUploadedResponse):
+        if isinstance(prepare_resp, DuplicateTrainSetErrorResponse):
             logger.warning(prepare_resp.message)
-
-        if isinstance(prepare_resp, PrepareTrainSetUploadResponse):
+        else:
             with ThreadPoolExecutor(max_workers=2) as pool:
                 futures = [
                     pool.submit(
                         cls._upload_to_gcs,
                         "x_train",
                         x_bytes,
-                        x_dedup_hash,
                         prepare_resp.x_train_info,
                     ),
                     pool.submit(
                         cls._upload_to_gcs,
                         "y_train",
                         y_bytes,
-                        y_dedup_hash,
                         prepare_resp.y_train_info,
                     ),
                 ]
@@ -587,21 +375,30 @@ class ServiceClient(Singleton):
                         f.cancel()
                     raise
 
-        form_data = {"desc": description}
-        query_params = cls._build_tabpfn_params(tabpfn_config)
-        query_params["task"] = task
-        query_params["upload_id"] = str(prepare_resp.train_set_upload_id)
+        tabpfn_systems = ["preprocessing", "text"]
+        if tabpfn_config and tabpfn_config.get("paper_version") is True:
+            tabpfn_systems = []
 
-        train_set_uid = cls._fit(
-            form_data=form_data,
-            query_params=query_params,
+        res = cls._fit(
+            req=FitRequest(
+                train_set_upload_id=prepare_resp.train_set_upload_id,
+                task=task,
+                tabpfn_systems=tabpfn_systems,
+                force_retransform=is_refitting or force_retransform_enabled(),
+            ),
             timeout=client_options.timeout,
             headers=client_options.headers,
         )
+        fit_resp = cast(
+            FitResponse,
+            cls._validate_response(
+                res,
+                "fit",
+                response_models={200: FitResponse},
+            ),
+        )
 
-        # Note: at the moment we do prevent re-uploading but we do not prevent re-fitting
-        # as the TrainSet.status is not implemented yet.
-        return train_set_uid
+        return fit_resp.fitted_train_set_id
 
     @classmethod
     @backoff.on_exception(
@@ -622,60 +419,187 @@ class ServiceClient(Singleton):
     )
     def _fit(
         cls,
-        form_data: dict[str, Any],
-        query_params: dict[str, Any],
-        timeout: float | None,
-        headers: dict[str, str] | None,
-    ) -> str:
-        with cls.httpx_client.stream(
-            "POST",
-            url="/fit/",
-            data=form_data,
-            params=query_params,
-            timeout=timeout,
+        req: FitRequest,
+        timeout: float,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        return cls.httpx_client.post(
+            url="/tabpfn/fit/",
+            json=req.model_dump(mode="json"),
             headers=headers,
-        ) as response:
-            cls._validate_response(response, "fit")
-            train_set_uid = None
-            for line in response.iter_lines():
-                # Handle responses that might be missing the status field
-                try:
-                    event = ResponseEventAdapter.validate_json(line)
-                except (ValidationError, ValueError, json.JSONDecodeError) as e:
-                    # If validation fails, try to infer the event type and add missing status field
-                    raw_data = json.loads(line)
-                    if "train_set_uid" in raw_data and "status" not in raw_data:
-                        # This looks like a FitCompleteEvent missing the status field
-                        raw_data["status"] = "complete"
-                        event = FitCompleteEvent(**raw_data)
-                    else:
-                        # Re-raise the original error if we can't handle it
-                        raise e
-                if isinstance(event, FitCompleteEvent):
-                    train_set_uid = event.train_set_uid
-                elif isinstance(event, FitErrorEvent):
-                    # Handle structured error events
-                    raise RuntimeError(f"Error from server: {event.message}")
-
-        if not train_set_uid:
-            raise RuntimeError("Error during fit. No valid model received.")
-        return train_set_uid
+            timeout=timeout,
+        )
 
     @classmethod
-    def _prepare_train_set_upload(
+    def predict(
         cls,
-        req: PrepareTrainSetUploadRequest,
-        headers: dict[str, str] | None = None,
-    ) -> PrepareTrainSetUploadResponse | DuplicateFilesUploadedResponse:
-        resp = cls.httpx_client.post(
-            url="/tabpfn/prepare_train_set_upload/",
-            json=req.model_dump(),
-            headers=headers,
+        fitted_train_set_id: UUID,
+        x_test,
+        task: Literal["classification", "regression"],
+        tabpfn_config: Union[dict, None] = None,
+        predict_params: Union[dict, None] = None,
+        client_options: ClientOptions | None = None,
+    ) -> PredictionResult:
+        """
+        Predict the class labels for the provided data (test set).
+
+        Parameters
+        ----------
+        fitted_train_set_id : UUID
+            The unique ID of the fitted train set in the server.
+        x_test : array-like of shape (n_samples, n_features)
+            The test input.
+        task: str, optional
+            Task type: "classification" or "regression"
+        tabpfn_config : dict, optional
+            Configuration used to initialize the the TabPFN model.
+        predict_params: dict, optional
+            Parameters for the predict method.
+        client_options : ClientOptions, optional
+            Per-request options (e.g. timeout, headers) for the fitting API call
+            only. Does not apply to file uploads. Because uploads can run before fitting,
+            this method may return later than the timeout specified.
+
+        Returns
+        -------
+        prediction_result : PredictionResult
+            The result from the predict API call containing the prediction and metadata.
+        """
+        client_options = client_options or ClientOptions()
+
+        x_test_bytes, x_test_crc32c_hash = _serialize_to_parquet(x_test)
+
+        limits = cls.get_dataset_limits()
+        if limits is not None:
+            if len(x_test_bytes) > limits.max_size_bytes:
+                raise ValueError(
+                    f"Compressed size of x_test ({len(x_test_bytes)} bytes) exceeds "
+                    f"the server limit of {limits.max_size_bytes} bytes."
+                )
+
+        if dedup_datasets_enabled():
+            x_test_dedup_hash = x_test_crc32c_hash
+        else:
+            x_test_dedup_hash = None
+
+        prepare_req = PrepareTestSetUploadRequest(
+            fitted_train_set_id=fitted_train_set_id,
+            x_test_info=FileInfo(
+                format="parquet",
+                hash=x_test_dedup_hash,
+                size_bytes=len(x_test_bytes),
+            ),
+            force_reupload=force_reupload_enabled(),
         )
-        if resp.status_code == 409:
-            return DuplicateFilesUploadedResponse.model_validate(resp.json()["detail"])
-        cls._validate_response(resp, "prepare_train_set_upload")
-        return PrepareTrainSetUploadResponse.model_validate(resp.json())
+        res = cls.httpx_client.post(
+            url="/tabpfn/prepare_test_set_upload/",
+            json=prepare_req.model_dump(mode="json"),
+            headers=client_options.headers,
+        )
+        prepare_resp = cast(
+            Union[
+                PrepareTestSetUploadResponse,
+                DuplicateTestSetErrorResponse,
+            ],
+            cls._validate_response(
+                res,
+                "prepare_test_set_upload",
+                response_models={
+                    200: PrepareTestSetUploadResponse,
+                    404: ErrorResponse,
+                    409: DuplicateTestSetErrorResponse,
+                },
+                handlers={404: cls._raise_not_found_error},
+            ),
+        )
+
+        if isinstance(prepare_resp, DuplicateTestSetErrorResponse):
+            logger.warning(prepare_resp.message)
+        else:
+            cls._upload_to_gcs(
+                "x_test",
+                x_test_bytes,
+                prepare_resp.x_test_info,
+            )
+
+        # Strip client-only keys that the server does not expect.
+        if tabpfn_config is not None:
+            tabpfn_config = {
+                k: v for k, v in tabpfn_config.items() if k not in {"paper_version"}
+            }
+
+        res = cls._predict(
+            req=PredictRequest(
+                test_set_upload_id=prepare_resp.test_set_upload_id,
+                fitted_train_set_id=fitted_train_set_id,
+                task_config=TaskConfig(
+                    task=task,
+                    tabpfn_config=tabpfn_config,
+                    predict_params=predict_params,
+                ),
+                force_retransform=force_retransform_enabled(),
+            ),
+            timeout=client_options.timeout,
+            headers=client_options.headers,
+        )
+        predict_resp = cast(
+            PredictResponse,
+            cls._validate_response(
+                res,
+                "predict",
+                response_models={200: PredictResponse, 404: ErrorResponse},
+                handlers={404: cls._raise_not_found_error},
+            ),
+        )
+
+        prediction = predict_resp.prediction
+
+        if isinstance(prediction, dict):
+            result = {}
+            for k, v in prediction.items():
+                if isinstance(v, list):
+                    result[k] = np.array(v)
+                else:
+                    # The value should always be a list or list-of-lists,
+                    # leaving this here as an extra precaution and future proofing.
+                    result[k] = v
+        else:
+            result = np.array(prediction)
+
+        return PredictionResult(
+            y_pred=result,
+            metadata=predict_resp.metadata.model_dump(mode="json"),
+        )
+
+    @classmethod
+    @backoff.on_exception(
+        backoff.constant,
+        (
+            httpx.ConnectError,
+            httpx.TimeoutException,
+            httpx.ReadTimeout,
+            httpx.WriteTimeout,
+            httpx.RemoteProtocolError,
+            RetryableServerError,
+        ),
+        max_tries=2,
+        interval=0,
+        logger=logger,
+        on_backoff=_on_backoff,
+        on_giveup=_on_giveup,
+    )
+    def _predict(
+        cls,
+        req: PredictRequest,
+        timeout: float,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        return cls.httpx_client.post(
+            url="/tabpfn/predict/",
+            json=req.model_dump(mode="json"),
+            headers=headers,
+            timeout=timeout,
+        )
 
     @classmethod
     def _upload_to_gcs(cls, dataset: str, data: bytes, info: FileUploadInfo) -> None:
@@ -697,7 +621,7 @@ class ServiceClient(Singleton):
             return
 
         with ThreadPoolExecutor(
-            max_workers=min(_DEFAULT_MAX_UPLOAD_PARALLELISM, num_chunks)
+            max_workers=min(TABPFN_MAX_THREAD_PER_UPLOAD, num_chunks)
         ) as pool:
             futures = {
                 pool.submit(
@@ -756,255 +680,25 @@ class ServiceClient(Singleton):
             f"{resp.status_code} {resp.text}"
         )
 
-    @classmethod
-    @backoff.on_exception(
-        backoff.expo,
-        (
-            httpx.ConnectError,
-            httpx.TimeoutException,
-            httpx.ReadTimeout,
-            httpx.WriteTimeout,
-            httpx.RemoteProtocolError,
-            GCPOverloaded,
-            RetryableServerError,
-        ),
-        max_tries=6,
-        base=2,
-        max_value=120,
-        logger=logger,
-        on_backoff=_on_backoff,
-        on_giveup=_on_giveup,
-    )
-    def predict(
-        cls,
-        train_set_uid: str,
-        x_test,
-        model_type: ModelType,
-        task: Literal["classification", "regression"],
-        predict_params: Union[dict, None] = None,
-        tabpfn_config: Union[dict, None] = None,
-        X_train=None,
-        y_train=None,
-        client_options: ClientOptions | None = None,
-    ) -> PredictionResult:
-        """
-        Predict the class labels for the provided data (test set).
-
-        Parameters
-        ----------
-        train_set_uid : str
-            The unique ID of the train set in the server.
-        x_test : array-like of shape (n_samples, n_features)
-            The test input.
-
-        Returns
-        -------
-        y_pred : array-like of shape (n_samples,)
-            The predicted class labels.
-        """
-        client_options = client_options or ClientOptions()
-
-        tabpfn_config = deepcopy(tabpfn_config)
-
-        x_test_serialized = common_utils.serialize_to_csv_formatted_bytes(x_test)
-
-        # Build unified params for tabpfn_config and tabpfn_systems
-        params = cls._build_tabpfn_params(tabpfn_config)
-        params.update(
-            {
-                "train_set_uid": train_set_uid,
-                "task": task,
-                "predict_params": json.dumps(predict_params),
-            }
-        )
-
-        # Extract tabpfn_systems for hashing
-        paper_version, tabpfn_systems, _, _ = cls._process_tabpfn_config(tabpfn_config)
-
-        # In the arguments for hashing, include train_set_uid for the case that the same test set was previously used
-        # with different train set. Include access token for the case that a user uses different accounts.
-        (
-            cached_test_set_uid,
-            dataset_hash,
-        ) = cls.dataset_uid_cache_manager.get_dataset_uid(
-            x_test_serialized,
-            train_set_uid,
-            # Note: This may not be strictly necessary for predict, but keep it for safety.
-            model_type.name,
-            cls._access_token,
-            "_".join(tabpfn_systems),
-        )
-
-        # Send prediction request. Loop two times, such that if anything cached is not correct
-        # anymore, there is a second iteration where the datasets are uploaded.
-        results = None
-
-        # Store metadata about the prediction including TabPFN model version
-        metadata = {}
-
-        max_attempts = 2
-        for attempt in range(max_attempts):
-            try:
-                with cls._make_prediction_request(
-                    cached_test_set_uid,
-                    x_test_serialized,
-                    params,
-                    model_type=model_type,
-                    timeout=client_options.timeout,
-                    headers=client_options.headers,
-                ) as response:
-                    cls._validate_response(response, "predict")
-                    # Handle updates from server
-                    client = sseclient.SSEClient(response.iter_bytes())
-
-                    progress_bar = None
-
-                    def run_progress():
-                        nonlocal progress_bar
-                        progress_bar = tqdm(
-                            range(int(duration * 10)),
-                            desc="Processing",
-                            total=int(duration * 10),
-                            bar_format="{desc}: {percentage:3.0f}%|{bar}| [{elapsed}<{remaining}]",
-                        )
-                        for _ in progress_bar:
-                            time.sleep(0.1)
-
-                    for event in client.events():
-                        data = json.loads(event.data)
-                        if data["event"] == "message":
-                            print(data["data"])
-                        elif data["event"] == "estimated_time_to_answer":
-                            duration = float(data["data"])
-                            progress_thread = threading.Thread(target=run_progress)
-                            progress_thread.daemon = True
-                            progress_thread.start()
-                        elif data["event"] == "result":
-                            results = data["data"]
-                            # Extract metadata from the response
-                            metadata = data.get("metadata", {})
-                            if progress_bar:
-                                progress_bar.n = progress_bar.total
-                                progress_bar.refresh()
-                                progress_bar.close()
-                        elif data["event"] == "error":
-                            if data["error_class"] == "GCPOverloaded":
-                                raise GCPOverloaded(data["detail"])
-                            elif data["error_class"] == "ValueError":
-                                raise ValueError(data["detail"])
-                            else:
-                                raise RuntimeError(
-                                    data["error_class"] + ": " + data["detail"]
-                                )
-                break
-            except RuntimeError as e:
-                error_message = str(e)
-                if (
-                    "Invalid train or test set uid" in error_message
-                    and attempt < max_attempts - 1
-                ):
-                    # Retry by re-uploading the train set
-                    cls.dataset_uid_cache_manager.delete_uid(train_set_uid)
-                    if X_train is None or y_train is None:
-                        raise RuntimeError(
-                            "Train set data is required to re-upload but was not provided."
-                        )
-                    # I don't think this check is necessary anymore, but I want
-                    # to understand why the non-thinking models needed this
-                    # re-upload feature in the first place and test that
-                    # thinking actually works before removing it.
-                    if model_type == ModelType.TABPFN_R:
-                        raise NotImplementedError(
-                            "Automatically re-uploading the train set is not supported for thinking mode. Please call fit()."
-                        )
-                    train_set_uid = cls.fit(
-                        X_train,
-                        y_train,
-                        model_type=model_type,
-                        tabpfn_config=tabpfn_config,
-                        task=task,
-                    )
-                    params["train_set_uid"] = train_set_uid
-                    cached_test_set_uid = None
-                else:
-                    raise  # Re-raise the exception if it's not recoverable
-
-        else:
-            raise RuntimeError(
-                f"Failed to get prediction after {max_attempts} attempts."
-            )
-
-        # The response from the predict API always returns a dictionary with the task as the key.
-        # This is just s.t. we do not confuse the tasks, as they both use the same API endpoint.
-        # That is why below we use the task as the key to access the response.
-        result = results[task]
-        test_set_uid = results["test_set_uid"]
-
-        if cached_test_set_uid is None:
-            cls.dataset_uid_cache_manager.add_dataset_uid(dataset_hash, test_set_uid)
-
-        if not isinstance(result, dict):
-            result = np.array(result)
-        else:
-            for k in result:
-                if isinstance(result[k], list):
-                    result[k] = np.array(result[k])
-
-        return PredictionResult(result, metadata)
-
-    @classmethod
-    def _make_prediction_request(
-        cls,
-        test_set_uid,
-        x_test_serialized,
-        params,
-        model_type: ModelType,
-        timeout: float | None,
-        headers: dict[str, str],
-    ):
-        """
-        Helper function to make the prediction request to the server.
-        """
-        if model_type == ModelType.TABPFN:
-            url = cls.server_endpoints.predict.path
-        elif model_type == ModelType.TABPFN_R:
-            url = cls.server_endpoints.predict_reasoning.path
-        else:
-            raise RuntimeError(f"Unknown model type {model_type}")
-
-        if test_set_uid:
-            params = params.copy()
-            params["test_set_uid"] = test_set_uid
-            response = cls.httpx_client.stream(
-                method="post",
-                url=url,
-                params=params,
-                headers=headers,
-                timeout=timeout,
-            )
-        else:
-            response = cls.httpx_client.stream(
-                method="post",
-                url=url,
-                params=params,
-                files=common_utils.to_httpx_post_file_format(
-                    [("x_file", "x_test_filename", x_test_serialized)]
-                ),
-                headers=headers,
-                timeout=timeout,
-            )
-        return response
+    @staticmethod
+    def _raise_not_found_error(error_response: ErrorResponse) -> None:
+        if error_response.error_code == "NOT_FOUND":
+            raise NeedsRefittingError(error_response.message)
+        raise RuntimeError(error_response.message)
 
     @staticmethod
     def _validate_response(
-        response: httpx.Response, method_name, only_version_check=False
-    ):
-        # If status code is 200, no errors occurred on the server side.
-        if response.status_code == 200:
+        response: httpx.Response,
+        method_name: str,
+        only_version_check: bool = False,
+        response_models: dict[int, type[BaseModel]] | None = None,
+        handlers: dict[int, Callable[[BaseModel], Any]] | None = None,
+    ) -> BaseModel | None:
+        if response.status_code == 200 and response_models is None:
             return
 
         # Read response.
-        load = None
+        load = {}
         try:
             # This if clause is necessary for streaming responses (e.g. download) to
             # prevent httpx.ResponseNotRead error.
@@ -1019,7 +713,38 @@ class ServiceClient(Singleton):
             logger.info(
                 f"Fail to call {method_name}, response status: {response.status_code}"
             )
-            raise RuntimeError(load.get("detail"))
+            raise RuntimeError(load.get("message") or load.get("detail", ""))
+
+        if response_models is not None and response.status_code == 200:
+            if 200 not in response_models:
+                raise RuntimeError(
+                    f"Fail to call {method_name} with no response model configured for status 200"
+                )
+
+        if response_models is not None and response.status_code in response_models:
+            if load is None and response.status_code == 200:
+                raise RuntimeError(
+                    f"Fail to call {method_name} with invalid JSON response"
+                )
+
+            if load is not None:
+                try:
+                    parsed_response = response_models[
+                        response.status_code
+                    ].model_validate(load)
+                except ValidationError as e:
+                    if response.status_code == 200:
+                        raise RuntimeError(
+                            f"Fail to call {method_name} with invalid response schema: {e}"
+                        ) from e
+                    response.raise_for_status()
+                else:
+                    if handlers is not None and response.status_code in handlers:
+                        handlers[response.status_code](parsed_response)
+                    return parsed_response
+
+        if response.status_code == 200:
+            return
 
         # If we not only want to check the version compatibility, also raise other errors.
         if not only_version_check:
@@ -1031,7 +756,9 @@ class ServiceClient(Singleton):
                 )
                 raise RetryableServerError(error_msg)
             if load is not None:
-                raise RuntimeError(f"Fail to call {method_name} with error: {load}")
+                raise RuntimeError(
+                    f"Fail to call {method_name} with error: {json.dumps(load)}"
+                )
             logger.error(
                 f"Fail to call {method_name}, response status: {response.status_code}"
             )

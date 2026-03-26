@@ -63,14 +63,21 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.post("/tabpfn/prepare_train_set_upload/").respond(
             409,
             json={
-                "detail": {
-                    "message": "duplicate",
-                    "train_set_upload_id": "00000000-0000-0000-0000-000000000001",
-                }
+                "message": "duplicate",
+                "error_code": "DUPLICATE_TRAIN_SET",
+                "train_set_upload_id": "00000000-0000-0000-0000-000000000001",
             },
         )
         mock_server.router.post(mock_server.endpoints.fit.path).respond(
-            200, json={"train_set_uid": "5"}
+            200, json={"fitted_train_set_id": "00000000-0000-0000-0000-000000000002"}
+        )
+        mock_server.router.post("/tabpfn/prepare_test_set_upload/").respond(
+            409,
+            json={
+                "message": "duplicate",
+                "error_code": "DUPLICATE_TEST_SET",
+                "test_set_upload_id": "00000000-0000-0000-0000-000000000003",
+            },
         )
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
@@ -85,21 +92,25 @@ class TestTabPFNRegressorInit(unittest.TestCase):
             },
         )
 
-        mock_predict_responses = {
-            "mean": [100, 200, 300],
-            "median": [110, 210, 310],
-            "mode": [120, 220, 320],
-        }
-        for metric, response in mock_predict_responses.items():
-            predict_route = mock_server.router.post(mock_server.endpoints.predict.path)
-            predict_route.respond(
-                200,
-                content=f"data: {json.dumps({'event': 'result', 'data': {'regression': response, 'test_set_uid': '6'}})}\n\n",
-                headers={"Content-Type": "text/event-stream"},
-            )
+        metric = "mean"
+        response = [100, 200, 300]
+        predict_route = mock_server.router.post(mock_server.endpoints.predict.path)
+        predict_route.respond(
+            200,
+            json={
+                "prediction": response,
+                "metadata": {
+                    "task": "regression",
+                    "package_version": "0.2.9rc6",
+                    "tabpfn_config": None,
+                    "test_set_num_rows": len(self.X_test),
+                    "test_set_num_cols": self.X_test.shape[1],
+                },
+            },
+        )
 
-            init(use_server=True)
-            self.assertTrue(mock_prompt_and_set_token.called)
+        init(use_server=True)
+        self.assertTrue(mock_prompt_and_set_token.called)
 
         tabpfn = TabPFNRegressor(n_estimators=10)
         self.assertRaises(NotFittedError, tabpfn.predict, self.X_test)
@@ -108,11 +119,10 @@ class TestTabPFNRegressorInit(unittest.TestCase):
 
         y_pred = tabpfn.predict(self.X_test, output_type=metric)
         self.assertTrue(np.all(np.array(response) == y_pred))
-        # Checking for both %20 and + enconding of spaces
-        # since httpx was inconsistent with its spacen encoding scheme
-        self.assertTrue(
-            "n_estimators%22%3A%2010" in str(predict_route.calls.last.request.url)
-            or "n_estimators%22%3A+10" in str(predict_route.calls.last.request.url),
+        predict_request = json.loads(predict_route.calls.last.request.content)
+        self.assertEqual(
+            predict_request["task_config"]["tabpfn_config"]["n_estimators"],
+            10,
             "check that n_estimators is passed to the server",
         )
 
@@ -236,14 +246,23 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.post("/tabpfn/prepare_train_set_upload/").respond(
             409,
             json={
-                "detail": {
-                    "message": "duplicate",
-                    "train_set_upload_id": "00000000-0000-0000-0000-000000000001",
-                }
+                "message": "duplicate",
+                "error_code": "DUPLICATE_TRAIN_SET",
+                "train_set_upload_id": "00000000-0000-0000-0000-000000000001",
             },
         )
         fit_route = mock_server.router.post(mock_server.endpoints.fit.path)
-        fit_route.respond(200, json={"train_set_uid": "5"})
+        fit_route.respond(
+            200, json={"fitted_train_set_id": "00000000-0000-0000-0000-000000000002"}
+        )
+        mock_server.router.post("/tabpfn/prepare_test_set_upload/").respond(
+            409,
+            json={
+                "message": "duplicate",
+                "error_code": "DUPLICATE_TEST_SET",
+                "test_set_upload_id": "00000000-0000-0000-0000-000000000003",
+            },
+        )
 
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
@@ -262,16 +281,19 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         UserAuthenticationClient.CACHED_TOKEN_FILE.unlink(missing_ok=True)
         ServiceClient.reset_authorization()
 
-        mock_predict_response = {
-            "mean": [100, 200, 300],
-            "median": [110, 210, 310],
-            "mode": [120, 220, 320],
-        }
         predict_route = mock_server.router.post(mock_server.endpoints.predict.path)
         predict_route.respond(
             200,
-            content=f"data: {json.dumps({'event': 'result', 'data': {'regression': mock_predict_response, 'test_set_uid': '6'}})}\n\n",
-            headers={"Content-Type": "text/event-stream"},
+            json={
+                "prediction": [100, 200, 300, 400, 500],
+                "metadata": {
+                    "task": "regression",
+                    "package_version": "0.2.9rc6",
+                    "tabpfn_config": None,
+                    "test_set_num_rows": 5,
+                    "test_set_num_cols": 5,
+                },
+            },
         )
 
         init(use_server=True)
@@ -440,6 +462,8 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             "inference_config",
             "model_path",
             "paper_version",
+        }
+        OPTIONAL_PARAMS = {
             "thinking",
             "thinking_params",
         }
@@ -454,7 +478,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
         # Skip fitting
         regressor.fitted_ = True
-        regressor.last_train_set_uid = "dummy_uid"
+        regressor.last_fitted_train_set_id = "dummy_uid"
 
         test_X = np.random.randn(10, 5)
 
@@ -470,8 +494,8 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
             # Check that only allowed parameters are present
             config_params = set(actual_config.keys())
-            unexpected_params = config_params - ALLOWED_PARAMS
-            missing_params = ALLOWED_PARAMS - config_params
+            unexpected_params = config_params - (ALLOWED_PARAMS | OPTIONAL_PARAMS)
+            missing_required_params = ALLOWED_PARAMS - config_params
 
             self.assertEqual(
                 unexpected_params,
@@ -479,9 +503,9 @@ class TestTabPFNRegressorInference(unittest.TestCase):
                 f"Found unexpected parameters in config: {unexpected_params}",
             )
             self.assertEqual(
-                missing_params,
+                missing_required_params,
                 set(),
-                f"Missing required parameters in config: {missing_params}",
+                f"Missing required parameters in config: {missing_required_params}",
             )
 
     def test_predict_params_output_type(self):
@@ -516,7 +540,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
     def test_predict_full_adds_criterion_with_optional_dependencies(self):
         regressor = TabPFNRegressor()
         regressor.fitted_ = True
-        regressor.last_train_set_uid = "dummy_uid"
+        regressor.last_fitted_train_set_id = "dummy_uid"
         regressor.last_train_X = np.random.randn(5, 2)
         regressor.last_train_y = np.random.randn(5)
 
@@ -556,7 +580,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
     def test_predict_full_missing_optional_dependencies_logs_warning(self):
         regressor = TabPFNRegressor()
         regressor.fitted_ = True
-        regressor.last_train_set_uid = "dummy_uid"
+        regressor.last_fitted_train_set_id = "dummy_uid"
         regressor.last_train_X = np.random.randn(5, 2)
         regressor.last_train_y = np.random.randn(5)
 
