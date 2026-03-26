@@ -335,7 +335,10 @@ class ServiceClient(Singleton):
             headers=client_options.headers,
         )
         prepare_resp = cast(
-            PrepareTrainSetUploadResponse | DuplicateTrainSetErrorResponse,
+            Union[
+                PrepareTrainSetUploadResponse,
+                DuplicateTrainSetErrorResponse,
+            ],
             cls._validate_response(
                 res,
                 "prepare_train_set_upload",
@@ -494,7 +497,10 @@ class ServiceClient(Singleton):
             headers=client_options.headers,
         )
         prepare_resp = cast(
-            PrepareTestSetUploadResponse | DuplicateTestSetErrorResponse,
+            Union[
+                PrepareTestSetUploadResponse,
+                DuplicateTestSetErrorResponse,
+            ],
             cls._validate_response(
                 res,
                 "prepare_test_set_upload",
