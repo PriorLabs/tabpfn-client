@@ -62,14 +62,21 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         mock_server.router.post("/tabpfn/prepare_train_set_upload/").respond(
             409,
             json={
-                "detail": {
-                    "message": "duplicate",
-                    "train_set_upload_id": "00000000-0000-0000-0000-000000000001",
-                }
+                "message": "duplicate",
+                "error_code": "DUPLICATE_TRAIN_SET",
+                "train_set_upload_id": "00000000-0000-0000-0000-000000000001",
             },
         )
         mock_server.router.post(mock_server.endpoints.fit.path).respond(
-            200, json={"train_set_uid": "5"}
+            200, json={"fitted_train_set_id": "00000000-0000-0000-0000-000000000002"}
+        )
+        mock_server.router.post("/tabpfn/prepare_test_set_upload/").respond(
+            409,
+            json={
+                "message": "duplicate",
+                "error_code": "DUPLICATE_TEST_SET",
+                "test_set_upload_id": "00000000-0000-0000-0000-000000000003",
+            },
         )
 
         mock_server.router.get(
@@ -89,8 +96,16 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         predict_route = mock_server.router.post(mock_server.endpoints.predict.path)
         predict_route.respond(
             200,
-            content=f"data: {json.dumps({'event': 'result', 'data': {'classification': mock_predict_response, 'test_set_uid': '6'}})}\n\n",
-            headers={"Content-Type": "text/event-stream"},
+            json={
+                "prediction": mock_predict_response,
+                "metadata": {
+                    "task": "classification",
+                    "package_version": "0.2.9rc6",
+                    "tabpfn_config": None,
+                    "test_set_num_rows": len(self.X_test),
+                    "test_set_num_cols": self.X_test.shape[1],
+                },
+            },
         )
 
         init(use_server=True)
@@ -103,11 +118,10 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         result = tabpfn.predict(self.X_test)
         print(f"result: {type(result)} {result}")
         self.assertTrue(np.all(mock_predict_response == result))
-        # Checking for both %20 and + enconding of spaces
-        # since httpx was inconsistent with its spacen encoding scheme
-        self.assertTrue(
-            "n_estimators%22%3A%2010" in str(predict_route.calls.last.request.url)
-            or "n_estimators%22%3A+10" in str(predict_route.calls.last.request.url),
+        predict_request = json.loads(predict_route.calls.last.request.content)
+        self.assertEqual(
+            predict_request["task_config"]["tabpfn_config"]["n_estimators"],
+            10,
             "check that n_estimators is passed to the server",
         )
 
@@ -237,14 +251,23 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         mock_server.router.post("/tabpfn/prepare_train_set_upload/").respond(
             409,
             json={
-                "detail": {
-                    "message": "duplicate",
-                    "train_set_upload_id": "00000000-0000-0000-0000-000000000001",
-                }
+                "message": "duplicate",
+                "error_code": "DUPLICATE_TRAIN_SET",
+                "train_set_upload_id": "00000000-0000-0000-0000-000000000001",
             },
         )
         fit_route = mock_server.router.post(mock_server.endpoints.fit.path)
-        fit_route.respond(200, json={"train_set_uid": "5"})
+        fit_route.respond(
+            200, json={"fitted_train_set_id": "00000000-0000-0000-0000-000000000002"}
+        )
+        mock_server.router.post("/tabpfn/prepare_test_set_upload/").respond(
+            409,
+            json={
+                "message": "duplicate",
+                "error_code": "DUPLICATE_TEST_SET",
+                "test_set_upload_id": "00000000-0000-0000-0000-000000000003",
+            },
+        )
 
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
@@ -259,11 +282,18 @@ class TestTabPFNClassifierInit(unittest.TestCase):
             },
         )
 
-        mock_predict_response = [[1, 0.0], [0.9, 0.1], [0.01, 0.99]]
         mock_server.router.post(mock_server.endpoints.predict.path).respond(
             200,
-            content=f"data: {json.dumps({'event': 'result', 'data': {'classification': mock_predict_response, 'test_set_uid': '6'}})}\n\n",
-            headers={"Content-Type": "text/event-stream"},
+            json={
+                "prediction": [1, 0, 1, 0, 1],
+                "metadata": {
+                    "task": "classification",
+                    "package_version": "0.2.9rc6",
+                    "tabpfn_config": None,
+                    "test_set_num_rows": 5,
+                    "test_set_num_cols": 5,
+                },
+            },
         )
 
         # Ensure no cached token so we go through the full login flow
@@ -438,7 +468,9 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             "model_path",
             "balance_probabilities",
             "paper_version",
-            # These are removed in ServiceClient.predict
+        }
+        OPTIONAL_PARAMS = {
+            # These may be emitted by newer model versions, but are not required.
             "thinking_params",
             "thinking",
         }
@@ -454,7 +486,7 @@ class TestTabPFNClassifierInference(unittest.TestCase):
 
         # Skip fitting
         classifier.fitted_ = True
-        classifier.last_train_set_uid = "dummy_uid"
+        classifier.last_fitted_train_set_id = "dummy_uid"
 
         test_X = np.random.randn(10, 5)
 
@@ -470,8 +502,8 @@ class TestTabPFNClassifierInference(unittest.TestCase):
 
             # Check that only allowed parameters are present
             config_params = set(actual_config.keys())
-            unexpected_params = config_params - ALLOWED_PARAMS
-            missing_params = ALLOWED_PARAMS - config_params
+            unexpected_params = config_params - (ALLOWED_PARAMS | OPTIONAL_PARAMS)
+            missing_required_params = ALLOWED_PARAMS - config_params
 
             self.assertEqual(
                 unexpected_params,
@@ -479,9 +511,9 @@ class TestTabPFNClassifierInference(unittest.TestCase):
                 f"Found unexpected parameters in config: {unexpected_params}",
             )
             self.assertEqual(
-                missing_params,
+                missing_required_params,
                 set(),
-                f"Missing required parameters in config: {missing_params}",
+                f"Missing required parameters in config: {missing_required_params}",
             )
 
     def test_predict_params_output_type(self):

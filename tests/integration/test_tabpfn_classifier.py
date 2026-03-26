@@ -40,23 +40,40 @@ class TestTabPFNClassifier(unittest.TestCase):
         mock_server.router.post("/tabpfn/prepare_train_set_upload/").respond(
             409,
             json={
-                "detail": {
-                    "message": "duplicate",
-                    "train_set_upload_id": "00000000-0000-0000-0000-000000000001",
-                }
+                "message": "duplicate",
+                "error_code": "DUPLICATE_TRAIN_SET",
+                "train_set_upload_id": "00000000-0000-0000-0000-000000000001",
             },
         )
         mock_server.router.post(mock_server.endpoints.fit.path).respond(
-            200, json={"train_set_uid": "5"}
+            200, json={"fitted_train_set_id": "00000000-0000-0000-0000-000000000002"}
         )
         tabpfn.fit(self.X_train, self.y_train)
 
-        # mock prediction with SSE
-        probas = np.random.rand(len(self.X_test), len(np.unique(self.y_train))).tolist()
+        mock_server.router.post("/tabpfn/prepare_test_set_upload/").respond(
+            409,
+            json={
+                "message": "duplicate",
+                "error_code": "DUPLICATE_TEST_SET",
+                "test_set_upload_id": "00000000-0000-0000-0000-000000000003",
+            },
+        )
+
+        prediction = np.random.randint(
+            0, len(np.unique(self.y_train)), len(self.X_test)
+        ).tolist()
         mock_server.router.post(mock_server.endpoints.predict.path).respond(
             200,
-            content=f'data: {{"event": "result", "data": {{"classification": {probas}, "test_set_uid": "6"}}}}\n\n',
-            headers={"Content-Type": "text/event-stream"},
+            json={
+                "prediction": prediction,
+                "metadata": {
+                    "task": "classification",
+                    "package_version": "0.2.9rc6",
+                    "tabpfn_config": None,
+                    "test_set_num_rows": len(self.X_test),
+                    "test_set_num_cols": self.X_test.shape[1],
+                },
+            },
         )
         pred = tabpfn.predict(self.X_test)
         self.assertEqual(pred.shape[0], self.X_test.shape[0])
