@@ -127,6 +127,25 @@ class TestUserAuthClient(unittest.TestCase):
         # assert token is not set
         self.assertIsNone(ServiceClient.get_access_token())
 
+    @with_mock_server()
+    def test_reset_cache_unsets_tabpfn_token_constant(self, mock_server):
+        import tabpfn_client.constants as constants
+
+        # Ensure we take the env-token path (no cached token file).
+        with patch.object(constants, "TABPFN_TOKEN", "dummy_env_token"):
+            # Make the token invalid so that the reset path is triggered.
+            mock_server.router.get(mock_server.endpoints.protected_root.path).respond(
+                401
+            )
+
+            is_valid_token, access_token = (
+                UserAuthenticationClient.try_reuse_existing_token()
+            )
+
+            self.assertFalse(is_valid_token)
+            self.assertIsNone(access_token)
+            self.assertIsNone(constants.TABPFN_TOKEN)
+
     def test_reset_cache_without_token_set(self):
         # assert no exception is raised
         UserAuthenticationClient.reset_cache()

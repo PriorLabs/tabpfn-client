@@ -10,7 +10,7 @@ from typing import Literal
 
 from uuid import UUID
 from tabpfn_client.client import ServiceClient, ClientOptions, PredictionResult
-from tabpfn_client.constants import CACHE_DIR, TABPFN_TOKEN
+import tabpfn_client.constants as constants
 from tabpfn_common_utils.utils import Singleton
 
 
@@ -31,7 +31,7 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
     This is implemented as a singleton class with classmethods.
     """
 
-    CACHED_TOKEN_FILE = CACHE_DIR / "config"
+    CACHED_TOKEN_FILE = constants.CACHE_DIR / "config"
 
     def __new__(self):
         raise TypeError(
@@ -92,8 +92,8 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
     @classmethod
     def try_reuse_existing_token(cls) -> tuple[bool, str or None]:
         if ServiceClient.get_access_token() is None:
-            if TABPFN_TOKEN:
-                access_token = TABPFN_TOKEN
+            if constants.TABPFN_TOKEN:
+                access_token = constants.TABPFN_TOKEN
             else:
                 if not cls.CACHED_TOKEN_FILE.exists():
                     return False, None
@@ -127,8 +127,9 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
         cls.CACHED_TOKEN_FILE.unlink(missing_ok=True)
         # The TABPFN_TOKEN var is always set externally in the environment, in
         # the client it can only be used or unset, never set.
-        global TABPFN_TOKEN
-        TABPFN_TOKEN = None
+        # Note: we should prefix with the module to make sure the variable is not
+        # only mutated in the local module binding.
+        constants.TABPFN_TOKEN = None
 
     @classmethod
     def retrieve_greeting_messages(cls):

@@ -692,7 +692,7 @@ class ServiceClient(Singleton):
             return
 
         # Read response.
-        load = None
+        load = {}
         try:
             # This if clause is necessary for streaming responses (e.g. download) to
             # prevent httpx.ResponseNotRead error.
@@ -707,7 +707,7 @@ class ServiceClient(Singleton):
             logger.info(
                 f"Fail to call {method_name}, response status: {response.status_code}"
             )
-            raise RuntimeError(load.get("detail"))
+            raise RuntimeError(load.get("message") or load.get("detail", ""))
 
         if response_models is not None and response.status_code == 200:
             if 200 not in response_models:
