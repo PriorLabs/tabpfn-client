@@ -757,8 +757,10 @@ class ServiceClient(Singleton):
                 )
                 raise RetryableServerError(error_msg)
             if load is not None:
+                message = load.get("message") or load.get("detail", "")
+                trace_id = load.get("trace_id")
                 raise RuntimeError(
-                    f"Fail to call {method_name} with error: {json.dumps(load)}"
+                    f"Fail to call {method_name} with error: {message} {trace_id=}"
                 )
             logger.error(
                 f"Fail to call {method_name}, response status: {response.status_code}"
