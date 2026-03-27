@@ -34,6 +34,7 @@ from tabpfn_client.constants import (
     force_reupload_enabled,
     TABPFN_MAX_THREAD_PER_UPLOAD,
     TABPFN_CLIENT_TIMEOUT,
+    TABPFN_UPLOAD_TIMEOUT,
     TABPFN_API_URL,
 )
 from tabpfn_common_utils import utils as common_utils
@@ -666,7 +667,7 @@ class ServiceClient(Singleton):
             url,
             content=chunk,
             headers=headers,
-            timeout=600,
+            timeout=TABPFN_UPLOAD_TIMEOUT,
         )
         if resp.status_code == 200:
             return
@@ -756,8 +757,10 @@ class ServiceClient(Singleton):
                 )
                 raise RetryableServerError(error_msg)
             if load is not None:
+                message = load.get("message") or load.get("detail", "")
+                trace_id = load.get("trace_id")
                 raise RuntimeError(
-                    f"Fail to call {method_name} with error: {json.dumps(load)}"
+                    f"Fail to call {method_name} with error: {message} {trace_id=}"
                 )
             logger.error(
                 f"Fail to call {method_name}, response status: {response.status_code}"
