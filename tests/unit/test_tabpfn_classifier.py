@@ -100,7 +100,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
                 "prediction": mock_predict_response,
                 "metadata": {
                     "task": "classification",
-                    "package_version": "0.2.9rc6",
+                    "package_version": "0.3.0rc1",
                     "tabpfn_config": None,
                     "test_set_num_rows": len(self.X_test),
                     "test_set_num_cols": self.X_test.shape[1],
@@ -288,7 +288,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
                 "prediction": [1, 0, 1, 0, 1],
                 "metadata": {
                     "task": "classification",
-                    "package_version": "0.2.9rc6",
+                    "package_version": "0.3.0rc1",
                     "tabpfn_config": None,
                     "test_set_num_rows": 5,
                     "test_set_num_cols": 5,

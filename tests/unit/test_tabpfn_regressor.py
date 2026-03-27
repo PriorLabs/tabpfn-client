@@ -101,7 +101,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
                 "prediction": response,
                 "metadata": {
                     "task": "regression",
-                    "package_version": "0.2.9rc6",
+                    "package_version": "0.3.0rc1",
                     "tabpfn_config": None,
                     "test_set_num_rows": len(self.X_test),
                     "test_set_num_cols": self.X_test.shape[1],
@@ -288,7 +288,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
                 "prediction": [100, 200, 300, 400, 500],
                 "metadata": {
                     "task": "regression",
-                    "package_version": "0.2.9rc6",
+                    "package_version": "0.3.0rc1",
                     "tabpfn_config": None,
                     "test_set_num_rows": 5,
                     "test_set_num_cols": 5,

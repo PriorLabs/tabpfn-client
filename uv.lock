@@ -1615,7 +1615,7 @@ wheels = [
 
 [[package]]
 name = "tabpfn-client"
-version = "0.2.9rc6"
+version = "0.3.0rc1"
 source = { editable = "." }
 dependencies = [
     { name = "backoff" },
