@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import logging
 import sys
-import threading
 import time
 from uuid import uuid4
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, Literal, Optional, Union
 from typing_extensions import Self
 from uuid import UUID
@@ -704,53 +704,23 @@ def run_task(task: Callable, message: str, with_spinner: bool = True) -> Any:
     else:
         start = time.time()
         spinner = ["-", "\\", "|", "/"]
-        stop_event = threading.Event()
-        write_lock = threading.Lock()
-        last_line = ""
-
-        def _render(status: str, *, newline: bool = False) -> None:
-            nonlocal last_line
-            elapsed = int(time.time() - start)
-            minutes = elapsed // 60
-            seconds = elapsed % 60
-            line = f"{minutes:02d}:{seconds:02d} {message}... {status}"
-            with write_lock:
-                sys.stdout.write(f"\r{line}")
-                if len(last_line) > len(line):
-                    sys.stdout.write(" " * (len(last_line) - len(line)))
-                if newline:
-                    sys.stdout.write("\n")
-                    last_line = ""
-                else:
-                    last_line = line
+        i = 0
+        minutes = 0
+        seconds = 0
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(task)
+            while not future.done():
+                elapsed = int(time.time() - start)
+                minutes = elapsed // 60
+                seconds = elapsed % 60
+                sys.stdout.write(
+                    f"\r{minutes:02d}:{seconds:02d} {message}... {spinner[i % len(spinner)]}"
+                )
                 sys.stdout.flush()
-
-        def _clear_line() -> None:
-            nonlocal last_line
-            with write_lock:
-                if last_line:
-                    sys.stdout.write(f"\r{' ' * len(last_line)}\r")
-                    sys.stdout.flush()
-                    last_line = ""
-
-        def _spinner_loop() -> None:
-            i = 0
-            while not stop_event.is_set():
-                _render(spinner[i % len(spinner)])
+                time.sleep(0.2)
                 i += 1
-                if stop_event.wait(0.2):
-                    return
-
-        spinner_thread = threading.Thread(target=_spinner_loop, daemon=True)
-        spinner_thread.start()
-        try:
-            result = task()
-        except BaseException:
-            stop_event.set()
-            spinner_thread.join(timeout=0.5)
-            _clear_line()
-            raise
-        stop_event.set()
-        spinner_thread.join(timeout=0.5)
-        _render("Done!", newline=True)
+            result = future.result()
+        # Remove spinner, but keep elapsed time
+        sys.stdout.write(f"\r{minutes:02d}:{seconds:02d} {message}... Done!\n")
+        sys.stdout.flush()
     return result
