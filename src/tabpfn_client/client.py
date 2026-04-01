@@ -709,12 +709,25 @@ class ServiceClient(Singleton):
         except json.JSONDecodeError as e:
             logging.info(f"Failed to parse JSON from response in {method_name}: {e}")
 
-        # Inform about user errors.
-        if 400 <= response.status_code < 500:
+        # Check if the server requires a newer client version.
+        if response.status_code == 426:
             logger.info(
                 f"Fail to call {method_name}, response status: {response.status_code}"
             )
             raise RuntimeError(load.get("message") or load.get("detail", ""))
+
+        # Inform about user errors, unless the caller only wants a version
+        # check or a response_model is registered for this status code.
+        if (
+            400 <= response.status_code < 500
+            and not only_version_check
+            and not (response_models and response.status_code in response_models)
+        ):
+            logger.info(
+                f"Fail to call {method_name}, response status: {response.status_code}"
+            )
+            message = load.get("message") or load.get("detail", "")
+            raise RuntimeError(f"Fail to call {method_name} with error: {message}")
 
         if response_models is not None and response.status_code == 200:
             if 200 not in response_models:
