@@ -32,10 +32,10 @@ from tabpfn_client.constants import (
     dedup_datasets_enabled,
     force_retransform_enabled,
     force_reupload_enabled,
-    TABPFN_MAX_THREAD_PER_UPLOAD,
+    TABPFN_CLIENT_MAX_THREAD_PER_UPLOAD,
     TABPFN_CLIENT_TIMEOUT,
-    TABPFN_UPLOAD_TIMEOUT,
-    TABPFN_API_URL,
+    TABPFN_CLIENT_UPLOAD_TIMEOUT,
+    TABPFN_CLIENT_API_URL,
 )
 from tabpfn_common_utils import utils as common_utils
 from tabpfn_common_utils.utils import Singleton
@@ -204,7 +204,7 @@ class ServiceClient(Singleton):
     server_config = SERVER_CONFIG
     server_endpoints = SERVER_CONFIG["endpoints"]
     base_url = (
-        TABPFN_API_URL
+        TABPFN_CLIENT_API_URL
         or f"{server_config.protocol}://{server_config.host}:{server_config.port}"
     )
     fit_path = SERVER_CONFIG["endpoints"]["fit"]["path"]
@@ -622,7 +622,7 @@ class ServiceClient(Singleton):
             return
 
         with ThreadPoolExecutor(
-            max_workers=min(TABPFN_MAX_THREAD_PER_UPLOAD, num_chunks)
+            max_workers=min(TABPFN_CLIENT_MAX_THREAD_PER_UPLOAD, num_chunks)
         ) as pool:
             futures = {
                 pool.submit(
@@ -667,7 +667,7 @@ class ServiceClient(Singleton):
             url,
             content=chunk,
             headers=headers,
-            timeout=TABPFN_UPLOAD_TIMEOUT,
+            timeout=TABPFN_CLIENT_UPLOAD_TIMEOUT,
         )
         if resp.status_code == 200:
             return

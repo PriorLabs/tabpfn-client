@@ -110,9 +110,7 @@ class PromptAgent:
             )
         )
         console.print(
-            cls.indent(
-                f"[cyan]Report issues: {URL_TABPFN_CLIENT_GITHUB_ISSUES}[/cyan]"
-            )
+            cls.indent(f"[cyan]Report issues: {URL_TABPFN_CLIENT_GITHUB_ISSUES}[/cyan]")
         )
         console.print(cls.indent("[cyan]Press Ctrl+C anytime to exit[/cyan]"))
 
