@@ -26,6 +26,7 @@ URL_PRIOR_LABS_TERMS_AND_CONDITIONS = (
 URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE = "https://github.com/PriorLabs/tabpfn-extensions/blob/main/src/tabpfn_extensions/many_class/many_class_classifier.py"  # noqa: E501
 
 TABPFN_TOKEN = os.getenv("TABPFN_TOKEN")
+
 # Client specific constants
 TABPFN_CLIENT_API_URL = os.getenv("TABPFN_CLIENT_API_URL")
 TABPFN_CLIENT_MAX_THREAD_PER_UPLOAD = int(

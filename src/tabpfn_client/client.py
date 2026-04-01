@@ -709,8 +709,8 @@ class ServiceClient(Singleton):
         except json.JSONDecodeError as e:
             logging.info(f"Failed to parse JSON from response in {method_name}: {e}")
 
-        # Check if the server requires a newer client version.
-        if response.status_code == 426:
+        # Inform about user errors.
+        if 400 <= response.status_code < 500:
             logger.info(
                 f"Fail to call {method_name}, response status: {response.status_code}"
             )
