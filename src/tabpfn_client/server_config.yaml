@@ -71,12 +71,12 @@ endpoints:
     description: "Upload train set"
 
   fit:
-    path: "/tabpfn/fit/"
+    path: "/tabpfn/fit"
     methods: [ "POST" ]
     description: "Fit"
 
   predict:
-    path: "/tabpfn/predict/"
+    path: "/tabpfn/predict"
     methods: [ "POST" ]
     description: "Predict"
 
