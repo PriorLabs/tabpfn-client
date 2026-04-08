@@ -37,7 +37,7 @@ class TestTabPFNClassifier(unittest.TestCase):
         tabpfn = TabPFNClassifier()
 
         # mock fitting
-        mock_server.router.post("/tabpfn/prepare_train_set_upload/").respond(
+        mock_server.router.post("/tabpfn/prepare_train_set_upload").respond(
             409,
             json={
                 "message": "duplicate",
@@ -50,7 +50,7 @@ class TestTabPFNClassifier(unittest.TestCase):
         )
         tabpfn.fit(self.X_train, self.y_train)
 
-        mock_server.router.post("/tabpfn/prepare_test_set_upload/").respond(
+        mock_server.router.post("/tabpfn/prepare_test_set_upload").respond(
             409,
             json={
                 "message": "duplicate",
