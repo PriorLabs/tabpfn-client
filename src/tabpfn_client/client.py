@@ -236,7 +236,7 @@ class ServiceClient(Singleton):
         ):
             return cls._dataset_limits
         try:
-            response = cls.httpx_client.get("/tabpfn/get_dataset_limits/")
+            response = cls.httpx_client.get("/tabpfn/get_dataset_limits")
             response.raise_for_status()
             cls._dataset_limits = GetDatasetLimitsResponse.model_validate(
                 response.json()
@@ -331,7 +331,7 @@ class ServiceClient(Singleton):
             force_reupload=force_reupload_enabled(),
         )
         res = cls.httpx_client.post(
-            url="/tabpfn/prepare_train_set_upload/",
+            url="/tabpfn/prepare_train_set_upload",
             json=prepare_req.model_dump(mode="json"),
             headers=client_options.headers,
         )
@@ -425,7 +425,7 @@ class ServiceClient(Singleton):
         headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         return cls.httpx_client.post(
-            url="/tabpfn/fit/",
+            url="/tabpfn/fit",
             json=req.model_dump(mode="json"),
             headers=headers,
             timeout=timeout,
@@ -493,7 +493,7 @@ class ServiceClient(Singleton):
             force_reupload=force_reupload_enabled(),
         )
         res = cls.httpx_client.post(
-            url="/tabpfn/prepare_test_set_upload/",
+            url="/tabpfn/prepare_test_set_upload",
             json=prepare_req.model_dump(mode="json"),
             headers=client_options.headers,
         )
@@ -596,7 +596,7 @@ class ServiceClient(Singleton):
         headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         return cls.httpx_client.post(
-            url="/tabpfn/predict/",
+            url="/tabpfn/predict",
             json=req.model_dump(mode="json"),
             headers=headers,
             timeout=timeout,
@@ -726,8 +726,13 @@ class ServiceClient(Singleton):
             logger.info(
                 f"Fail to call {method_name}, response status: {response.status_code}"
             )
-            message = load.get("message") or load.get("detail", "")
-            raise RuntimeError(f"Fail to call {method_name} with error: {message}")
+            message = (
+                load.get("message") or load.get("detail", "") or response.reason_phrase
+            )
+            status_code = response.status_code
+            raise RuntimeError(
+                f"Fail to call {method_name} with error: {status_code}, {message}"
+            )
 
         if response_models is not None and response.status_code == 200:
             if 200 not in response_models:
@@ -770,10 +775,15 @@ class ServiceClient(Singleton):
                 )
                 raise RetryableServerError(error_msg)
             if load is not None:
-                message = load.get("message") or load.get("detail", "")
+                message = (
+                    load.get("message")
+                    or load.get("detail", "")
+                    or response.reason_phrase
+                )
                 trace_id = load.get("trace_id")
+                status_code = response.status_code
                 raise RuntimeError(
-                    f"Fail to call {method_name} with error: {message} {trace_id=}"
+                    f"Fail to call {method_name} with error: {status_code}, {message} {trace_id=}"
                 )
             logger.error(
                 f"Fail to call {method_name}, response status: {response.status_code}"

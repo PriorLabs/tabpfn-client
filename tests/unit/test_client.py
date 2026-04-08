@@ -190,23 +190,23 @@ class TestServiceClient(unittest.TestCase):
 
     @with_mock_server()
     def test_predict_with_valid_train_set_and_test_set(self, mock_server):
-        mock_server.router.post("/tabpfn/prepare_train_set_upload/").respond(
+        mock_server.router.post("/tabpfn/prepare_train_set_upload").respond(
             200,
             json=self._prepare_train_set_upload_response(
                 "00000000-0000-0000-0000-000000000001"
             ),
         )
-        mock_server.router.post("/tabpfn/fit/").respond(
+        mock_server.router.post("/tabpfn/fit").respond(
             200,
             json={"fitted_train_set_id": "00000000-0000-0000-0000-000000000002"},
         )
-        mock_server.router.post("/tabpfn/prepare_test_set_upload/").respond(
+        mock_server.router.post("/tabpfn/prepare_test_set_upload").respond(
             200,
             json=self._prepare_test_set_upload_response(
                 "00000000-0000-0000-0000-000000000003"
             ),
         )
-        mock_server.router.post("/tabpfn/predict/").respond(
+        mock_server.router.post("/tabpfn/predict").respond(
             200,
             json=self._predict_response([1, 0, 1]),
         )
@@ -268,14 +268,14 @@ class TestServiceClient(unittest.TestCase):
 
     @with_mock_server()
     def test_fit_calls_prepare_and_fit_each_time(self, mock_server):
-        prepare_route = mock_server.router.post("/tabpfn/prepare_train_set_upload/")
+        prepare_route = mock_server.router.post("/tabpfn/prepare_train_set_upload")
         prepare_route.respond(
             200,
             json=self._prepare_train_set_upload_response(
                 "00000000-0000-0000-0000-000000000001"
             ),
         )
-        fit_route = mock_server.router.post("/tabpfn/fit/")
+        fit_route = mock_server.router.post("/tabpfn/fit")
         fit_route.respond(
             200,
             json={"fitted_train_set_id": "00000000-0000-0000-0000-000000000002"},
@@ -303,14 +303,14 @@ class TestServiceClient(unittest.TestCase):
     def test_predict_with_same_test_set_calls_prepare_and_predict_each_time(
         self, mock_server
     ):
-        prepare_route = mock_server.router.post("/tabpfn/prepare_test_set_upload/")
+        prepare_route = mock_server.router.post("/tabpfn/prepare_test_set_upload")
         prepare_route.respond(
             200,
             json=self._prepare_test_set_upload_response(
                 "00000000-0000-0000-0000-000000000003"
             ),
         )
-        predict_route = mock_server.router.post("/tabpfn/predict/")
+        predict_route = mock_server.router.post("/tabpfn/predict")
         predict_route.respond(
             200,
             json=self._predict_response([1, 0, 1]),
@@ -338,7 +338,7 @@ class TestServiceClient(unittest.TestCase):
     def test_predict_with_missing_fitted_train_set_raises_needs_refitting(
         self, mock_server
     ):
-        mock_server.router.post("/tabpfn/prepare_test_set_upload/").respond(
+        mock_server.router.post("/tabpfn/prepare_test_set_upload").respond(
             404,
             json={
                 "message": "fitted train set missing",

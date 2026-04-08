@@ -60,7 +60,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
 
         # mock server connection
         mock_server.router.get(mock_server.endpoints.root.path).respond(200)
-        mock_server.router.post("/tabpfn/prepare_train_set_upload/").respond(
+        mock_server.router.post("/tabpfn/prepare_train_set_upload").respond(
             409,
             json={
                 "message": "duplicate",
@@ -71,7 +71,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.post(mock_server.endpoints.fit.path).respond(
             200, json={"fitted_train_set_id": "00000000-0000-0000-0000-000000000002"}
         )
-        mock_server.router.post("/tabpfn/prepare_test_set_upload/").respond(
+        mock_server.router.post("/tabpfn/prepare_test_set_upload").respond(
             409,
             json={
                 "message": "duplicate",
@@ -82,7 +82,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_dataset_limits/").respond(
+        mock_server.router.get("/tabpfn/get_dataset_limits").respond(
             200,
             json={
                 "max_cells": 100_000_000,
@@ -133,7 +133,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_dataset_limits/").respond(
+        mock_server.router.get("/tabpfn/get_dataset_limits").respond(
             200,
             json={
                 "max_cells": 100_000_000,
@@ -183,7 +183,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_dataset_limits/").respond(
+        mock_server.router.get("/tabpfn/get_dataset_limits").respond(
             200,
             json={
                 "max_cells": 100_000_000,
@@ -243,7 +243,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
 
         # mock server connection
         mock_server.router.get(mock_server.endpoints.root.path).respond(200)
-        mock_server.router.post("/tabpfn/prepare_train_set_upload/").respond(
+        mock_server.router.post("/tabpfn/prepare_train_set_upload").respond(
             409,
             json={
                 "message": "duplicate",
@@ -255,7 +255,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         fit_route.respond(
             200, json={"fitted_train_set_id": "00000000-0000-0000-0000-000000000002"}
         )
-        mock_server.router.post("/tabpfn/prepare_test_set_upload/").respond(
+        mock_server.router.post("/tabpfn/prepare_test_set_upload").respond(
             409,
             json={
                 "message": "duplicate",
@@ -267,7 +267,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_dataset_limits/").respond(
+        mock_server.router.get("/tabpfn/get_dataset_limits").respond(
             200,
             json={
                 "max_cells": 100_000_000,
