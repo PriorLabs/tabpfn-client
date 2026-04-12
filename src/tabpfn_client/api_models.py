@@ -10,7 +10,7 @@ Prediction = Union[
     List[PredictionScalar],
     List[float],
     List[List[float]],
-    Dict[str, Union[List[float], List[List[float]]]],
+    Dict[str, Union[List[Optional[float]], List[List[Optional[float]]]]],
 ]
 
 TabPFNConfig = Optional[Dict[str, Any]]
