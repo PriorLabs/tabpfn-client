@@ -211,7 +211,7 @@ class ServiceClient(Singleton):
     httpx_client = httpx.Client(
         base_url=base_url,
         timeout=TABPFN_CLIENT_TIMEOUT,
-        headers={"client-version": get_client_version()},
+        headers={"Prior-Client-Version": get_client_version()},
         transport=SelectiveHTTP2Transport(http2_paths=[fit_path]),
         follow_redirects=True,
     )
@@ -1128,7 +1128,7 @@ class ServiceClient(Singleton):
             full_url,
             headers={
                 "Authorization": f"Bearer {cls.get_access_token()}",
-                "client-version": get_client_version(),
+                "Prior-Client-Version": get_client_version(),
             },
         ) as response:
             cls._validate_response(response, "download_all_data")

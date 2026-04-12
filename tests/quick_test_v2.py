@@ -145,6 +145,8 @@ class TestClassifierConfig:
             ModelVersion.V2_5, n_estimators=3
         )
         clf.fit(X_train, y_train)
+        # NOTE: multiple predicts do not require refitting, but one predict always
+        # requires a fit call even if it was already fitted (no-op in that case).
         preds1 = clf.predict(X_test)
         preds2 = clf.predict(X_test)
         np.testing.assert_array_equal(preds1, preds2)
