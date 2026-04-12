@@ -307,10 +307,10 @@ class ServiceClient(Singleton):
         limits = cls.get_dataset_limits()
         if limits is not None:
             for name, data in [("x_train", x_bytes), ("y_train", y_bytes)]:
-                if len(data) > limits.max_size_bytes:
+                if len(data) > limits.dataset_max_size_bytes:
                     raise ValueError(
                         f"Compressed size of {name} ({len(data)} bytes) exceeds "
-                        f"the server limit of {limits.max_size_bytes} bytes."
+                        f"the server limit of {limits.dataset_max_size_bytes} bytes."
                     )
 
         if dedup_datasets_enabled():
@@ -472,10 +472,10 @@ class ServiceClient(Singleton):
 
         limits = cls.get_dataset_limits()
         if limits is not None:
-            if len(x_test_bytes) > limits.max_size_bytes:
+            if len(x_test_bytes) > limits.dataset_max_size_bytes:
                 raise ValueError(
                     f"Compressed size of x_test ({len(x_test_bytes)} bytes) exceeds "
-                    f"the server limit of {limits.max_size_bytes} bytes."
+                    f"the server limit of {limits.dataset_max_size_bytes} bytes."
                 )
 
         if dedup_datasets_enabled():
