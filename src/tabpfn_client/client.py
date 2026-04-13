@@ -16,6 +16,7 @@ import re
 import struct
 import time
 import traceback
+import warnings
 from pydantic import BaseModel, ValidationError
 from typing import Any, Callable, Dict, Literal, Union, cast
 
@@ -697,6 +698,25 @@ class ServiceClient(Singleton):
         raise RuntimeError(error_response.message)
 
     @staticmethod
+    def _warn_if_deprecated(response: httpx.Response) -> None:
+        if response.headers.get("deprecation", "").lower() != "true":
+            return
+
+        msg = "This version of tabpfn-client is deprecated and will stop working in a future release."
+
+        sunset = response.headers.get("sunset")
+        if sunset:
+            msg += f" Support ends on: {sunset}."
+
+        link_header = response.headers.get("link", "")
+        if link_header and 'rel="deprecation"' in link_header:
+            match = re.search(r"<([^>]+)>", link_header)
+            if match:
+                msg += f" Please upgrade: {match.group(1)}"
+
+        warnings.warn(msg, DeprecationWarning, stacklevel=4)
+
+    @staticmethod
     def _validate_response(
         response: httpx.Response,
         method_name: str,
@@ -704,6 +724,8 @@ class ServiceClient(Singleton):
         response_models: dict[int, type[BaseModel]] | None = None,
         handlers: dict[int, Callable[[BaseModel], Any]] | None = None,
     ) -> BaseModel | None:
+        ServiceClient._warn_if_deprecated(response)
+
         if response.status_code == 200 and response_models is None:
             return
 
