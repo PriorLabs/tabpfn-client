@@ -68,7 +68,7 @@ norecursedirs = [
 dev = [
     "pre-commit==4.3.0",
     "pytest==8.4.2",
-    "respx==0.22.0",
+    "respx==0.23.1",
     "ruff==0.15.1",
     "licensecheck==2025.1.0"
 ]
