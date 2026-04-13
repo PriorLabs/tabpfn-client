@@ -7,7 +7,6 @@ Run with:
     pytest tests/quick_test_v2.py -v -k regressor
 """
 
-import logging
 from unittest.mock import patch
 
 import numpy as np
@@ -18,8 +17,6 @@ from sklearn.model_selection import train_test_split
 
 from tabpfn_client.constants import ModelVersion
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
-
-logging.basicConfig(level=logging.INFO)
 
 # ---------------------------------------------------------------------------
 # Fixtures
