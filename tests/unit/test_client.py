@@ -393,3 +393,77 @@ class TestServiceClient(unittest.TestCase):
             result = ServiceClient.get_dataset_limits()
 
         self.assertIs(result, stale)
+
+
+class TestServiceClientPredictionNormalization(unittest.TestCase):
+    def tearDown(self):
+        ServiceClient.reset_authorization()
+        ServiceClient._dataset_limits = None
+        ServiceClient._dataset_limits_ts = 0.0
+
+    @staticmethod
+    def _upload_info(url: str) -> dict:
+        return {
+            "signed_urls": [url],
+            "expires_at": 1_700_000_000.0,
+            "required_headers": {"x-test-header": "1"},
+        }
+
+    def _prepare_test_set_upload_response(self, test_set_upload_id: str) -> dict:
+        return {
+            "test_set_upload_id": test_set_upload_id,
+            "x_test_info": self._upload_info("https://upload.example/x_test"),
+        }
+
+    @staticmethod
+    def _predict_response(prediction) -> dict:
+        return {
+            "prediction": prediction,
+            "metadata": {
+                "task": "regression",
+                "package_version": "0.3.0rc1",
+                "tabpfn_config": None,
+                "test_set_num_rows": 2,
+                "test_set_num_cols": 1,
+            },
+        }
+
+    @with_mock_server()
+    def test_predict_converts_none_in_dict_prediction_to_nan(self, mock_server):
+        mock_server.router.post("/tabpfn/prepare_test_set_upload").respond(
+            200,
+            json=self._prepare_test_set_upload_response(
+                "00000000-0000-0000-0000-000000000003"
+            ),
+        )
+        mock_server.router.post("/tabpfn/predict").respond(
+            200,
+            json=self._predict_response(
+                {
+                    "borders": [0.0, None, 2.0],
+                    "logits": [[1.0, None], [None, 4.0]],
+                }
+            ),
+        )
+
+        with patch.object(ServiceClient, "get_dataset_limits", return_value=None):
+            with patch.object(ServiceClient, "_upload_to_gcs"):
+                pred = ServiceClient.predict(
+                    fitted_train_set_id=UUID("00000000-0000-0000-0000-000000000002"),
+                    x_test=np.array([[1.0], [2.0]]),
+                    task="regression",
+                    predict_params={"output_type": "full"},
+                )
+
+        self.assertTrue(np.issubdtype(pred.y_pred["borders"].dtype, np.floating))
+        self.assertTrue(np.issubdtype(pred.y_pred["logits"].dtype, np.floating))
+        np.testing.assert_allclose(
+            pred.y_pred["borders"],
+            np.array([0.0, np.nan, 2.0]),
+            equal_nan=True,
+        )
+        np.testing.assert_allclose(
+            pred.y_pred["logits"],
+            np.array([[1.0, np.nan], [np.nan, 4.0]]),
+            equal_nan=True,
+        )

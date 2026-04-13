@@ -84,6 +84,14 @@ def _on_giveup(details: Dict[str, Any]):
     logger.error(message)
 
 
+def _contains_none(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, list):
+        return any(_contains_none(item) for item in value)
+    return False
+
+
 class GCPOverloaded(Exception):
     """
     Exception raised when the Google Cloud Platform service is overloaded or
@@ -559,7 +567,8 @@ class ServiceClient(Singleton):
             result = {}
             for k, v in prediction.items():
                 if isinstance(v, list):
-                    result[k] = np.array(v)
+                    dtype = float if _contains_none(v) else None
+                    result[k] = np.array(v, dtype=dtype)
                 else:
                     # The value should always be a list or list-of-lists,
                     # leaving this here as an extra precaution and future proofing.
