@@ -24,6 +24,25 @@ from tabpfn_client.client import (
 )
 
 
+def _dataset_limits_payload(
+    max_cells=100_000_000,
+    max_cols=2_000,
+    max_size_bytes=100_000_000,
+    max_classes=10,
+    max_rows=None,
+):
+    max_rows = max_cells if max_rows is None else max_rows
+    return {
+        "dataset_max_size_bytes": max_size_bytes,
+        "dataset_max_cols": max_cols,
+        "dataset_max_classes": max_classes,
+        "train_set_max_rows": max_rows,
+        "train_set_max_cells": max_cells,
+        "test_set_max_rows": max_rows,
+        "test_set_max_rows_w_full_regression_output": max_rows,
+    }
+
+
 class TestTabPFNClassifierInit(unittest.TestCase):
     dummy_token = "dummy_token"
 
@@ -84,12 +103,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         ).respond(200, json={"messages": []})
         mock_server.router.get("/tabpfn/get_dataset_limits").respond(
             200,
-            json={
-                "max_cells": 100_000_000,
-                "max_cols": 2000,
-                "max_size_bytes": 100_000_000,
-                "max_classes": 10,
-            },
+            json=_dataset_limits_payload(),
         )
 
         mock_predict_response = [1, 0, 1]
@@ -134,12 +148,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         ).respond(200, json={"messages": []})
         mock_server.router.get("/tabpfn/get_dataset_limits").respond(
             200,
-            json={
-                "max_cells": 100_000_000,
-                "max_cols": 2000,
-                "max_size_bytes": 100_000_000,
-                "max_classes": 10,
-            },
+            json=_dataset_limits_payload(),
         )
 
         # create dummy token file
@@ -184,12 +193,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         ).respond(200, json={"messages": []})
         mock_server.router.get("/tabpfn/get_dataset_limits").respond(
             200,
-            json={
-                "max_cells": 100_000_000,
-                "max_cols": 2000,
-                "max_size_bytes": 100_000_000,
-                "max_classes": 10,
-            },
+            json=_dataset_limits_payload(),
         )
         init(use_server=True)
 
@@ -274,12 +278,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         ).respond(200, json={"messages": []})
         mock_server.router.get("/tabpfn/get_dataset_limits").respond(
             200,
-            json={
-                "max_cells": 100_000_000,
-                "max_cols": 2000,
-                "max_size_bytes": 100_000_000,
-                "max_classes": 10,
-            },
+            json=_dataset_limits_payload(),
         )
 
         mock_server.router.post(mock_server.endpoints.predict.path).respond(
@@ -390,7 +389,7 @@ class TestTabPFNClassifierInference(unittest.TestCase):
         # skip init
         config.Config.is_initialized = True
         ServiceClient._dataset_limits = GetDatasetLimitsResponse(
-            max_cells=100_000, max_cols=2000, max_size_bytes=100_000_000, max_classes=10
+            **_dataset_limits_payload(max_cells=100_000)
         )
         ServiceClient._dataset_limits_ts = time.monotonic()
 

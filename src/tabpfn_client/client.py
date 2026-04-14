@@ -16,6 +16,7 @@ import re
 import struct
 import time
 import traceback
+import warnings
 from pydantic import BaseModel, ValidationError
 from typing import Any, Callable, Dict, Literal, Union, cast
 
@@ -82,6 +83,14 @@ def _on_giveup(details: Dict[str, Any]):
         f"Giving up. Exception: {details['exception']}"
     )
     logger.error(message)
+
+
+def _contains_none(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, list):
+        return any(_contains_none(item) for item in value)
+    return False
 
 
 class GCPOverloaded(Exception):
@@ -211,7 +220,7 @@ class ServiceClient(Singleton):
     httpx_client = httpx.Client(
         base_url=base_url,
         timeout=TABPFN_CLIENT_TIMEOUT,
-        headers={"client-version": get_client_version()},
+        headers={"Prior-Client-Version": get_client_version()},
         transport=SelectiveHTTP2Transport(http2_paths=[fit_path]),
         follow_redirects=True,
     )
@@ -307,10 +316,10 @@ class ServiceClient(Singleton):
         limits = cls.get_dataset_limits()
         if limits is not None:
             for name, data in [("x_train", x_bytes), ("y_train", y_bytes)]:
-                if len(data) > limits.max_size_bytes:
+                if len(data) > limits.dataset_max_size_bytes:
                     raise ValueError(
                         f"Compressed size of {name} ({len(data)} bytes) exceeds "
-                        f"the server limit of {limits.max_size_bytes} bytes."
+                        f"the server limit of {limits.dataset_max_size_bytes} bytes."
                     )
 
         if dedup_datasets_enabled():
@@ -472,10 +481,10 @@ class ServiceClient(Singleton):
 
         limits = cls.get_dataset_limits()
         if limits is not None:
-            if len(x_test_bytes) > limits.max_size_bytes:
+            if len(x_test_bytes) > limits.dataset_max_size_bytes:
                 raise ValueError(
                     f"Compressed size of x_test ({len(x_test_bytes)} bytes) exceeds "
-                    f"the server limit of {limits.max_size_bytes} bytes."
+                    f"the server limit of {limits.dataset_max_size_bytes} bytes."
                 )
 
         if dedup_datasets_enabled():
@@ -559,7 +568,8 @@ class ServiceClient(Singleton):
             result = {}
             for k, v in prediction.items():
                 if isinstance(v, list):
-                    result[k] = np.array(v)
+                    dtype = float if _contains_none(v) else None
+                    result[k] = np.array(v, dtype=dtype)
                 else:
                     # The value should always be a list or list-of-lists,
                     # leaving this here as an extra precaution and future proofing.
@@ -688,6 +698,25 @@ class ServiceClient(Singleton):
         raise RuntimeError(error_response.message)
 
     @staticmethod
+    def _warn_if_deprecated(response: httpx.Response) -> None:
+        if response.headers.get("deprecation", "").lower() != "true":
+            return
+
+        msg = "This version of tabpfn-client is deprecated and will stop working in a future release."
+
+        sunset = response.headers.get("sunset")
+        if sunset:
+            msg += f" Support ends on: {sunset}."
+
+        link_header = response.headers.get("link", "")
+        if link_header and 'rel="deprecation"' in link_header:
+            match = re.search(r"<([^>]+)>", link_header)
+            if match:
+                msg += f" Please upgrade: {match.group(1)}"
+
+        warnings.warn(msg, DeprecationWarning, stacklevel=4)
+
+    @staticmethod
     def _validate_response(
         response: httpx.Response,
         method_name: str,
@@ -695,6 +724,8 @@ class ServiceClient(Singleton):
         response_models: dict[int, type[BaseModel]] | None = None,
         handlers: dict[int, Callable[[BaseModel], Any]] | None = None,
     ) -> BaseModel | None:
+        ServiceClient._warn_if_deprecated(response)
+
         if response.status_code == 200 and response_models is None:
             return
 
@@ -1128,7 +1159,7 @@ class ServiceClient(Singleton):
             full_url,
             headers={
                 "Authorization": f"Bearer {cls.get_access_token()}",
-                "client-version": get_client_version(),
+                "Prior-Client-Version": get_client_version(),
             },
         ) as response:
             cls._validate_response(response, "download_all_data")

@@ -15,6 +15,25 @@ from tabpfn_client.client import (
 from tests.mock_tabpfn_server import with_mock_server
 
 
+def _dataset_limits_payload(
+    max_cells=100_000_000,
+    max_cols=2_000,
+    max_size_bytes=100_000_000,
+    max_classes=10,
+    max_rows=None,
+):
+    max_rows = max_cells if max_rows is None else max_rows
+    return {
+        "dataset_max_size_bytes": max_size_bytes,
+        "dataset_max_cols": max_cols,
+        "dataset_max_classes": max_classes,
+        "train_set_max_rows": max_rows,
+        "train_set_max_cells": max_cells,
+        "test_set_max_rows": max_rows,
+        "test_set_max_rows_w_full_regression_output": max_rows,
+    }
+
+
 class TestServiceClient(unittest.TestCase):
     def setUp(self):
         X, y = load_breast_cancer(return_X_y=True)
@@ -24,10 +43,7 @@ class TestServiceClient(unittest.TestCase):
 
         ServiceClient.reset_authorization()
         ServiceClient._dataset_limits = GetDatasetLimitsResponse(
-            max_cells=100_000_000,
-            max_cols=2_000,
-            max_size_bytes=100_000_000,
-            max_classes=10,
+            **_dataset_limits_payload(),
         )
         ServiceClient._dataset_limits_ts = time.monotonic()
 
@@ -360,12 +376,12 @@ class TestServiceClient(unittest.TestCase):
 
         response = Mock()
         response.raise_for_status = Mock()
-        response.json.return_value = {
-            "max_cells": 123,
-            "max_cols": 12,
-            "max_size_bytes": 456,
-            "max_classes": 7,
-        }
+        response.json.return_value = _dataset_limits_payload(
+            max_cells=123,
+            max_cols=12,
+            max_size_bytes=456,
+            max_classes=7,
+        )
 
         with patch.object(
             ServiceClient.httpx_client, "get", return_value=response
@@ -373,16 +389,18 @@ class TestServiceClient(unittest.TestCase):
             first = ServiceClient.get_dataset_limits()
             second = ServiceClient.get_dataset_limits()
 
-        self.assertEqual(first.max_size_bytes, 456)
+        self.assertEqual(first.dataset_max_size_bytes, 456)
         self.assertIs(first, second)
         self.assertEqual(m.call_count, 1)
 
     def test_get_dataset_limits_returns_stale_value_on_failure(self):
         stale = GetDatasetLimitsResponse(
-            max_cells=100,
-            max_cols=20,
-            max_size_bytes=300,
-            max_classes=4,
+            **_dataset_limits_payload(
+                max_cells=100,
+                max_cols=20,
+                max_size_bytes=300,
+                max_classes=4,
+            ),
         )
         ServiceClient._dataset_limits = stale
         ServiceClient._dataset_limits_ts = time.monotonic() - 1_900
@@ -393,3 +411,77 @@ class TestServiceClient(unittest.TestCase):
             result = ServiceClient.get_dataset_limits()
 
         self.assertIs(result, stale)
+
+
+class TestServiceClientPredictionNormalization(unittest.TestCase):
+    def tearDown(self):
+        ServiceClient.reset_authorization()
+        ServiceClient._dataset_limits = None
+        ServiceClient._dataset_limits_ts = 0.0
+
+    @staticmethod
+    def _upload_info(url: str) -> dict:
+        return {
+            "signed_urls": [url],
+            "expires_at": 1_700_000_000.0,
+            "required_headers": {"x-test-header": "1"},
+        }
+
+    def _prepare_test_set_upload_response(self, test_set_upload_id: str) -> dict:
+        return {
+            "test_set_upload_id": test_set_upload_id,
+            "x_test_info": self._upload_info("https://upload.example/x_test"),
+        }
+
+    @staticmethod
+    def _predict_response(prediction) -> dict:
+        return {
+            "prediction": prediction,
+            "metadata": {
+                "task": "regression",
+                "package_version": "0.3.0rc1",
+                "tabpfn_config": None,
+                "test_set_num_rows": 2,
+                "test_set_num_cols": 1,
+            },
+        }
+
+    @with_mock_server()
+    def test_predict_converts_none_in_dict_prediction_to_nan(self, mock_server):
+        mock_server.router.post("/tabpfn/prepare_test_set_upload").respond(
+            200,
+            json=self._prepare_test_set_upload_response(
+                "00000000-0000-0000-0000-000000000003"
+            ),
+        )
+        mock_server.router.post("/tabpfn/predict").respond(
+            200,
+            json=self._predict_response(
+                {
+                    "borders": [0.0, None, 2.0],
+                    "logits": [[1.0, None], [None, 4.0]],
+                }
+            ),
+        )
+
+        with patch.object(ServiceClient, "get_dataset_limits", return_value=None):
+            with patch.object(ServiceClient, "_upload_to_gcs"):
+                pred = ServiceClient.predict(
+                    fitted_train_set_id=UUID("00000000-0000-0000-0000-000000000002"),
+                    x_test=np.array([[1.0], [2.0]]),
+                    task="regression",
+                    predict_params={"output_type": "full"},
+                )
+
+        self.assertTrue(np.issubdtype(pred.y_pred["borders"].dtype, np.floating))
+        self.assertTrue(np.issubdtype(pred.y_pred["logits"].dtype, np.floating))
+        np.testing.assert_allclose(
+            pred.y_pred["borders"],
+            np.array([0.0, np.nan, 2.0]),
+            equal_nan=True,
+        )
+        np.testing.assert_allclose(
+            pred.y_pred["logits"],
+            np.array([[1.0, np.nan], [np.nan, 4.0]]),
+            equal_nan=True,
+        )
