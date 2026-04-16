@@ -270,8 +270,8 @@ class ServiceClient(Singleton):
     @classmethod
     def fit(
         cls,
-        X,
-        y,
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray,
         task: Literal["classification", "regression"],
         tabpfn_config: Union[dict, None] = None,
         description: str | None = None,
@@ -447,7 +447,7 @@ class ServiceClient(Singleton):
     def predict(
         cls,
         fitted_train_set_id: UUID,
-        x_test,
+        x_test: pd.DataFrame | np.ndarray,
         task: Literal["classification", "regression"],
         tabpfn_config: Union[dict, None] = None,
         predict_params: Union[dict, None] = None,
