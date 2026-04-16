@@ -226,8 +226,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
     def fit(
         self,
-        X,
-        y,
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray,
         description: str | None = None,
         client_options: ClientOptions | None = None,
     ):
@@ -471,8 +471,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
     def fit(
         self,
-        X,
-        y,
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray,
         description: str | None = None,
         client_options: ClientOptions | None = None,
     ):
@@ -516,7 +516,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
     def predict(
         self,
-        X: np.ndarray,
+        X: pd.DataFrame | np.ndarray,
         output_type: Literal[
             "mean", "median", "mode", "quantiles", "full", "main"
         ] = "mean",

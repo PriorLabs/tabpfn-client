@@ -145,13 +145,12 @@ def _get_crc32c_hash(data: bytes) -> str:
     return base64.b64encode(struct.pack(">I", crc32c_value)).decode("ascii")
 
 
-def _serialize_to_parquet(data) -> tuple[bytes, str]:
-    df = data if isinstance(data, pd.DataFrame) else pd.DataFrame(data)
+def _serialize_to_parquet(df: pd.DataFrame) -> tuple[bytes, str]:
     buf = io.BytesIO()
     df.to_parquet(buf, index=False, compression="zstd")
-    dataset_bytes = buf.getvalue()
-    crc32c_b64 = _get_crc32c_hash(dataset_bytes)
-    return dataset_bytes, crc32c_b64
+    parquet_bytes = buf.getvalue()
+    crc32c_b64 = _get_crc32c_hash(parquet_bytes)
+    return parquet_bytes, crc32c_b64
 
 
 class NeedsRefittingError(Exception):
@@ -271,8 +270,8 @@ class ServiceClient(Singleton):
     @classmethod
     def fit(
         cls,
-        X,
-        y,
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray,
         task: Literal["classification", "regression"],
         tabpfn_config: Union[dict, None] = None,
         description: str | None = None,
@@ -310,17 +309,21 @@ class ServiceClient(Singleton):
 
         client_options = client_options or ClientOptions()
 
-        x_bytes, x_crc32c_hash = _serialize_to_parquet(X)
-        y_bytes, y_crc32c_hash = _serialize_to_parquet(y)
+        df_X = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
+        df_y = y if isinstance(y, pd.DataFrame) else pd.DataFrame(y)
 
         limits = cls.get_dataset_limits()
         if limits is not None:
-            for name, data in [("x_train", x_bytes), ("y_train", y_bytes)]:
-                if len(data) > limits.dataset_max_size_bytes:
+            for name, df in [("x_train", df_X), ("y_train", df_y)]:
+                mem_usage = df.memory_usage(deep=True).sum()
+                if mem_usage > limits.dataset_max_size_bytes:
                     raise ValueError(
-                        f"Compressed size of {name} ({len(data)} bytes) exceeds "
+                        f"In-memory size of {name} ({mem_usage} bytes) exceeds "
                         f"the server limit of {limits.dataset_max_size_bytes} bytes."
                     )
+
+        x_bytes, x_crc32c_hash = _serialize_to_parquet(df_X)
+        y_bytes, y_crc32c_hash = _serialize_to_parquet(df_y)
 
         if dedup_datasets_enabled():
             x_dedup_hash = x_crc32c_hash
@@ -444,7 +447,7 @@ class ServiceClient(Singleton):
     def predict(
         cls,
         fitted_train_set_id: UUID,
-        x_test,
+        x_test: pd.DataFrame | np.ndarray,
         task: Literal["classification", "regression"],
         tabpfn_config: Union[dict, None] = None,
         predict_params: Union[dict, None] = None,
@@ -477,15 +480,18 @@ class ServiceClient(Singleton):
         """
         client_options = client_options or ClientOptions()
 
-        x_test_bytes, x_test_crc32c_hash = _serialize_to_parquet(x_test)
+        df_x_test = x_test if isinstance(x_test, pd.DataFrame) else pd.DataFrame(x_test)
 
         limits = cls.get_dataset_limits()
         if limits is not None:
-            if len(x_test_bytes) > limits.dataset_max_size_bytes:
+            mem_usage = df_x_test.memory_usage(deep=True).sum()
+            if mem_usage > limits.dataset_max_size_bytes:
                 raise ValueError(
-                    f"Compressed size of x_test ({len(x_test_bytes)} bytes) exceeds "
+                    f"In-memory size of x_test ({mem_usage} bytes) exceeds "
                     f"the server limit of {limits.dataset_max_size_bytes} bytes."
                 )
+
+        x_test_bytes, x_test_crc32c_hash = _serialize_to_parquet(df_x_test)
 
         if dedup_datasets_enabled():
             x_test_dedup_hash = x_test_crc32c_hash
