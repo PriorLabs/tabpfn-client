@@ -61,6 +61,7 @@ class GetDatasetLimitsResponse(BaseModel):
     train_set_max_rows: int
     train_set_max_cells: int
     test_set_max_rows: int
+    test_set_max_cells: int
     test_set_max_rows_w_full_regression_output: int
 
 
