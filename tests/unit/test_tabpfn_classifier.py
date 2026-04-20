@@ -30,8 +30,10 @@ def _dataset_limits_payload(
     max_size_bytes=100_000_000,
     max_classes=10,
     max_rows=None,
+    test_max_cells=None,
 ):
     max_rows = max_cells if max_rows is None else max_rows
+    test_max_cells = max_cells if test_max_cells is None else test_max_cells
     return {
         "dataset_max_size_bytes": max_size_bytes,
         "dataset_max_cols": max_cols,
@@ -39,6 +41,7 @@ def _dataset_limits_payload(
         "train_set_max_rows": max_rows,
         "train_set_max_cells": max_cells,
         "test_set_max_rows": max_rows,
+        "test_set_max_cells": test_max_cells,
         "test_set_max_rows_w_full_regression_output": max_rows,
     }
 
