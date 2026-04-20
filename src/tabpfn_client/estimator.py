@@ -666,7 +666,7 @@ def validate_test_set(X: np.ndarray, output_type: str):
     n_cells = X.shape[0] * X.shape[1]
     if n_cells > limits.test_set_max_cells:
         raise ValueError(
-            f"The number of test cells ({n_cells}) exceeds the maximum of {limits.train_set_max_cells}. "
+            f"The number of test cells ({n_cells}) exceeds the maximum of {limits.test_set_max_cells}. "
             "Split the test set across multiple calls to reduce the number of cells."
         )
     if output_type == "full":
