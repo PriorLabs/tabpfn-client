@@ -16,6 +16,7 @@ import re
 import struct
 import time
 import traceback
+import warnings
 from pydantic import BaseModel, ValidationError
 from typing import Any, Callable, Dict, Literal, Union, cast
 
@@ -84,6 +85,14 @@ def _on_giveup(details: Dict[str, Any]):
     logger.error(message)
 
 
+def _contains_none(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, list):
+        return any(_contains_none(item) for item in value)
+    return False
+
+
 class GCPOverloaded(Exception):
     """
     Exception raised when the Google Cloud Platform service is overloaded or
@@ -136,13 +145,12 @@ def _get_crc32c_hash(data: bytes) -> str:
     return base64.b64encode(struct.pack(">I", crc32c_value)).decode("ascii")
 
 
-def _serialize_to_parquet(data) -> tuple[bytes, str]:
-    df = data if isinstance(data, pd.DataFrame) else pd.DataFrame(data)
+def _serialize_to_parquet(df: pd.DataFrame) -> tuple[bytes, str]:
     buf = io.BytesIO()
     df.to_parquet(buf, index=False, compression="zstd")
-    dataset_bytes = buf.getvalue()
-    crc32c_b64 = _get_crc32c_hash(dataset_bytes)
-    return dataset_bytes, crc32c_b64
+    parquet_bytes = buf.getvalue()
+    crc32c_b64 = _get_crc32c_hash(parquet_bytes)
+    return parquet_bytes, crc32c_b64
 
 
 class NeedsRefittingError(Exception):
@@ -211,7 +219,7 @@ class ServiceClient(Singleton):
     httpx_client = httpx.Client(
         base_url=base_url,
         timeout=TABPFN_CLIENT_TIMEOUT,
-        headers={"client-version": get_client_version()},
+        headers={"Prior-Client-Version": get_client_version()},
         transport=SelectiveHTTP2Transport(http2_paths=[fit_path]),
         follow_redirects=True,
     )
@@ -262,8 +270,8 @@ class ServiceClient(Singleton):
     @classmethod
     def fit(
         cls,
-        X,
-        y,
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray,
         task: Literal["classification", "regression"],
         tabpfn_config: Union[dict, None] = None,
         description: str | None = None,
@@ -301,17 +309,21 @@ class ServiceClient(Singleton):
 
         client_options = client_options or ClientOptions()
 
-        x_bytes, x_crc32c_hash = _serialize_to_parquet(X)
-        y_bytes, y_crc32c_hash = _serialize_to_parquet(y)
+        df_X = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
+        df_y = y if isinstance(y, pd.DataFrame) else pd.DataFrame(y)
 
         limits = cls.get_dataset_limits()
         if limits is not None:
-            for name, data in [("x_train", x_bytes), ("y_train", y_bytes)]:
-                if len(data) > limits.max_size_bytes:
+            for name, df in [("x_train", df_X), ("y_train", df_y)]:
+                mem_usage = df.memory_usage(deep=True).sum()
+                if mem_usage > limits.dataset_max_size_bytes:
                     raise ValueError(
-                        f"Compressed size of {name} ({len(data)} bytes) exceeds "
-                        f"the server limit of {limits.max_size_bytes} bytes."
+                        f"In-memory size of {name} ({mem_usage} bytes) exceeds "
+                        f"the server limit of {limits.dataset_max_size_bytes} bytes."
                     )
+
+        x_bytes, x_crc32c_hash = _serialize_to_parquet(df_X)
+        y_bytes, y_crc32c_hash = _serialize_to_parquet(df_y)
 
         if dedup_datasets_enabled():
             x_dedup_hash = x_crc32c_hash
@@ -435,7 +447,7 @@ class ServiceClient(Singleton):
     def predict(
         cls,
         fitted_train_set_id: UUID,
-        x_test,
+        x_test: pd.DataFrame | np.ndarray,
         task: Literal["classification", "regression"],
         tabpfn_config: Union[dict, None] = None,
         predict_params: Union[dict, None] = None,
@@ -468,15 +480,18 @@ class ServiceClient(Singleton):
         """
         client_options = client_options or ClientOptions()
 
-        x_test_bytes, x_test_crc32c_hash = _serialize_to_parquet(x_test)
+        df_x_test = x_test if isinstance(x_test, pd.DataFrame) else pd.DataFrame(x_test)
 
         limits = cls.get_dataset_limits()
         if limits is not None:
-            if len(x_test_bytes) > limits.max_size_bytes:
+            mem_usage = df_x_test.memory_usage(deep=True).sum()
+            if mem_usage > limits.dataset_max_size_bytes:
                 raise ValueError(
-                    f"Compressed size of x_test ({len(x_test_bytes)} bytes) exceeds "
-                    f"the server limit of {limits.max_size_bytes} bytes."
+                    f"In-memory size of x_test ({mem_usage} bytes) exceeds "
+                    f"the server limit of {limits.dataset_max_size_bytes} bytes."
                 )
+
+        x_test_bytes, x_test_crc32c_hash = _serialize_to_parquet(df_x_test)
 
         if dedup_datasets_enabled():
             x_test_dedup_hash = x_test_crc32c_hash
@@ -559,7 +574,8 @@ class ServiceClient(Singleton):
             result = {}
             for k, v in prediction.items():
                 if isinstance(v, list):
-                    result[k] = np.array(v)
+                    dtype = float if _contains_none(v) else None
+                    result[k] = np.array(v, dtype=dtype)
                 else:
                     # The value should always be a list or list-of-lists,
                     # leaving this here as an extra precaution and future proofing.
@@ -688,6 +704,25 @@ class ServiceClient(Singleton):
         raise RuntimeError(error_response.message)
 
     @staticmethod
+    def _warn_if_deprecated(response: httpx.Response) -> None:
+        if response.headers.get("deprecation", "").lower() != "true":
+            return
+
+        msg = "This version of tabpfn-client is deprecated and will stop working in a future release."
+
+        sunset = response.headers.get("sunset")
+        if sunset:
+            msg += f" Support ends on: {sunset}."
+
+        link_header = response.headers.get("link", "")
+        if link_header and 'rel="deprecation"' in link_header:
+            match = re.search(r"<([^>]+)>", link_header)
+            if match:
+                msg += f" Please upgrade: {match.group(1)}"
+
+        warnings.warn(msg, DeprecationWarning, stacklevel=4)
+
+    @staticmethod
     def _validate_response(
         response: httpx.Response,
         method_name: str,
@@ -695,6 +730,8 @@ class ServiceClient(Singleton):
         response_models: dict[int, type[BaseModel]] | None = None,
         handlers: dict[int, Callable[[BaseModel], Any]] | None = None,
     ) -> BaseModel | None:
+        ServiceClient._warn_if_deprecated(response)
+
         if response.status_code == 200 and response_models is None:
             return
 
@@ -1128,7 +1165,7 @@ class ServiceClient(Singleton):
             full_url,
             headers={
                 "Authorization": f"Bearer {cls.get_access_token()}",
-                "client-version": get_client_version(),
+                "Prior-Client-Version": get_client_version(),
             },
         ) as response:
             cls._validate_response(response, "download_all_data")

@@ -10,7 +10,7 @@ Prediction = Union[
     List[PredictionScalar],
     List[float],
     List[List[float]],
-    Dict[str, Union[List[float], List[List[float]]]],
+    Dict[str, Union[List[Optional[float]], List[List[Optional[float]]]]],
 ]
 
 TabPFNConfig = Optional[Dict[str, Any]]
@@ -55,10 +55,13 @@ class FileUploadInfo(BaseModel):
 # /tabpfn/get_dataset_limits/
 # ---------------------------------------------------------------------------
 class GetDatasetLimitsResponse(BaseModel):
-    max_size_bytes: int
-    max_cells: int
-    max_cols: int
-    max_classes: int
+    dataset_max_size_bytes: int
+    dataset_max_cols: int
+    dataset_max_classes: int
+    train_set_max_rows: int
+    train_set_max_cells: int
+    test_set_max_rows: int
+    test_set_max_rows_w_full_regression_output: int
 
 
 # ---------------------------------------------------------------------------
