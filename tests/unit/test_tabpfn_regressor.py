@@ -465,6 +465,8 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             "model_path",
             "paper_version",
             "enhanced_fit_mode",
+            "enhanced_fit_mode_metric",
+            "enhanced_fit_mode_time_limit_s",
         }
         OPTIONAL_PARAMS = {
             "thinking",

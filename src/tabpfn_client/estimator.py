@@ -163,6 +163,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
         enhanced_fit_mode: bool = False,
+        enhanced_fit_mode_metric: Optional[str] = None,
+        enhanced_fit_mode_time_limit_s: Optional[float] = None,
     ):
         """Construct a TabPFN classifier.
 
@@ -214,8 +216,21 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             version available on the API, which e.g handles text features better.
         enhanced_fit_mode: bool, default=False
             If True, trades off fit time for precision by running an
-            AutoML feature-engineering pipeline on top of TabPFN during
+            automated feature-engineering pipeline on top of TabPFN during
             fit.
+        enhanced_fit_mode_metric: str or None, default=None
+            Only consulted when `enhanced_fit_mode=True`. Drives model
+            selection + ensemble weighting during the enhanced-fit sweep
+            (e.g. "accuracy"/"log_loss"/"roc_auc"/"balanced_accuracy"/
+            "f1" for classification). None falls back to the sweep's
+            default for the problem type. Distinct from the local
+            `eval_metric`/`tuning_config` knobs used for decision-threshold
+            tuning on the standalone TabPFN classifier.
+        enhanced_fit_mode_time_limit_s: float or None, default=None
+            Only consulted when `enhanced_fit_mode=True`. Ceiling on the
+            enhanced-fit sweep (seconds). Raise for larger datasets where
+            the default ~5-minute sweep leaves performance on the table.
+            None falls back to the server-side default (300s).
         """
         self.model_path = model_path
         self.n_estimators = n_estimators
@@ -228,6 +243,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.inference_config = inference_config
         self.paper_version = paper_version
         self.enhanced_fit_mode = enhanced_fit_mode
+        self.enhanced_fit_mode_metric = enhanced_fit_mode_metric
+        self.enhanced_fit_mode_time_limit_s = enhanced_fit_mode_time_limit_s
         self.last_trace_id = None
         self.last_fitted_train_set_id = None
         self.last_train_X = None
@@ -422,6 +439,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
         enhanced_fit_mode: bool = False,
+        enhanced_fit_mode_metric: Optional[str] = None,
+        enhanced_fit_mode_time_limit_s: Optional[float] = None,
     ):
         """Construct a TabPFN regressor.
 
@@ -467,8 +486,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             version available on the API, which e.g handles text features better.
         enhanced_fit_mode: bool, default=False
             If True, trades off fit time for precision by running an
-            AutoML feature-engineering pipeline on top of TabPFN during
+            automated feature-engineering pipeline on top of TabPFN during
             fit.
+        enhanced_fit_mode_metric: str or None, default=None
+            Only consulted when `enhanced_fit_mode=True`. Drives model
+            selection + ensemble weighting during the enhanced-fit sweep
+            (e.g. "rmse"/"mae"/"r2"/"mape" for regression). None falls
+            back to the sweep's default for the problem type.
+        enhanced_fit_mode_time_limit_s: float or None, default=None
+            Only consulted when `enhanced_fit_mode=True`. Ceiling on the
+            enhanced-fit sweep (seconds). Raise for larger datasets where
+            the default ~5-minute sweep leaves performance on the table.
+            None falls back to the server-side default (300s).
         """
         self.model_path = model_path
         self.n_estimators = n_estimators
@@ -480,6 +509,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.inference_config = inference_config
         self.paper_version = paper_version
         self.enhanced_fit_mode = enhanced_fit_mode
+        self.enhanced_fit_mode_metric = enhanced_fit_mode_metric
+        self.enhanced_fit_mode_time_limit_s = enhanced_fit_mode_time_limit_s
         self.last_trace_id = None
         self.last_fitted_train_set_id = None
         self.last_train_X = None

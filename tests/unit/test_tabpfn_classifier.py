@@ -471,6 +471,8 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             "balance_probabilities",
             "paper_version",
             "enhanced_fit_mode",
+            "enhanced_fit_mode_metric",
+            "enhanced_fit_mode_time_limit_s",
         }
         OPTIONAL_PARAMS = {
             # These may be emitted by newer model versions, but are not required.

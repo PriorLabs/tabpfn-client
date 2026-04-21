@@ -97,6 +97,14 @@ class FitRequest(BaseModel):
     # `tabpfn_systems` values on the server need this at fit time; the
     # server ignores it otherwise.
     tabpfn_config: TabPFNConfig = None
+    # Drives model selection + ensemble weighting during the enhanced-fit
+    # sweep. Only consulted when `"enhanced"` is in `tabpfn_systems`. None
+    # falls back to the sweep's default per problem type.
+    enhanced_fit_mode_metric: Optional[str] = None
+    # Ceiling on the enhanced-fit sweep (seconds). Only consulted when
+    # `"enhanced"` is in `tabpfn_systems`. None falls back to the server
+    # default (300s).
+    enhanced_fit_time_limit_s: Optional[float] = None
 
 
 class FitResponse(BaseModel):
