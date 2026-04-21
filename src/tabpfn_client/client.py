@@ -395,13 +395,20 @@ class ServiceClient(Singleton):
             elif tabpfn_config.get("enhanced_fit_mode") is True:
                 tabpfn_systems = ["text", "enhanced"]
 
+        # `enhanced_fit_mode_metric` is a top-level FitRequest field on the
+        # server (sibling to `tabpfn_systems`), not part of `tabpfn_config`.
+        # Lift it out before stripping the rest of the client-only keys.
+        enhanced_fit_mode_metric = (
+            tabpfn_config.get("enhanced_fit_mode_metric") if tabpfn_config else None
+        )
+
         # Strip client-only keys that the server does not expect (mirrors
         # the predict path's filter below).
         server_tabpfn_config = (
             {
                 k: v
                 for k, v in tabpfn_config.items()
-                if k not in {"paper_version", "enhanced_fit_mode"}
+                if k not in {"paper_version", "enhanced_fit_mode", "enhanced_fit_mode_metric"}
             }
             if tabpfn_config is not None
             else None
@@ -414,6 +421,7 @@ class ServiceClient(Singleton):
                 tabpfn_systems=tabpfn_systems,
                 force_retransform=is_refitting or force_retransform_enabled(),
                 tabpfn_config=server_tabpfn_config,
+                enhanced_fit_mode_metric=enhanced_fit_mode_metric,
             ),
             timeout=client_options.timeout,
             headers=client_options.headers,
@@ -559,7 +567,7 @@ class ServiceClient(Singleton):
             tabpfn_config = {
                 k: v
                 for k, v in tabpfn_config.items()
-                if k not in {"paper_version", "enhanced_fit_mode"}
+                if k not in {"paper_version", "enhanced_fit_mode", "enhanced_fit_mode_metric"}
             }
 
         res = cls._predict(

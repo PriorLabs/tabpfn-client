@@ -163,6 +163,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
         enhanced_fit_mode: bool = False,
+        enhanced_fit_mode_metric: Optional[str] = None,
     ):
         """Construct a TabPFN classifier.
 
@@ -216,6 +217,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             If True, trades off fit time for precision by running an
             AutoML feature-engineering pipeline on top of TabPFN during
             fit.
+        enhanced_fit_mode_metric: str or None, default=None
+            Only consulted when `enhanced_fit_mode=True`. Forwarded to the
+            server's autogluon `TabularPredictor` and used for model
+            selection + ensemble weighting during the AutoML sweep
+            (e.g. "accuracy"/"log_loss"/"roc_auc"/"balanced_accuracy"/
+            "f1" for classification). None falls back to autogluon's
+            default for the problem type. Distinct from the local
+            `eval_metric`/`tuning_config` knobs used for decision-threshold
+            tuning on the standalone TabPFN classifier.
         """
         self.model_path = model_path
         self.n_estimators = n_estimators
@@ -228,6 +238,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.inference_config = inference_config
         self.paper_version = paper_version
         self.enhanced_fit_mode = enhanced_fit_mode
+        self.enhanced_fit_mode_metric = enhanced_fit_mode_metric
         self.last_trace_id = None
         self.last_fitted_train_set_id = None
         self.last_train_X = None
@@ -422,6 +433,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
         enhanced_fit_mode: bool = False,
+        enhanced_fit_mode_metric: Optional[str] = None,
     ):
         """Construct a TabPFN regressor.
 
@@ -469,6 +481,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             If True, trades off fit time for precision by running an
             AutoML feature-engineering pipeline on top of TabPFN during
             fit.
+        enhanced_fit_mode_metric: str or None, default=None
+            Only consulted when `enhanced_fit_mode=True`. Forwarded to the
+            server's autogluon `TabularPredictor` and used for model
+            selection + ensemble weighting during the AutoML sweep
+            (e.g. "rmse"/"mae"/"r2"/"mape" for regression). None falls
+            back to autogluon's default for the problem type.
         """
         self.model_path = model_path
         self.n_estimators = n_estimators
@@ -480,6 +498,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.inference_config = inference_config
         self.paper_version = paper_version
         self.enhanced_fit_mode = enhanced_fit_mode
+        self.enhanced_fit_mode_metric = enhanced_fit_mode_metric
         self.last_trace_id = None
         self.last_fitted_train_set_id = None
         self.last_train_X = None

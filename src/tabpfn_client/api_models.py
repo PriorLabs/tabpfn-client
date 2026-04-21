@@ -97,6 +97,11 @@ class FitRequest(BaseModel):
     # `tabpfn_systems` values on the server need this at fit time; the
     # server ignores it otherwise.
     tabpfn_config: TabPFNConfig = None
+    # Forwarded to the enhanced preprocessor's autogluon TabularPredictor
+    # for model selection + ensemble weighting during the tabprep sweep.
+    # Only consulted when `"enhanced"` is in `tabpfn_systems`. None falls
+    # back to autogluon's default per problem type.
+    enhanced_fit_mode_metric: Optional[str] = None
 
 
 class FitResponse(BaseModel):
