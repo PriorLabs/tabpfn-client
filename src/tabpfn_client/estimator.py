@@ -41,11 +41,13 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Special string used to identify v2.5 models in model paths.
+# Special strings used to identify model families in model paths.
 V_2_5_IDENTIFIER = "v2.5"
+V_3_IDENTIFIER = "v3"
 
 DEFAULT_V2_MODEL_PATH = "v2_default"
 DEFAULT_V2_5_MODEL_PATH = "v2.5_default"
+DEFAULT_V3_MODEL_PATH = "v3_default"
 
 
 class TabPFNModelSelection:
@@ -75,6 +77,8 @@ class TabPFNModelSelection:
         # Let the server handle the default model. This enables v2.5 as well.
         if model_name == "default":
             return None
+        if V_3_IDENTIFIER in model_name:
+            return f"tabpfn-{V_3_IDENTIFIER}-{model_name_task}-{model_name}.ckpt"
         if V_2_5_IDENTIFIER in model_name:
             return f"tabpfn-{V_2_5_IDENTIFIER}-{model_name_task}-{model_name}.ckpt"
         return f"tabpfn-v2-{model_name_task}-{model_name}.ckpt"
@@ -125,6 +129,7 @@ class TabPFNModelSelection:
 
 class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
+        DEFAULT_V3_MODEL_PATH,
         "v2.5_default-2",
         DEFAULT_V2_5_MODEL_PATH,
         "v2.5_large-features-L",
@@ -157,6 +162,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         ] = None,
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
+        enhanced_fit_mode: bool = False,
     ):
         """Construct a TabPFN classifier.
 
@@ -206,6 +212,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
+        enhanced_fit_mode: bool, default=False
+            If True, trades off fit time for precision by running an
+            AutoML feature-engineering pipeline on top of TabPFN during
+            fit.
         """
         self.model_path = model_path
         self.n_estimators = n_estimators
@@ -217,6 +227,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.random_state = random_state
         self.inference_config = inference_config
         self.paper_version = paper_version
+        self.enhanced_fit_mode = enhanced_fit_mode
         self.last_trace_id = None
         self.last_fitted_train_set_id = None
         self.last_train_X = None
@@ -381,6 +392,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
 class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
+        DEFAULT_V3_MODEL_PATH,
         DEFAULT_V2_5_MODEL_PATH,
         "v2.5_low-skew",
         "v2.5_quantiles",
@@ -409,6 +421,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         ] = None,
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
+        enhanced_fit_mode: bool = False,
     ):
         """Construct a TabPFN regressor.
 
@@ -452,6 +465,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
+        enhanced_fit_mode: bool, default=False
+            If True, trades off fit time for precision by running an
+            AutoML feature-engineering pipeline on top of TabPFN during
+            fit.
         """
         self.model_path = model_path
         self.n_estimators = n_estimators
@@ -462,6 +479,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.random_state = random_state
         self.inference_config = inference_config
         self.paper_version = paper_version
+        self.enhanced_fit_mode = enhanced_fit_mode
         self.last_trace_id = None
         self.last_fitted_train_set_id = None
         self.last_train_X = None

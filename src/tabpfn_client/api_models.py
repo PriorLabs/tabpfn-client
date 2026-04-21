@@ -93,6 +93,10 @@ class FitRequest(BaseModel):
     task: str
     tabpfn_systems: List[str]
     force_retransform: bool = False
+    # Estimator-side configuration (model_path, hyperparameters). Some
+    # `tabpfn_systems` values on the server need this at fit time; the
+    # server ignores it otherwise.
+    tabpfn_config: TabPFNConfig = None
 
 
 class FitResponse(BaseModel):
