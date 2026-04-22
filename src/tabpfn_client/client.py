@@ -41,7 +41,7 @@ from tabpfn_client.constants import (
 from tabpfn_common_utils import utils as common_utils
 from tabpfn_common_utils.utils import Singleton
 from tabpfn_client.api_models import (
-    GetDatasetLimitsResponse,
+    GetModelLimitsResponse,
     PrepareTrainSetUploadRequest,
     PrepareTrainSetUploadResponse,
     DuplicateTrainSetErrorResponse,
@@ -224,36 +224,34 @@ class ServiceClient(Singleton):
         follow_redirects=True,
     )
     _access_token = None
-    _dataset_limits: GetDatasetLimitsResponse | None = None
-    _dataset_limits_ts: float = 0.0
+    _model_limits: GetModelLimitsResponse | None = None
+    _model_limits_ts: float = 0.0
 
     @classmethod
     def get_access_token(cls):
         return cls._access_token
 
     @classmethod
-    def get_dataset_limits(cls) -> GetDatasetLimitsResponse | None:
+    def get_model_limits(cls) -> GetModelLimitsResponse | None:
         """Fetch and cache dataset limits. The cache expires after 30 minutes.
 
         Not thread-safe, but concurrent calls are benign: duplicates fetch the
         same data and the reference assignment is atomic under the GIL."""
         ttl = 1800.0  # 30 minutes
         if (
-            cls._dataset_limits is not None
-            and (time.monotonic() - cls._dataset_limits_ts) < ttl
+            cls._model_limits is not None
+            and (time.monotonic() - cls._model_limits_ts) < ttl
         ):
-            return cls._dataset_limits
+            return cls._model_limits
         try:
-            response = cls.httpx_client.get("/tabpfn/get_dataset_limits")
+            response = cls.httpx_client.get("/tabpfn/get_model_limits")
             response.raise_for_status()
-            cls._dataset_limits = GetDatasetLimitsResponse.model_validate(
-                response.json()
-            )
-            cls._dataset_limits_ts = time.monotonic()
-            return cls._dataset_limits
+            cls._model_limits = GetModelLimitsResponse.model_validate(response.json())
+            cls._model_limits_ts = time.monotonic()
+            return cls._model_limits
         except Exception:
             logger.debug("Failed to fetch dataset limits", exc_info=True)
-            return cls._dataset_limits  # return stale value if available
+            return cls._model_limits  # return stale value if available
 
     @classmethod
     def authorize(cls, access_token: str):
@@ -312,7 +310,7 @@ class ServiceClient(Singleton):
         df_X = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
         df_y = y if isinstance(y, pd.DataFrame) else pd.DataFrame(y)
 
-        limits = cls.get_dataset_limits()
+        limits = cls.get_model_limits()
         if limits is not None:
             for name, df in [("x_train", df_X), ("y_train", df_y)]:
                 mem_usage = df.memory_usage(deep=True).sum()
@@ -482,7 +480,7 @@ class ServiceClient(Singleton):
 
         df_x_test = x_test if isinstance(x_test, pd.DataFrame) else pd.DataFrame(x_test)
 
-        limits = cls.get_dataset_limits()
+        limits = cls.get_model_limits()
         if limits is not None:
             mem_usage = df_x_test.memory_usage(deep=True).sum()
             if mem_usage > limits.dataset_max_size_bytes:

@@ -368,7 +368,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         # TODO: should pass this from the server
         self.classes_ = np.unique(y_)
         # TODO: these things should ideally be shared with the local package
-        limits = ServiceClient.get_dataset_limits()
+        limits = ServiceClient.get_model_limits()
         if limits is not None:
             if len(self.classes_) > limits.dataset_max_classes:
                 raise ValueError(
@@ -628,7 +628,7 @@ def validate_train_set(X: np.ndarray, y: Union[np.ndarray, None] = None):
         if X.shape[0] != y.shape[0]:
             raise ValueError("X and y must have the same number of samples")
 
-    limits = ServiceClient.get_dataset_limits()
+    limits = ServiceClient.get_model_limits()
     if limits is None:
         return
 
@@ -650,7 +650,7 @@ def validate_train_set(X: np.ndarray, y: Union[np.ndarray, None] = None):
 def validate_test_set(X: np.ndarray, output_type: str):
     """Check the integrity of the test data."""
 
-    limits = ServiceClient.get_dataset_limits()
+    limits = ServiceClient.get_model_limits()
     if limits is None:
         return
 
