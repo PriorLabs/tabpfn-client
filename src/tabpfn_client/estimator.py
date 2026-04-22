@@ -234,12 +234,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         # assert init() is called
         init()
 
+        estimator_param = self._get_estimator_params_with_model_path("classification")
         validate_train_set(X, y)
         X = _clean_text_features(X)
         self._validate_targets_and_classes(y)
-        _check_paper_version(self.paper_version, X)
 
-        estimator_param = self._get_estimator_params_with_model_path("classification")
         if Config.use_server:
             client_options = client_options or ClientOptions()
             if "sentry-trace" not in client_options.headers:
@@ -313,11 +312,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         client_options: ClientOptions | None = None,
     ) -> dict[str, np.ndarray]:
         check_is_fitted(self)
-        validate_test_set(X, output_type, self.model_path)
-        _check_paper_version(self.paper_version, X)
-        X = _clean_text_features(X)
-
         estimator_param = self._get_estimator_params_with_model_path("classification")
+        validate_test_set(X, output_type, estimator_param["model_path"])
+        X = _clean_text_features(X)
 
         client_options = client_options or ClientOptions()
         if "sentry-trace" not in client_options.headers:
@@ -373,8 +370,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         if limits is None:
             return
 
-        # We don't yet know which model will be used, so we use the most permissive limit
-        # across all models.
+        # We use the most permissive limit across all models as we don't yet
+        # know yet which model will be used.
         limit = limits.max_model_limit
 
         if len(self.classes_) > limit.max_classes:
@@ -486,12 +483,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         # assert init() is called
         init()
 
+        estimator_param = self._get_estimator_params_with_model_path("regression")
         validate_train_set(X, y)
         self._validate_targets(y)
         X = _clean_text_features(X)
-        _check_paper_version(self.paper_version, X)
 
-        estimator_param = self._get_estimator_params_with_model_path("regression")
         if Config.use_server:
             client_options = client_options or ClientOptions()
             if "sentry-trace" not in client_options.headers:
@@ -554,7 +550,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             The predicted values.
         """
         check_is_fitted(self)
-        validate_test_set(X, output_type, self.model_path)
+        estimator_param = self._get_estimator_params_with_model_path("regression")
+        validate_test_set(X, output_type, estimator_param["model_path"])
         X = _clean_text_features(X)
         _check_paper_version(self.paper_version, X)
 
@@ -563,8 +560,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             "output_type": output_type,
             "quantiles": quantiles,
         }
-
-        estimator_param = self._get_estimator_params_with_model_path("regression")
 
         client_options = client_options or ClientOptions()
         if "sentry-trace" not in client_options.headers:
