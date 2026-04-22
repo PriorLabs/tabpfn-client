@@ -68,6 +68,7 @@ class GetModelLimitsResponse(BaseModel):
     default_model_version: str
     max_model_limit: ModelLimit
     model_limits: dict[str, ModelLimit]
+    dataset_max_size_bytes: int
 
 
 # ---------------------------------------------------------------------------

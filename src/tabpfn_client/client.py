@@ -233,11 +233,11 @@ class ServiceClient(Singleton):
 
     @classmethod
     def get_model_limits(cls) -> GetModelLimitsResponse | None:
-        """Fetch and cache dataset limits. The cache expires after 30 minutes.
+        """Fetch and cache dataset limits. The cache expires after 1 hour.
 
         Not thread-safe, but concurrent calls are benign: duplicates fetch the
         same data and the reference assignment is atomic under the GIL."""
-        ttl = 1800.0  # 30 minutes
+        ttl = 3600.0  # 1 hour
         if (
             cls._model_limits is not None
             and (time.monotonic() - cls._model_limits_ts) < ttl
@@ -250,7 +250,7 @@ class ServiceClient(Singleton):
             cls._model_limits_ts = time.monotonic()
             return cls._model_limits
         except Exception:
-            logger.debug("Failed to fetch dataset limits", exc_info=True)
+            logger.debug("Failed to fetch model limits", exc_info=True)
             return cls._model_limits  # return stale value if available
 
     @classmethod

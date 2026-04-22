@@ -313,7 +313,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         client_options: ClientOptions | None = None,
     ) -> dict[str, np.ndarray]:
         check_is_fitted(self)
-        validate_test_set(X, output_type)
+        validate_test_set(X, output_type, self.model_path)
         _check_paper_version(self.paper_version, X)
         X = _clean_text_features(X)
 
@@ -547,7 +547,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             The predicted values.
         """
         check_is_fitted(self)
-        validate_test_set(X, output_type)
+        validate_test_set(X, output_type, self.model_path)
         X = _clean_text_features(X)
         _check_paper_version(self.paper_version, X)
 
@@ -632,47 +632,57 @@ def validate_train_set(X: np.ndarray, y: Union[np.ndarray, None] = None):
     if limits is None:
         return
 
-    if X.shape[0] > limits.train_set_max_rows:
+    # We don't yet know which model will be used, so we use the most permissive limit
+    # across all models.
+    limit = limits.max_model_limit
+
+    if X.shape[0] > limit.train_set_max_rows:
         raise ValueError(
-            f"The number of train rows ({X.shape[0]}) exceeds the maximum of {limits.train_set_max_rows}."
+            f"The number of train rows ({X.shape[0]}) exceeds the maximum of {limit.train_set_max_rows}."
         )
-    if X.shape[1] > limits.dataset_max_cols:
+    if X.shape[1] > limit.max_cols:
         raise ValueError(
-            f"The number of train columns ({X.shape[1]}) exceeds the maximum of {limits.dataset_max_cols}."
+            f"The number of train columns ({X.shape[1]}) exceeds the maximum of {limit.max_cols}."
         )
     n_cells = X.shape[0] * X.shape[1]
-    if n_cells > limits.train_set_max_cells:
+    if n_cells > limit.train_set_max_cells:
         raise ValueError(
-            f"The number of train cells ({n_cells}) exceeds the maximum of {limits.train_set_max_cells}."
+            f"The number of train cells ({n_cells}) exceeds the maximum of {limit.train_set_max_cells}."
         )
 
 
-def validate_test_set(X: np.ndarray, output_type: str):
+def validate_test_set(X: np.ndarray, output_type: str, model_path: str | None = None):
     """Check the integrity of the test data."""
 
     limits = ServiceClient.get_model_limits()
     if limits is None:
         return
 
-    if X.shape[0] > limits.test_set_max_rows:
+    if not model_path or model_path == "default":
+        limit = limits.model_limits[limits.default_model_version]
+    else:
+        model_version = ModelVersion.from_model_path(model_path)
+        limit = model_version.model_limit(limits.model_limits)
+
+    if X.shape[0] > limit.test_set_max_rows:
         raise ValueError(
-            f"The number of test rows ({X.shape[0]}) exceeds the maximum of {limits.test_set_max_rows}. "
+            f"The number of test rows ({X.shape[0]}) exceeds the maximum of {limit.test_set_max_rows}. "
             "Split the test set across multiple calls to reduce the number of rows."
         )
-    if X.shape[1] > limits.dataset_max_cols:
+    if X.shape[1] > limit.max_cols:
         raise ValueError(
-            f"The number of test columns ({X.shape[1]}) exceeds the maximum of {limits.dataset_max_cols}."
+            f"The number of test columns ({X.shape[1]}) exceeds the maximum of {limit.max_cols}."
         )
     n_cells = X.shape[0] * X.shape[1]
-    if n_cells > limits.test_set_max_cells:
+    if n_cells > limit.test_set_max_cells:
         raise ValueError(
-            f"The number of test cells ({n_cells}) exceeds the maximum of {limits.test_set_max_cells}. "
+            f"The number of test cells ({n_cells}) exceeds the maximum of {limit.test_set_max_cells}. "
             "Split the test set across multiple calls to reduce the number of cells."
         )
     if output_type == "full":
-        if X.shape[0] > limits.test_set_max_rows_w_full_regression_output:
+        if X.shape[0] > limit.test_set_max_rows_w_full_regression_output:
             raise ValueError(
-                f"The number of test rows ({X.shape[0]}) exceeds the maximum of {limits.test_set_max_rows_w_full_regression_output} "
+                f"The number of test rows ({X.shape[0]}) exceeds the maximum of {limit.test_set_max_rows_w_full_regression_output} "
                 "for full regression output."
             )
 
