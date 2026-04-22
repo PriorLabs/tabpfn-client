@@ -393,7 +393,7 @@ class ServiceClient(Singleton):
             if tabpfn_config.get("paper_version") is True:
                 tabpfn_systems = []
             elif tabpfn_config.get("enhanced_fit_mode") is True:
-                tabpfn_systems = ["text", "enhanced"]
+                tabpfn_systems = ["enhanced"]
 
         # `enhanced_fit_mode_metric` and `enhanced_fit_mode_time_limit_s`
         # are top-level FitRequest fields on the server (siblings to
