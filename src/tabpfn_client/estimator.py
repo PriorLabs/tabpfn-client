@@ -3,12 +3,13 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import sys
 import time
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Dict, Literal, Optional, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Union
 from typing_extensions import Self
 from uuid import UUID
 
@@ -18,6 +19,12 @@ from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.utils import column_or_1d
 from sklearn.utils.multiclass import check_classification_targets
 from sklearn.utils.validation import check_is_fitted
+from tabpfn_client.api_models import (
+    EnhancedSystemConfig,
+    PreprocessingSystemConfig,
+    TabPFNSystemConfig,
+    TextSystemConfig,
+)
 from tabpfn_client.client import (
     ServiceClient,
     ClientOptions,
@@ -31,6 +38,37 @@ from tabpfn_client.constants import (
     ModelVersion,
 )
 from tabpfn_client.service_wrapper import InferenceClient
+
+
+@dataclasses.dataclass
+class FitParams:
+    """API-side options for `.fit()` that aren't part of the sklearn estimator
+    interface. Kept separate from the estimator's `__init__` so TabPFNConfig
+    stays a strict subset of sklearn's BaseEstimator (matters for type-checkers
+    that introspect `__init__`).
+
+    Parameters
+    ----------
+    tabpfn_systems : list[TabPFNSystemConfig] or None, default=None
+        Override the default preprocessor chain. None → server picks the
+        default (``["preprocessing", "text"]``). Use the constructors from
+        ``tabpfn_client``: ``EnhancedSystem(eval_metric="rmse")`` etc.
+    description : str or None, default=None
+        Optional free-form description of the dataset for the server.
+    """
+
+    tabpfn_systems: Optional[List[TabPFNSystemConfig]] = None
+    description: Optional[str] = None
+
+
+@dataclasses.dataclass
+class PredictParams:
+    """API-side options for `.predict()`. The same fields are also accepted
+    as direct kwargs on `.predict()` for backwards compatibility; if both
+    are supplied, the explicit kwargs win."""
+
+    output_type: Optional[str] = None
+    quantiles: Optional[List[float]] = None
 
 try:
     from torch import Tensor
@@ -162,14 +200,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         ] = None,
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
-        enhanced_fit_mode: bool = False,
-        enhanced_fit_mode_metric: Optional[str] = None,
     ):
         """Construct a TabPFN classifier.
 
-        This constructs a classifier using the latest model and settings. If you would
-        like to use a previous model version, use `create_default_for_version()`
-        instead. You can also use `model_path` to specify a particular model
+        Estimator hyperparameters live here so this class stays a strict subset
+        of sklearn's BaseEstimator. API-side options (preprocessor chain,
+        enhanced fit mode, dataset description) move to `FitParams`, passed
+        through `.fit(X, y, params=FitParams(...))`.
 
         Parameters
         ----------
@@ -213,19 +250,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
-        enhanced_fit_mode: bool, default=False
-            If True, trades off fit time for precision by running an
-            AutoML feature-engineering pipeline on top of TabPFN during
-            fit.
-        enhanced_fit_mode_metric: str or None, default=None
-            Only consulted when `enhanced_fit_mode=True`. Forwarded to the
-            server's autogluon `TabularPredictor` and used for model
-            selection + ensemble weighting during the AutoML sweep
-            (e.g. "accuracy"/"log_loss"/"roc_auc"/"balanced_accuracy"/
-            "f1" for classification). None falls back to autogluon's
-            default for the problem type. Distinct from the local
-            `eval_metric`/`tuning_config` knobs used for decision-threshold
-            tuning on the standalone TabPFN classifier.
         """
         self.model_path = model_path
         self.n_estimators = n_estimators
@@ -237,8 +261,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.random_state = random_state
         self.inference_config = inference_config
         self.paper_version = paper_version
-        self.enhanced_fit_mode = enhanced_fit_mode
-        self.enhanced_fit_mode_metric = enhanced_fit_mode_metric
         self.last_trace_id = None
         self.last_fitted_train_set_id = None
         self.last_train_X = None
@@ -251,6 +273,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         X: pd.DataFrame | np.ndarray,
         y: pd.Series | np.ndarray,
         description: str | None = None,
+        params: FitParams | None = None,
         client_options: ClientOptions | None = None,
     ):
         # assert init() is called
@@ -261,6 +284,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self._validate_targets_and_classes(y)
         _check_paper_version(self.paper_version, X)
 
+        params = params or FitParams()
+        # Explicit `description=` kwarg keeps the released call shape working;
+        # it overrides anything on `params`.
+        effective_description = description if description is not None else params.description
+
         estimator_param = self._get_estimator_params_with_model_path("classification")
         if Config.use_server:
             client_options = client_options or ClientOptions()
@@ -268,7 +296,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 client_options.headers["sentry-trace"] = uuid4().hex
 
             self.last_trace_id = client_options.headers["sentry-trace"]
-            self.last_train_set_description = description
+            self.last_train_set_description = effective_description
+            self.last_fit_params = params
 
             def fit_task() -> UUID:
                 return InferenceClient.fit(
@@ -276,7 +305,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                     y,
                     task="classification",
                     tabpfn_config=estimator_param,
-                    description=description,
+                    paper_version=self.paper_version,
+                    tabpfn_systems=params.tabpfn_systems,
+                    description=effective_description,
                     client_options=client_options,
                 )
 
@@ -293,12 +324,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     def predict(
         self,
         X,
+        params: PredictParams | None = None,
         client_options: ClientOptions | None = None,
     ):
         """Predict class labels for samples in X.
 
         Args:
             X: The input samples.
+            params: Optional PredictParams. Ignored fields for classification
+                are silently dropped server-side.
 
         Returns:
             The predicted class labels.
@@ -312,6 +346,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     def predict_proba(
         self,
         X,
+        params: PredictParams | None = None,
         client_options: ClientOptions | None = None,
     ):
         """Predict class probabilities for X.
@@ -339,6 +374,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         _check_paper_version(self.paper_version, X)
         X = _clean_text_features(X)
 
+        # Resolve a FitParams to replay on a NeedsRefittingError. If `.fit()`
+        # was called before this version added `last_fit_params` (or the user
+        # restored from a pickled estimator), default to an empty FitParams.
+        last_fit_params: FitParams = getattr(self, "last_fit_params", None) or FitParams()
+
         estimator_param = self._get_estimator_params_with_model_path("classification")
 
         client_options = client_options or ClientOptions()
@@ -357,8 +397,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                     return InferenceClient.predict(
                         X,
                         fitted_train_set_id=self.last_fitted_train_set_id,
-                        task="classification",
-                        tabpfn_config=estimator_param,
                         predict_params={"output_type": output_type},
                         client_options=client_options,
                     )
@@ -370,6 +408,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                         self.last_train_y,
                         task="classification",
                         tabpfn_config=estimator_param,
+                        paper_version=self.paper_version,
+                        tabpfn_systems=last_fit_params.tabpfn_systems,
                         description=self.last_train_set_description,
                         client_options=client_options,
                         is_refitting=True,
@@ -432,8 +472,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         ] = None,
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
-        enhanced_fit_mode: bool = False,
-        enhanced_fit_mode_metric: Optional[str] = None,
     ):
         """Construct a TabPFN regressor.
 
@@ -477,16 +515,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
-        enhanced_fit_mode: bool, default=False
-            If True, trades off fit time for precision by running an
-            AutoML feature-engineering pipeline on top of TabPFN during
-            fit.
-        enhanced_fit_mode_metric: str or None, default=None
-            Only consulted when `enhanced_fit_mode=True`. Forwarded to the
-            server's autogluon `TabularPredictor` and used for model
-            selection + ensemble weighting during the AutoML sweep
-            (e.g. "rmse"/"mae"/"r2"/"mape" for regression). None falls
-            back to autogluon's default for the problem type.
         """
         self.model_path = model_path
         self.n_estimators = n_estimators
@@ -497,8 +525,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.random_state = random_state
         self.inference_config = inference_config
         self.paper_version = paper_version
-        self.enhanced_fit_mode = enhanced_fit_mode
-        self.enhanced_fit_mode_metric = enhanced_fit_mode_metric
         self.last_trace_id = None
         self.last_fitted_train_set_id = None
         self.last_train_X = None
@@ -511,6 +537,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         X: pd.DataFrame | np.ndarray,
         y: pd.Series | np.ndarray,
         description: str | None = None,
+        params: FitParams | None = None,
         client_options: ClientOptions | None = None,
     ):
         # assert init() is called
@@ -521,6 +548,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         X = _clean_text_features(X)
         _check_paper_version(self.paper_version, X)
 
+        params = params or FitParams()
+        effective_description = description if description is not None else params.description
+
         estimator_param = self._get_estimator_params_with_model_path("regression")
         if Config.use_server:
             client_options = client_options or ClientOptions()
@@ -528,7 +558,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                 client_options.headers["sentry-trace"] = uuid4().hex
 
             self.last_trace_id = client_options.headers["sentry-trace"]
-            self.last_train_set_description = description
+            self.last_train_set_description = effective_description
+            self.last_fit_params = params
 
             def fit_task() -> UUID:
                 return InferenceClient.fit(
@@ -536,7 +567,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     y,
                     task="regression",
                     tabpfn_config=estimator_param,
-                    description=description,
+                    paper_version=self.paper_version,
+                    tabpfn_systems=params.tabpfn_systems,
+                    description=effective_description,
                     client_options=client_options,
                 )
 
@@ -558,6 +591,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             "mean", "median", "mode", "quantiles", "full", "main"
         ] = "mean",
         quantiles: Optional[list[float]] = None,
+        params: PredictParams | None = None,
         client_options: ClientOptions | None = None,
     ) -> Union[np.ndarray, list[np.ndarray], dict[str, np.ndarray]]:
         """Predict regression target for X.
@@ -588,12 +622,20 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         X = _clean_text_features(X)
         _check_paper_version(self.paper_version, X)
 
-        # Add new parameters
+        # Resolve effective output_type/quantiles. Direct kwargs win over
+        # `params` (matches the .fit description-vs-params precedence).
+        if params is not None:
+            if output_type == "mean" and params.output_type is not None:
+                output_type = params.output_type  # type: ignore[assignment]
+            if quantiles is None and params.quantiles is not None:
+                quantiles = params.quantiles
+
         predict_params = {
             "output_type": output_type,
             "quantiles": quantiles,
         }
 
+        last_fit_params: FitParams = getattr(self, "last_fit_params", None) or FitParams()
         estimator_param = self._get_estimator_params_with_model_path("regression")
 
         client_options = client_options or ClientOptions()
@@ -612,8 +654,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     return InferenceClient.predict(
                         X,
                         fitted_train_set_id=self.last_fitted_train_set_id,
-                        task="regression",
-                        tabpfn_config=estimator_param,
                         predict_params=predict_params,
                         client_options=client_options,
                     )
@@ -625,6 +665,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                         self.last_train_y,
                         task="regression",
                         tabpfn_config=estimator_param,
+                        paper_version=self.paper_version,
+                        tabpfn_systems=last_fit_params.tabpfn_systems,
                         description=self.last_train_set_description,
                         client_options=client_options,
                         is_refitting=True,

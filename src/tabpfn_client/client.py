@@ -41,9 +41,11 @@ from tabpfn_client.constants import (
 from tabpfn_common_utils import utils as common_utils
 from tabpfn_common_utils.utils import Singleton
 from tabpfn_client.api_models import (
+    EnhancedSystemConfig,
     GetDatasetLimitsResponse,
     PrepareTrainSetUploadRequest,
     PrepareTrainSetUploadResponse,
+    PreprocessingSystemConfig,
     DuplicateTrainSetErrorResponse,
     PrepareTestSetUploadRequest,
     PrepareTestSetUploadResponse,
@@ -54,7 +56,9 @@ from tabpfn_client.api_models import (
     FitResponse,
     PredictRequest,
     PredictResponse,
+    TabPFNSystemConfig,
     TaskConfig,
+    TextSystemConfig,
     ErrorResponse,
 )
 
@@ -274,6 +278,8 @@ class ServiceClient(Singleton):
         y: pd.Series | np.ndarray,
         task: Literal["classification", "regression"],
         tabpfn_config: Union[dict, None] = None,
+        paper_version: bool = False,
+        tabpfn_systems: list[TabPFNSystemConfig] | None = None,
         description: str | None = None,
         client_options: ClientOptions | None = None,
         is_refitting: bool = False,
@@ -290,8 +296,15 @@ class ServiceClient(Singleton):
         task: str
             Task type: "classification" or "regression"
         tabpfn_config : dict, optional
-            Configuration for the fit method. Supported keys currently include
-            `paper_version`.
+            TabPFN estimator hyperparameters (model_path, n_estimators, …).
+            Persisted server-side at fit time and read back at predict time.
+        paper_version : bool, default=False
+            If True, send `tabpfn_systems=[]` (no preprocessor chain) to
+            reproduce the paper-version inference path.
+        tabpfn_systems : list[TabPFNSystemConfig] or None, default=None
+            Override the default preprocessor chain. None defers to the
+            server default; non-None overrides it (and overrides
+            `paper_version`'s implicit empty list, if both are passed).
         description: str, optional
             Description of the dataset and task for the server.
         client_options : ClientOptions, optional
@@ -388,28 +401,21 @@ class ServiceClient(Singleton):
                         f.cancel()
                     raise
 
-        tabpfn_systems = ["preprocessing", "text"]
-        if tabpfn_config:
-            if tabpfn_config.get("paper_version") is True:
-                tabpfn_systems = []
-            elif tabpfn_config.get("enhanced_fit_mode") is True:
-                tabpfn_systems = ["text", "enhanced"]
+        # Build the discriminated-union list of system configs. Precedence:
+        # explicit `tabpfn_systems` arg > paper_version implicit empty list >
+        # default chain (preprocessing + text). The server applies its own
+        # default if we send `tabpfn_systems=None`, so we mirror that here.
+        if tabpfn_systems is not None:
+            effective_systems: list[TabPFNSystemConfig] = list(tabpfn_systems)
+        elif paper_version:
+            effective_systems = []
+        else:
+            effective_systems = [PreprocessingSystemConfig(), TextSystemConfig()]
 
-        # `enhanced_fit_mode_metric` is a top-level FitRequest field on the
-        # server (sibling to `tabpfn_systems`), not part of `tabpfn_config`.
-        # Lift it out before stripping the rest of the client-only keys.
-        enhanced_fit_mode_metric = (
-            tabpfn_config.get("enhanced_fit_mode_metric") if tabpfn_config else None
-        )
-
-        # Strip client-only keys that the server does not expect (mirrors
-        # the predict path's filter below).
+        # `paper_version` is a client-only flag; strip it before sending so
+        # the server's tabpfn_config validator doesn't reject it as unknown.
         server_tabpfn_config = (
-            {
-                k: v
-                for k, v in tabpfn_config.items()
-                if k not in {"paper_version", "enhanced_fit_mode", "enhanced_fit_mode_metric"}
-            }
+            {k: v for k, v in tabpfn_config.items() if k != "paper_version"}
             if tabpfn_config is not None
             else None
         )
@@ -418,10 +424,9 @@ class ServiceClient(Singleton):
             req=FitRequest(
                 train_set_upload_id=prepare_resp.train_set_upload_id,
                 task=task,
-                tabpfn_systems=tabpfn_systems,
+                tabpfn_systems=effective_systems,
                 force_retransform=is_refitting or force_retransform_enabled(),
                 tabpfn_config=server_tabpfn_config,
-                enhanced_fit_mode_metric=enhanced_fit_mode_metric,
             ),
             timeout=client_options.timeout,
             headers=client_options.headers,
@@ -472,8 +477,6 @@ class ServiceClient(Singleton):
         cls,
         fitted_train_set_id: UUID,
         x_test: pd.DataFrame | np.ndarray,
-        task: Literal["classification", "regression"],
-        tabpfn_config: Union[dict, None] = None,
         predict_params: Union[dict, None] = None,
         client_options: ClientOptions | None = None,
     ) -> PredictionResult:
@@ -562,23 +565,11 @@ class ServiceClient(Singleton):
                 prepare_resp.x_test_info,
             )
 
-        # Strip client-only keys that the server does not expect.
-        if tabpfn_config is not None:
-            tabpfn_config = {
-                k: v
-                for k, v in tabpfn_config.items()
-                if k not in {"paper_version", "enhanced_fit_mode", "enhanced_fit_mode_metric"}
-            }
-
         res = cls._predict(
             req=PredictRequest(
                 test_set_upload_id=prepare_resp.test_set_upload_id,
                 fitted_train_set_id=fitted_train_set_id,
-                task_config=TaskConfig(
-                    task=task,
-                    tabpfn_config=tabpfn_config,
-                    predict_params=predict_params,
-                ),
+                predict_params=predict_params,
                 force_retransform=force_retransform_enabled(),
             ),
             timeout=client_options.timeout,

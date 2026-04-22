@@ -1,6 +1,11 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
 
+from tabpfn_client.api_models import (
+    EnhancedSystemConfig,
+    PreprocessingSystemConfig,
+    TextSystemConfig,
+)
 from tabpfn_client.config import (
     init,
     reset,
@@ -8,7 +13,12 @@ from tabpfn_client.config import (
     set_access_token,
     get_api_usage,
 )
-from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
+from tabpfn_client.estimator import (
+    FitParams,
+    PredictParams,
+    TabPFNClassifier,
+    TabPFNRegressor,
+)
 from tabpfn_client.service_wrapper import UserDataClient
 
 __all__ = [
@@ -16,6 +26,11 @@ __all__ = [
     "reset",
     "TabPFNClassifier",
     "TabPFNRegressor",
+    "FitParams",
+    "PredictParams",
+    "EnhancedSystemConfig",
+    "PreprocessingSystemConfig",
+    "TextSystemConfig",
     "UserDataClient",
     "get_access_token",
     "set_access_token",

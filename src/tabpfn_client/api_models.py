@@ -1,5 +1,5 @@
 from uuid import UUID
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
 # Classification output_type="preds" preserves the original label type, so
@@ -22,6 +22,34 @@ class TaskConfig(BaseModel):
     task: str
     tabpfn_config: TabPFNConfig
     predict_params: PredictParams
+
+
+# ---------------------------------------------------------------------------
+# Discriminated-union members for FitRequest.tabpfn_systems. Mirrors the
+# server-side `prior.types.TabPFNSystemConfig` union; we send objects so each
+# system can carry its own knobs (today: only `enhanced` has any).
+# ---------------------------------------------------------------------------
+
+
+class PreprocessingSystemConfig(BaseModel):
+    name: Literal["preprocessing"] = "preprocessing"
+
+
+class TextSystemConfig(BaseModel):
+    name: Literal["text"] = "text"
+
+
+class EnhancedSystemConfig(BaseModel):
+    name: Literal["enhanced"] = "enhanced"
+    eval_metric: Optional[str] = None
+    fit_time_limit_s: Optional[float] = None
+
+
+TabPFNSystemConfig = Union[
+    PreprocessingSystemConfig,
+    TextSystemConfig,
+    EnhancedSystemConfig,
+]
 
 
 class Metadata(BaseModel):
@@ -91,17 +119,15 @@ class DuplicateTrainSetErrorResponse(ErrorResponse):
 class FitRequest(BaseModel):
     train_set_upload_id: UUID
     task: str
-    tabpfn_systems: List[str]
+    # List of per-system configs. Server discriminates by `name`. Per-system
+    # knobs (e.g. enhanced.eval_metric, enhanced.fit_time_limit_s) live on
+    # the enhanced entry, not at the top level.
+    tabpfn_systems: List[TabPFNSystemConfig]
     force_retransform: bool = False
-    # Estimator-side configuration (model_path, hyperparameters). Some
-    # `tabpfn_systems` values on the server need this at fit time; the
-    # server ignores it otherwise.
+    # Estimator-side configuration (model_path, hyperparameters). Persisted
+    # by the server at fit time and read back at predict time, so changing
+    # these per predict call no longer has any effect.
     tabpfn_config: TabPFNConfig = None
-    # Forwarded to the enhanced preprocessor's autogluon TabularPredictor
-    # for model selection + ensemble weighting during the tabprep sweep.
-    # Only consulted when `"enhanced"` is in `tabpfn_systems`. None falls
-    # back to autogluon's default per problem type.
-    enhanced_fit_mode_metric: Optional[str] = None
 
 
 class FitResponse(BaseModel):
@@ -132,7 +158,14 @@ class DuplicateTestSetErrorResponse(ErrorResponse):
 class PredictRequest(BaseModel):
     test_set_upload_id: UUID
     fitted_train_set_id: UUID
-    task_config: TaskConfig
+    # Preferred: just the predict-time output knobs (output_type / quantiles).
+    # Server reconstructs the full TaskConfig from the persisted fit row.
+    predict_params: PredictParams = None
+    # Deprecated, only sent by older clients. Server uses `predict_params`
+    # if present, else falls back to `task_config.predict_params`. The
+    # `tabpfn_config` inside is silently ignored when the persisted fit has
+    # one of its own.
+    task_config: Optional[TaskConfig] = None
     force_retransform: bool = False
 
 
