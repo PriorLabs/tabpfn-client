@@ -52,17 +52,23 @@ class FileUploadInfo(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# /tabpfn/get_dataset_limits/
+# /tabpfn/get_model_limits/
 # ---------------------------------------------------------------------------
-class GetDatasetLimitsResponse(BaseModel):
-    dataset_max_size_bytes: int
-    dataset_max_cols: int
-    dataset_max_classes: int
+class ModelLimit(BaseModel):
+    max_cols: int
+    max_classes: int
     train_set_max_rows: int
     train_set_max_cells: int
     test_set_max_rows: int
     test_set_max_cells: int
     test_set_max_rows_w_full_regression_output: int
+
+
+class GetModelLimitsResponse(BaseModel):
+    default_model_version: str
+    max_model_limit: ModelLimit
+    model_limits: dict[str, ModelLimit]
+    dataset_max_size_bytes: int
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +98,7 @@ class FitRequest(BaseModel):
     train_set_upload_id: UUID
     task: str
     tabpfn_systems: List[str]
-    force_retransform: bool = False
+    force_refit: bool = False
     # Estimator-side configuration (model_path, hyperparameters). Some
     # `tabpfn_systems` values on the server need this at fit time; the
     # server ignores it otherwise.
@@ -136,7 +142,7 @@ class PredictRequest(BaseModel):
     test_set_upload_id: UUID
     fitted_train_set_id: UUID
     task_config: TaskConfig
-    force_retransform: bool = False
+    force_refit: bool = False
 
 
 class PredictResponse(BaseModel):

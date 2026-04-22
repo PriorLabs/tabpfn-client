@@ -8,14 +8,14 @@ from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
 
 from tabpfn_client.client import (
-    GetDatasetLimitsResponse,
+    GetModelLimitsResponse,
     NeedsRefittingError,
     ServiceClient,
 )
 from tests.mock_tabpfn_server import with_mock_server
 
 
-def _dataset_limits_payload(
+def _model_limits_payload(
     max_cells=100_000_000,
     max_cols=2_000,
     max_size_bytes=100_000_000,
@@ -25,15 +25,20 @@ def _dataset_limits_payload(
 ):
     max_rows = max_cells if max_rows is None else max_rows
     test_max_cells = max_cells if test_max_cells is None else test_max_cells
-    return {
-        "dataset_max_size_bytes": max_size_bytes,
-        "dataset_max_cols": max_cols,
-        "dataset_max_classes": max_classes,
+    model_limit = {
         "train_set_max_rows": max_rows,
         "train_set_max_cells": max_cells,
         "test_set_max_rows": max_rows,
         "test_set_max_cells": test_max_cells,
         "test_set_max_rows_w_full_regression_output": max_rows,
+        "max_cols": max_cols,
+        "max_classes": max_classes,
+    }
+    return {
+        "default_model_version": "v2.5",
+        "max_model_limit": model_limit,
+        "model_limits": {"v2.5": model_limit},
+        "dataset_max_size_bytes": max_size_bytes,
     }
 
 
@@ -45,15 +50,15 @@ class TestServiceClient(unittest.TestCase):
         )
 
         ServiceClient.reset_authorization()
-        ServiceClient._dataset_limits = GetDatasetLimitsResponse(
-            **_dataset_limits_payload(),
+        ServiceClient._model_limits = GetModelLimitsResponse(
+            **_model_limits_payload(),
         )
-        ServiceClient._dataset_limits_ts = time.monotonic()
+        ServiceClient._model_limits_ts = time.monotonic()
 
     def tearDown(self):
         ServiceClient.reset_authorization()
-        ServiceClient._dataset_limits = None
-        ServiceClient._dataset_limits_ts = 0.0
+        ServiceClient._model_limits = None
+        ServiceClient._model_limits_ts = 0.0
 
     @staticmethod
     def _upload_info(url: str) -> dict:
@@ -373,13 +378,13 @@ class TestServiceClient(unittest.TestCase):
                 task="classification",
             )
 
-    def test_get_dataset_limits_uses_cache(self):
-        ServiceClient._dataset_limits = None
-        ServiceClient._dataset_limits_ts = 0.0
+    def test_get_model_limits_uses_cache(self):
+        ServiceClient._model_limits = None
+        ServiceClient._model_limits_ts = 0.0
 
         response = Mock()
         response.raise_for_status = Mock()
-        response.json.return_value = _dataset_limits_payload(
+        response.json.return_value = _model_limits_payload(
             max_cells=123,
             max_cols=12,
             max_size_bytes=456,
@@ -389,29 +394,29 @@ class TestServiceClient(unittest.TestCase):
         with patch.object(
             ServiceClient.httpx_client, "get", return_value=response
         ) as m:
-            first = ServiceClient.get_dataset_limits()
-            second = ServiceClient.get_dataset_limits()
+            first = ServiceClient.get_model_limits()
+            second = ServiceClient.get_model_limits()
 
         self.assertEqual(first.dataset_max_size_bytes, 456)
         self.assertIs(first, second)
         self.assertEqual(m.call_count, 1)
 
-    def test_get_dataset_limits_returns_stale_value_on_failure(self):
-        stale = GetDatasetLimitsResponse(
-            **_dataset_limits_payload(
+    def test_get_model_limits_returns_stale_value_on_failure(self):
+        stale = GetModelLimitsResponse(
+            **_model_limits_payload(
                 max_cells=100,
                 max_cols=20,
                 max_size_bytes=300,
                 max_classes=4,
             ),
         )
-        ServiceClient._dataset_limits = stale
-        ServiceClient._dataset_limits_ts = time.monotonic() - 1_900
+        ServiceClient._model_limits = stale
+        ServiceClient._model_limits_ts = time.monotonic() - 1_900
 
         with patch.object(
             ServiceClient.httpx_client, "get", side_effect=RuntimeError("boom")
         ):
-            result = ServiceClient.get_dataset_limits()
+            result = ServiceClient.get_model_limits()
 
         self.assertIs(result, stale)
 
@@ -419,8 +424,8 @@ class TestServiceClient(unittest.TestCase):
 class TestServiceClientPredictionNormalization(unittest.TestCase):
     def tearDown(self):
         ServiceClient.reset_authorization()
-        ServiceClient._dataset_limits = None
-        ServiceClient._dataset_limits_ts = 0.0
+        ServiceClient._model_limits = None
+        ServiceClient._model_limits_ts = 0.0
 
     @staticmethod
     def _upload_info(url: str) -> dict:
@@ -467,7 +472,7 @@ class TestServiceClientPredictionNormalization(unittest.TestCase):
             ),
         )
 
-        with patch.object(ServiceClient, "get_dataset_limits", return_value=None):
+        with patch.object(ServiceClient, "get_model_limits", return_value=None):
             with patch.object(ServiceClient, "_upload_to_gcs"):
                 pred = ServiceClient.predict(
                     fitted_train_set_id=UUID("00000000-0000-0000-0000-000000000002"),

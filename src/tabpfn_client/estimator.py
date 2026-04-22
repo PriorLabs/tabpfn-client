@@ -264,12 +264,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         # assert init() is called
         init()
 
+        estimator_param = self._get_estimator_params_with_model_path("classification")
         validate_train_set(X, y)
         X = _clean_text_features(X)
         self._validate_targets_and_classes(y)
-        _check_paper_version(self.paper_version, X)
 
-        estimator_param = self._get_estimator_params_with_model_path("classification")
         if Config.use_server:
             client_options = client_options or ClientOptions()
             if "sentry-trace" not in client_options.headers:
@@ -343,11 +342,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         client_options: ClientOptions | None = None,
     ) -> dict[str, np.ndarray]:
         check_is_fitted(self)
-        validate_test_set(X, output_type)
-        _check_paper_version(self.paper_version, X)
-        X = _clean_text_features(X)
-
         estimator_param = self._get_estimator_params_with_model_path("classification")
+        validate_test_set(X, output_type, estimator_param["model_path"])
+        X = _clean_text_features(X)
 
         client_options = client_options or ClientOptions()
         if "sentry-trace" not in client_options.headers:
@@ -397,19 +394,23 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         # Get classes and encode before type conversion to guarantee correct class labels.
         # TODO: should pass this from the server
         self.classes_ = np.unique(y_)
+
         # TODO: these things should ideally be shared with the local package
-        limits = ServiceClient.get_dataset_limits()
-        if limits is not None:
-            max_classes = limits.dataset_max_classes
-            if V_3_IDENTIFIER in (self.model_path or ""):
-                max_classes = 160
-            if len(self.classes_) > max_classes:
-                raise ValueError(
-                    f"Number of classes {len(self.classes_)} exceeds the maximal number of "
-                    f"{max_classes} classes supported by TabPFN. Consider using "
-                    "the many_class extension to reduce the number of classes. For code see "
-                    f"{URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE}"
-                )
+        limits = ServiceClient.get_model_limits()
+        if limits is None:
+            return
+
+        # We use the most permissive limit across all models as at fit time we
+        # don't yet know yet which model will be used.
+        limit = limits.max_model_limit
+
+        if len(self.classes_) > limit.max_classes:
+            raise ValueError(
+                f"Number of classes {len(self.classes_)} exceeds the maximal number of "
+                f"{limit.max_classes} classes supported by TabPFN. Consider using "
+                "the many_class extension to reduce the number of classes. For code see "
+                f"{URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE}"
+            )
 
 
 class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
@@ -533,12 +534,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         # assert init() is called
         init()
 
+        estimator_param = self._get_estimator_params_with_model_path("regression")
         validate_train_set(X, y)
         self._validate_targets(y)
         X = _clean_text_features(X)
-        _check_paper_version(self.paper_version, X)
 
-        estimator_param = self._get_estimator_params_with_model_path("regression")
         if Config.use_server:
             client_options = client_options or ClientOptions()
             if "sentry-trace" not in client_options.headers:
@@ -601,17 +601,15 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             The predicted values.
         """
         check_is_fitted(self)
-        validate_test_set(X, output_type)
+        estimator_param = self._get_estimator_params_with_model_path("regression")
+        validate_test_set(X, output_type, estimator_param["model_path"])
         X = _clean_text_features(X)
-        _check_paper_version(self.paper_version, X)
 
         # Add new parameters
         predict_params = {
             "output_type": output_type,
             "quantiles": quantiles,
         }
-
-        estimator_param = self._get_estimator_params_with_model_path("regression")
 
         client_options = client_options or ClientOptions()
         if "sentry-trace" not in client_options.headers:
@@ -682,57 +680,63 @@ def validate_train_set(X: np.ndarray, y: Union[np.ndarray, None] = None):
         if X.shape[0] != y.shape[0]:
             raise ValueError("X and y must have the same number of samples")
 
-    limits = ServiceClient.get_dataset_limits()
+    limits = ServiceClient.get_model_limits()
     if limits is None:
         return
 
-    if X.shape[0] > limits.train_set_max_rows:
+    # We don't yet know which model will be used, so we use the most permissive limit
+    # across all models.
+    limit = limits.max_model_limit
+
+    if X.shape[0] > limit.train_set_max_rows:
         raise ValueError(
-            f"The number of train rows ({X.shape[0]}) exceeds the maximum of {limits.train_set_max_rows}."
+            f"The number of train rows ({X.shape[0]}) exceeds the maximum of {limit.train_set_max_rows}."
         )
-    if X.shape[1] > limits.dataset_max_cols:
+    if X.shape[1] > limit.max_cols:
         raise ValueError(
-            f"The number of train columns ({X.shape[1]}) exceeds the maximum of {limits.dataset_max_cols}."
+            f"The number of train columns ({X.shape[1]}) exceeds the maximum of {limit.max_cols}."
         )
     n_cells = X.shape[0] * X.shape[1]
-    if n_cells > limits.train_set_max_cells:
+    if n_cells > limit.train_set_max_cells:
         raise ValueError(
-            f"The number of train cells ({n_cells}) exceeds the maximum of {limits.train_set_max_cells}."
+            f"The number of train cells ({n_cells}) exceeds the maximum of {limit.train_set_max_cells}."
         )
 
 
-def validate_test_set(X: np.ndarray, output_type: str):
+def validate_test_set(X: np.ndarray, output_type: str, model_path: str | None = None):
     """Check the integrity of the test data."""
 
-    limits = ServiceClient.get_dataset_limits()
+    limits = ServiceClient.get_model_limits()
     if limits is None:
         return
 
-    if X.shape[0] > limits.test_set_max_rows:
+    if not model_path:
+        limit = limits.model_limits[limits.default_model_version]
+    else:
+        model_version = ModelVersion.from_model_path(model_path)
+        limit = model_version.model_limit(limits.model_limits)
+
+    if X.shape[0] > limit.test_set_max_rows:
         raise ValueError(
-            f"The number of test rows ({X.shape[0]}) exceeds the maximum of {limits.test_set_max_rows}. "
+            f"The number of test rows ({X.shape[0]}) exceeds the maximum of {limit.test_set_max_rows}. "
             "Split the test set across multiple calls to reduce the number of rows."
         )
-    if X.shape[1] > limits.dataset_max_cols:
+    if X.shape[1] > limit.max_cols:
         raise ValueError(
-            f"The number of test columns ({X.shape[1]}) exceeds the maximum of {limits.dataset_max_cols}."
+            f"The number of test columns ({X.shape[1]}) exceeds the maximum of {limit.max_cols}."
         )
     n_cells = X.shape[0] * X.shape[1]
-    if n_cells > limits.test_set_max_cells:
+    if n_cells > limit.test_set_max_cells:
         raise ValueError(
-            f"The number of test cells ({n_cells}) exceeds the maximum of {limits.test_set_max_cells}. "
+            f"The number of test cells ({n_cells}) exceeds the maximum of {limit.test_set_max_cells}. "
             "Split the test set across multiple calls to reduce the number of cells."
         )
     if output_type == "full":
-        if X.shape[0] > limits.test_set_max_rows_w_full_regression_output:
+        if X.shape[0] > limit.test_set_max_rows_w_full_regression_output:
             raise ValueError(
-                f"The number of test rows ({X.shape[0]}) exceeds the maximum of {limits.test_set_max_rows_w_full_regression_output} "
+                f"The number of test rows ({X.shape[0]}) exceeds the maximum of {limit.test_set_max_rows_w_full_regression_output} "
                 "for full regression output."
             )
-
-
-def _check_paper_version(paper_version, X):
-    pass
 
 
 def _clean_text_features(X):

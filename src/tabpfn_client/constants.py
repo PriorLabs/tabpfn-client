@@ -1,21 +1,41 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
+from __future__ import annotations
 
 import os
 import logging
 from enum import Enum
 from functools import cache
 from pathlib import Path
+from tabpfn_client.api_models import ModelLimit
 
 logger = logging.getLogger(__name__)
 
 
+# TODO: This should be exported by a tabpfn-types package at some point.
 class ModelVersion(str, Enum):
-    """Version of the model."""
-
     V2 = "v2"
     V2_5 = "v2.5"
     V3 = "v3"
+
+    def model_limit(self, model_limits: dict[str, ModelLimit]) -> ModelLimit:
+        """Resolve limit of a model to the same or closest previous version limit.
+
+        Raises:
+            ValueError: If no model limits are registered at or below the model version.
+        """
+        sorted_versions = sorted(model_limits.keys())
+        for k in reversed(sorted_versions):
+            if k <= self:
+                return model_limits[k]
+        raise ValueError(f"No model limits registered at or below {self}")
+
+    @staticmethod
+    def from_model_path(model_path: str) -> ModelVersion:
+        for version in ModelVersion:
+            if f"-{version}-" in model_path:
+                return version
+        raise ValueError(f"Invalid model path: {model_path}")
 
 
 CACHE_DIR = Path(__file__).parent.resolve() / ".tabpfn"
@@ -44,9 +64,9 @@ def ci_mode_enabled() -> bool:
 
 
 @cache
-def force_retransform_enabled() -> bool:
-    force_retransform = os.getenv("TABPFN_CLIENT_FORCE_RETRANSFORM")
-    return str(force_retransform).lower() in {"1", "true", "yes", "on"}
+def force_refit_enabled() -> bool:
+    force_refit = os.getenv("TABPFN_CLIENT_FORCE_REFIT")
+    return str(force_refit).lower() in {"1", "true", "yes", "on"}
 
 
 @cache

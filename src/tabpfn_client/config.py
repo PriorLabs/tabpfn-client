@@ -94,7 +94,7 @@ def init(use_server=True):
             UserAuthenticationClient.retrieve_greeting_messages()
         )
 
-        _ = ServiceClient.get_dataset_limits()
+        _ = ServiceClient.get_model_limits()
 
         Config.use_server = True
         Config.is_initialized = True

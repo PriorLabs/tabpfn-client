@@ -19,13 +19,13 @@ from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client import config
 import json
 from tabpfn_client.client import (
-    GetDatasetLimitsResponse,
+    GetModelLimitsResponse,
     PredictionResult,
     ServiceClient,
 )
 
 
-def _dataset_limits_payload(
+def _model_limits_payload(
     max_cells=100_000_000,
     max_cols=2_000,
     max_size_bytes=100_000_000,
@@ -35,15 +35,20 @@ def _dataset_limits_payload(
 ):
     max_rows = max_cells if max_rows is None else max_rows
     test_max_cells = max_cells if test_max_cells is None else test_max_cells
-    return {
-        "dataset_max_size_bytes": max_size_bytes,
-        "dataset_max_cols": max_cols,
-        "dataset_max_classes": max_classes,
+    model_limit = {
         "train_set_max_rows": max_rows,
         "train_set_max_cells": max_cells,
         "test_set_max_rows": max_rows,
         "test_set_max_cells": test_max_cells,
         "test_set_max_rows_w_full_regression_output": max_rows,
+        "max_cols": max_cols,
+        "max_classes": max_classes,
+    }
+    return {
+        "default_model_version": "v2.5",
+        "max_model_limit": model_limit,
+        "model_limits": {"v2.5": model_limit},
+        "dataset_max_size_bytes": max_size_bytes,
     }
 
 
@@ -54,14 +59,14 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         # set up dummy data
         reset()
         ServiceClient.reset_authorization()
-        ServiceClient._dataset_limits = None
+        ServiceClient._model_limits = None
         X, y = load_diabetes(return_X_y=True)
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
             X, y, test_size=0.33
         )
 
     def tearDown(self):
-        ServiceClient._dataset_limits = None
+        ServiceClient._model_limits = None
         # remove cache dir
         shutil.rmtree(CACHE_DIR, ignore_errors=True)
 
@@ -104,9 +109,9 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_dataset_limits").respond(
+        mock_server.router.get("/tabpfn/get_model_limits").respond(
             200,
-            json=_dataset_limits_payload(),
+            json=_model_limits_payload(),
         )
 
         metric = "mean"
@@ -150,9 +155,9 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_dataset_limits").respond(
+        mock_server.router.get("/tabpfn/get_model_limits").respond(
             200,
-            json=_dataset_limits_payload(),
+            json=_model_limits_payload(),
         )
 
         # create dummy token file
@@ -195,9 +200,9 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_dataset_limits").respond(
+        mock_server.router.get("/tabpfn/get_model_limits").respond(
             200,
-            json=_dataset_limits_payload(),
+            json=_model_limits_payload(),
         )
         init(use_server=True)
 
@@ -274,9 +279,9 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_dataset_limits").respond(
+        mock_server.router.get("/tabpfn/get_model_limits").respond(
             200,
-            json=_dataset_limits_payload(),
+            json=_model_limits_payload(),
         )
 
         # Ensure no cached token so we go through the full login flow
@@ -387,14 +392,14 @@ class TestTabPFNRegressorInference(unittest.TestCase):
     def setUp(self):
         # skip init
         config.Config.is_initialized = True
-        ServiceClient._dataset_limits = GetDatasetLimitsResponse(
-            **_dataset_limits_payload(max_cells=100_000)
+        ServiceClient._model_limits = GetModelLimitsResponse(
+            **_model_limits_payload(max_cells=100_000)
         )
-        ServiceClient._dataset_limits_ts = time.monotonic()
+        ServiceClient._model_limits_ts = time.monotonic()
 
     def tearDown(self):
-        ServiceClient._dataset_limits = None
-        ServiceClient._dataset_limits_ts = 0.0
+        ServiceClient._model_limits = None
+        ServiceClient._model_limits_ts = 0.0
         # undo setUp
         config.reset()
 
