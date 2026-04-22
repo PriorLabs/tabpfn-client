@@ -31,7 +31,7 @@ from omegaconf import OmegaConf
 from tabpfn_client.browser_auth import BrowserAuthHandler
 from tabpfn_client.constants import (
     dedup_datasets_enabled,
-    force_retransform_enabled,
+    force_refit_enabled,
     force_reupload_enabled,
     TABPFN_CLIENT_MAX_THREAD_PER_UPLOAD,
     TABPFN_CLIENT_TIMEOUT,
@@ -397,7 +397,7 @@ class ServiceClient(Singleton):
                 train_set_upload_id=prepare_resp.train_set_upload_id,
                 task=task,
                 tabpfn_systems=tabpfn_systems,
-                force_retransform=is_refitting or force_retransform_enabled(),
+                force_refit=is_refitting or force_refit_enabled(),
             ),
             timeout=client_options.timeout,
             headers=client_options.headers,
@@ -553,7 +553,7 @@ class ServiceClient(Singleton):
                     tabpfn_config=tabpfn_config,
                     predict_params=predict_params,
                 ),
-                force_retransform=force_retransform_enabled(),
+                force_refit=force_refit_enabled(),
             ),
             timeout=client_options.timeout,
             headers=client_options.headers,
