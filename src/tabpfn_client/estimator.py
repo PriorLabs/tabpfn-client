@@ -367,16 +367,23 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         # Get classes and encode before type conversion to guarantee correct class labels.
         # TODO: should pass this from the server
         self.classes_ = np.unique(y_)
+
         # TODO: these things should ideally be shared with the local package
         limits = ServiceClient.get_model_limits()
-        if limits is not None:
-            if len(self.classes_) > limits.dataset_max_classes:
-                raise ValueError(
-                    f"Number of classes {len(self.classes_)} exceeds the maximal number of "
-                    f"{limits.dataset_max_classes} classes supported by TabPFN. Consider using "
-                    "the many_class extension to reduce the number of classes. For code see "
-                    f"{URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE}"
-                )
+        if limits is None:
+            return
+
+        # We don't yet know which model will be used, so we use the most permissive limit
+        # across all models.
+        limit = limits.max_model_limit
+
+        if len(self.classes_) > limit.max_classes:
+            raise ValueError(
+                f"Number of classes {len(self.classes_)} exceeds the maximal number of "
+                f"{limits.max_classes} classes supported by TabPFN. Consider using "
+                "the many_class extension to reduce the number of classes. For code see "
+                f"{URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE}"
+            )
 
 
 class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
