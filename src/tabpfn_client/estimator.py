@@ -553,7 +553,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         estimator_param = self._get_estimator_params_with_model_path("regression")
         validate_test_set(X, output_type, estimator_param["model_path"])
         X = _clean_text_features(X)
-        _check_paper_version(self.paper_version, X)
 
         # Add new parameters
         predict_params = {
@@ -687,10 +686,6 @@ def validate_test_set(X: np.ndarray, output_type: str, model_path: str | None = 
                 f"The number of test rows ({X.shape[0]}) exceeds the maximum of {limit.test_set_max_rows_w_full_regression_output} "
                 "for full regression output."
             )
-
-
-def _check_paper_version(paper_version, X):
-    pass
 
 
 def _clean_text_features(X):
