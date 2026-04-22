@@ -400,10 +400,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         # TODO: these things should ideally be shared with the local package
         limits = ServiceClient.get_dataset_limits()
         if limits is not None:
-            if len(self.classes_) > limits.dataset_max_classes:
+            max_classes = limits.dataset_max_classes
+            if V_3_IDENTIFIER in (self.model_path or ""):
+                max_classes = 160
+            if len(self.classes_) > max_classes:
                 raise ValueError(
                     f"Number of classes {len(self.classes_)} exceeds the maximal number of "
-                    f"{limits.dataset_max_classes} classes supported by TabPFN. Consider using "
+                    f"{max_classes} classes supported by TabPFN. Consider using "
                     "the many_class extension to reduce the number of classes. For code see "
                     f"{URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE}"
                 )
