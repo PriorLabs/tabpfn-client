@@ -100,6 +100,8 @@ class TabPFNModelSelection:
             options["model_path"] = DEFAULT_V2_MODEL_PATH
         elif version == ModelVersion.V2_5:
             options["model_path"] = DEFAULT_V2_5_MODEL_PATH
+        elif version == ModelVersion.V3:
+            options["model_path"] = DEFAULT_V3_MODEL_PATH
         else:
             raise ValueError(f"Unknown version: {version}")
 
