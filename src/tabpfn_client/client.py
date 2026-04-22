@@ -389,8 +389,42 @@ class ServiceClient(Singleton):
                     raise
 
         tabpfn_systems = ["preprocessing", "text"]
-        if tabpfn_config and tabpfn_config.get("paper_version") is True:
-            tabpfn_systems = []
+        if tabpfn_config:
+            if tabpfn_config.get("paper_version") is True:
+                tabpfn_systems = []
+            elif tabpfn_config.get("enhanced_fit_mode") is True:
+                tabpfn_systems = ["enhanced"]
+
+        # `enhanced_fit_mode_metric` and `enhanced_fit_mode_time_limit_s`
+        # are top-level FitRequest fields on the server (siblings to
+        # `tabpfn_systems`), not part of `tabpfn_config`. Lift them out
+        # before stripping the rest of the client-only keys. The server
+        # field drops the `mode_` infix (`enhanced_fit_time_limit_s`);
+        # units are seconds on both sides, no conversion.
+        enhanced_fit_mode_metric = (
+            tabpfn_config.get("enhanced_fit_mode_metric") if tabpfn_config else None
+        )
+        enhanced_fit_time_limit_s = (
+            tabpfn_config.get("enhanced_fit_mode_time_limit_s") if tabpfn_config else None
+        )
+
+        # Strip client-only keys that the server does not expect (mirrors
+        # the predict path's filter below).
+        server_tabpfn_config = (
+            {
+                k: v
+                for k, v in tabpfn_config.items()
+                if k
+                not in {
+                    "paper_version",
+                    "enhanced_fit_mode",
+                    "enhanced_fit_mode_metric",
+                    "enhanced_fit_mode_time_limit_s",
+                }
+            }
+            if tabpfn_config is not None
+            else None
+        )
 
         res = cls._fit(
             req=FitRequest(
@@ -398,6 +432,9 @@ class ServiceClient(Singleton):
                 task=task,
                 tabpfn_systems=tabpfn_systems,
                 force_retransform=is_refitting or force_retransform_enabled(),
+                tabpfn_config=server_tabpfn_config,
+                enhanced_fit_mode_metric=enhanced_fit_mode_metric,
+                enhanced_fit_time_limit_s=enhanced_fit_time_limit_s,
             ),
             timeout=client_options.timeout,
             headers=client_options.headers,
@@ -541,7 +578,15 @@ class ServiceClient(Singleton):
         # Strip client-only keys that the server does not expect.
         if tabpfn_config is not None:
             tabpfn_config = {
-                k: v for k, v in tabpfn_config.items() if k not in {"paper_version"}
+                k: v
+                for k, v in tabpfn_config.items()
+                if k
+                not in {
+                    "paper_version",
+                    "enhanced_fit_mode",
+                    "enhanced_fit_mode_metric",
+                    "enhanced_fit_mode_time_limit_s",
+                }
             }
 
         res = cls._predict(
