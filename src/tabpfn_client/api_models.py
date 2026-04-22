@@ -55,13 +55,13 @@ class FileUploadInfo(BaseModel):
 # /tabpfn/get_model_limits/
 # ---------------------------------------------------------------------------
 class ModelLimit(BaseModel):
+    max_cols: int
+    max_classes: int
     train_set_max_rows: int
     train_set_max_cells: int
     test_set_max_rows: int
-    max_cols: int
-    test_set_max_rows_w_full_regression_output: int
-    max_classes: int
     test_set_max_cells: int
+    test_set_max_rows_w_full_regression_output: int
 
 
 class GetModelLimitsResponse(BaseModel):

@@ -34,15 +34,20 @@ def _model_limits_payload(
 ):
     max_rows = max_cells if max_rows is None else max_rows
     test_max_cells = max_cells if test_max_cells is None else test_max_cells
-    return {
-        "dataset_max_size_bytes": max_size_bytes,
-        "dataset_max_cols": max_cols,
-        "dataset_max_classes": max_classes,
+    model_limit = {
         "train_set_max_rows": max_rows,
         "train_set_max_cells": max_cells,
         "test_set_max_rows": max_rows,
         "test_set_max_cells": test_max_cells,
         "test_set_max_rows_w_full_regression_output": max_rows,
+        "max_cols": max_cols,
+        "max_classes": max_classes,
+    }
+    return {
+        "default_model_version": "v2.5",
+        "max_model_limit": model_limit,
+        "model_limits": {"v2.5": model_limit},
+        "dataset_max_size_bytes": max_size_bytes,
     }
 
 
