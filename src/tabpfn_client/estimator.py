@@ -370,8 +370,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         if limits is None:
             return
 
-        # We use the most permissive limit across all models as we don't yet
-        # know yet which model will be used.
+        # We use the most permissive limit across all models as at fit time we
+        # don't yet know yet which model will be used.
         limit = limits.max_model_limit
 
         if len(self.classes_) > limit.max_classes:
@@ -659,7 +659,7 @@ def validate_test_set(X: np.ndarray, output_type: str, model_path: str | None = 
     if limits is None:
         return
 
-    if not model_path or model_path == "default":
+    if not model_path:
         limit = limits.model_limits[limits.default_model_version]
     else:
         model_version = ModelVersion.from_model_path(model_path)
