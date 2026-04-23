@@ -33,7 +33,7 @@ class ModelVersion(str, Enum):
     @staticmethod
     def from_model_path(model_path: str) -> ModelVersion:
         for version in ModelVersion:
-            if f"-{version}-" in model_path:
+            if f"-{version.value}-" in model_path:
                 return version
         raise ValueError(f"Invalid model path: {model_path}")
 
