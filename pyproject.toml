@@ -36,7 +36,7 @@ dependencies = [
     "sseclient-py>=1.8.0,<=1.9.0",
     "tqdm>=4.63.0,<=4.67.3",
     "typing_extensions>=4.12.2,<=4.15.0",
-    "xxhash>=1.1.0,<=3.6.0",
+    "xxhash>=1.1.0,<=3.7.0",
     "backoff>=2.2.0,<=2.2.1",
     "rich>=13.7.0,<=15.0.0",
     "tabpfn-common-utils>=0.2.10,<=0.2.19",
