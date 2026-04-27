@@ -49,6 +49,8 @@ DEFAULT_V2_MODEL_PATH = "v2_default"
 DEFAULT_V2_5_MODEL_PATH = "v2.5_default"
 DEFAULT_V3_MODEL_PATH = "v3_default"
 
+ENHANCED_FIT_MODE_MAX_TIME_LIMIT_S = 40 * 60
+
 
 class TabPFNModelSelection:
     """Base class for TabPFN model selection and path handling."""
@@ -232,7 +234,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             Only consulted when `enhanced_fit_mode=True`. Ceiling on the
             enhanced-fit sweep (seconds). Raise for larger datasets where
             the default ~5-minute sweep leaves performance on the table.
-            None falls back to the server-side default (300s).
+            None falls back to the server-side default (300s). Capped at
+            2400 seconds (40 minutes); higher values raise ValueError at fit.
         """
         self.model_path = model_path
         self.n_estimators = n_estimators
@@ -266,6 +269,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
         estimator_param = self._get_estimator_params_with_model_path("classification")
         validate_train_set(X, y)
+        validate_enhanced_fit_mode_time_limit(self.enhanced_fit_mode_time_limit_s)
         X = _clean_text_features(X)
         self._validate_targets_and_classes(y)
 
@@ -503,7 +507,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             Only consulted when `enhanced_fit_mode=True`. Ceiling on the
             enhanced-fit sweep (seconds). Raise for larger datasets where
             the default ~5-minute sweep leaves performance on the table.
-            None falls back to the server-side default (300s).
+            None falls back to the server-side default (300s). Capped at
+            2400 seconds (40 minutes); higher values raise ValueError at fit.
         """
         self.model_path = model_path
         self.n_estimators = n_estimators
@@ -536,6 +541,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
         estimator_param = self._get_estimator_params_with_model_path("regression")
         validate_train_set(X, y)
+        validate_enhanced_fit_mode_time_limit(self.enhanced_fit_mode_time_limit_s)
         self._validate_targets(y)
         X = _clean_text_features(X)
 
@@ -670,6 +676,17 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         y_ = column_or_1d(y, warn=True)
         if sum(pd.isnull(y_)) > 0:
             raise ValueError("Input y contains NaN.")
+
+
+def validate_enhanced_fit_mode_time_limit(time_limit_s: Optional[float]) -> None:
+    if time_limit_s is None:
+        return
+    if time_limit_s > ENHANCED_FIT_MODE_MAX_TIME_LIMIT_S:
+        raise ValueError(
+            f"enhanced_fit_mode_time_limit_s ({time_limit_s}) exceeds the "
+            f"maximum allowed of {ENHANCED_FIT_MODE_MAX_TIME_LIMIT_S} seconds "
+            f"({ENHANCED_FIT_MODE_MAX_TIME_LIMIT_S // 60} minutes)."
+        )
 
 
 def validate_train_set(X: np.ndarray, y: Union[np.ndarray, None] = None):
