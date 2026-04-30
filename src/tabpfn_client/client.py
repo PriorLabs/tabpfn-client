@@ -216,11 +216,12 @@ class ServiceClient(Singleton):
         or f"{server_config.protocol}://{server_config.host}:{server_config.port}"
     )
     fit_path = SERVER_CONFIG["endpoints"]["fit"]["path"]
+    predict_path = SERVER_CONFIG["endpoints"]["predict"]["path"]
     httpx_client = httpx.Client(
         base_url=base_url,
         timeout=TABPFN_CLIENT_TIMEOUT,
         headers={"Prior-Client-Version": get_client_version()},
-        transport=SelectiveHTTP2Transport(http2_paths=[fit_path]),
+        transport=SelectiveHTTP2Transport(http2_paths=[fit_path, predict_path]),
         follow_redirects=True,
     )
     _access_token = None
@@ -273,8 +274,8 @@ class ServiceClient(Singleton):
         task: Literal["classification", "regression"],
         tabpfn_config: Union[dict, None] = None,
         description: str | None = None,
+        force_refit: bool = False,
         client_options: ClientOptions | None = None,
-        is_refitting: bool = False,
     ) -> UUID:
         """
         Upload a train set to server and return the train set UID if successful.
@@ -292,10 +293,10 @@ class ServiceClient(Singleton):
             `paper_version`.
         description: str, optional
             Description of the dataset and task for the server.
+        force_refit: bool, optional
+            Whether to force refit the model even if the model has already been fitted.
         client_options : ClientOptions, optional
-            Per-request options (e.g. timeout, headers) for the fitting API call
-            only. Does not apply to file uploads. Because uploads can run before fitting,
-            this method may return later than the timeout specified.
+            Client specific options (e.g. timeout, headers).
 
         Returns
         -------
@@ -431,7 +432,7 @@ class ServiceClient(Singleton):
                 train_set_upload_id=prepare_resp.train_set_upload_id,
                 task=task,
                 tabpfn_systems=tabpfn_systems,
-                force_refit=is_refitting or force_refit_enabled(),
+                force_refit=force_refit or force_refit_enabled(),
                 tabpfn_config=server_tabpfn_config,
                 enhanced_fit_mode_metric=enhanced_fit_mode_metric,
                 enhanced_fit_time_limit_s=enhanced_fit_time_limit_s,
@@ -506,9 +507,7 @@ class ServiceClient(Singleton):
         predict_params: dict, optional
             Parameters for the predict method.
         client_options : ClientOptions, optional
-            Per-request options (e.g. timeout, headers) for the fitting API call
-            only. Does not apply to file uploads. Because uploads can run before fitting,
-            this method may return later than the timeout specified.
+            Client specific options (e.g. timeout, headers).
 
         Returns
         -------
