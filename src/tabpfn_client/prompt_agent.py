@@ -587,12 +587,18 @@ class PromptAgent:
         for message in greeting_messages:
             cls._print(message)
 
-    @classmethod
-    def prompt_confirm_password_for_user_account_deletion(cls) -> str:
-        warn("You are about to delete your account.")
-        confirm_pass = getpass.getpass("Please confirm by entering your password: ")
+    CONFIRM_DELETION_PHRASE = "confirm deletion"
 
-        return confirm_pass
+    @classmethod
+    def confirm_user_account_deletion(cls) -> bool:
+        warn(
+            "You are about to delete your account. This is permanent and "
+            "cannot be undone."
+        )
+        typed = console.input(
+            f"Type '{cls.CONFIRM_DELETION_PHRASE}' to proceed (anything else cancels): "
+        )
+        return typed.strip().lower() == cls.CONFIRM_DELETION_PHRASE
 
     @classmethod
     def prompt_account_deleted(cls):

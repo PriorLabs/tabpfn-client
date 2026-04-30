@@ -231,9 +231,12 @@ class UserDataClient(ServiceClientWrapper, Singleton):
         # local import to avoid circular import
         from tabpfn_client.prompt_agent import PromptAgent
 
-        confirm_pass = PromptAgent.prompt_confirm_password_for_user_account_deletion()
+        if not PromptAgent.confirm_user_account_deletion():
+            logging.info("Account deletion cancelled — confirmation phrase not entered.")
+            return
+
         try:
-            ServiceClient.delete_user_account(confirm_pass)
+            ServiceClient.delete_user_account()
         except RuntimeError as e:
             logging.error(f"Failed to delete user account: {e}")
             raise e
