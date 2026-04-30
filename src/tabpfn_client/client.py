@@ -216,11 +216,12 @@ class ServiceClient(Singleton):
         or f"{server_config.protocol}://{server_config.host}:{server_config.port}"
     )
     fit_path = SERVER_CONFIG["endpoints"]["fit"]["path"]
+    predict_path = SERVER_CONFIG["endpoints"]["predict"]["path"]
     httpx_client = httpx.Client(
         base_url=base_url,
         timeout=TABPFN_CLIENT_TIMEOUT,
         headers={"Prior-Client-Version": get_client_version()},
-        transport=SelectiveHTTP2Transport(http2_paths=[fit_path]),
+        transport=SelectiveHTTP2Transport(http2_paths=[fit_path, predict_path]),
         follow_redirects=True,
     )
     _access_token = None
