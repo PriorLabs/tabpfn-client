@@ -433,7 +433,7 @@ class ServiceClient(Singleton):
             else None
         )
 
-        systems = List[TabPFNSystem] = []
+        systems: List[TabPFNSystem] = []
         for name in tabpfn_systems:
             if name == "text":
                 systems.append(TextSystem())
