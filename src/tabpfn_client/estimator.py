@@ -513,9 +513,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         force_refit: bool, default=False
             Whether to force refit the model even if the model has already been fitted.
         client_options : ClientOptions, default=None
-            Per-request options (e.g. timeout, headers) for the fitting API call
-            only. Does not apply to file uploads. Because uploads can run before fitting,
-            this method may return later than the timeout specified.
+            Client specific options (e.g. timeout, headers).
         """
         self.model_path = model_path
         self.n_estimators = n_estimators

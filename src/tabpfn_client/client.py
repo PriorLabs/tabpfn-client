@@ -296,9 +296,7 @@ class ServiceClient(Singleton):
         force_refit: bool, optional
             Whether to force refit the model even if the model has already been fitted.
         client_options : ClientOptions, optional
-            Per-request options (e.g. timeout, headers) for the fitting API call
-            only. Does not apply to file uploads. Because uploads can run before fitting,
-            this method may return later than the timeout specified.
+            Client specific options (e.g. timeout, headers).
 
         Returns
         -------
@@ -509,9 +507,7 @@ class ServiceClient(Singleton):
         predict_params: dict, optional
             Parameters for the predict method.
         client_options : ClientOptions, optional
-            Per-request options (e.g. timeout, headers) for the fitting API call
-            only. Does not apply to file uploads. Because uploads can run before fitting,
-            this method may return later than the timeout specified.
+            Client specific options (e.g. timeout, headers).
 
         Returns
         -------
