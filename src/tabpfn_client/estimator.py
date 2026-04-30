@@ -169,6 +169,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         enhanced_fit_mode: bool = False,
         enhanced_fit_mode_metric: Optional[str] = None,
         enhanced_fit_mode_time_limit_s: Optional[float] = None,
+        force_refit: bool = False,
+        client_options: ClientOptions | None = None,
     ):
         """Construct a TabPFN classifier.
 
@@ -250,6 +252,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.enhanced_fit_mode = enhanced_fit_mode
         self.enhanced_fit_mode_metric = enhanced_fit_mode_metric
         self.enhanced_fit_mode_time_limit_s = enhanced_fit_mode_time_limit_s
+        self.force_refit = force_refit
+        self.client_options = client_options or ClientOptions()
+
         self.last_trace_id = None
         self.last_fitted_train_set_id = None
         self.last_train_X = None
@@ -262,7 +267,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         X: pd.DataFrame | np.ndarray,
         y: pd.Series | np.ndarray,
         description: str | None = None,
-        client_options: ClientOptions | None = None,
     ):
         # assert init() is called
         init()
@@ -274,11 +278,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self._validate_targets_and_classes(y)
 
         if Config.use_server:
-            client_options = client_options or ClientOptions()
-            if "sentry-trace" not in client_options.headers:
-                client_options.headers["sentry-trace"] = uuid4().hex
+            if "sentry-trace" not in self.client_options.headers:
+                self.client_options.headers["sentry-trace"] = uuid4().hex
 
-            self.last_trace_id = client_options.headers["sentry-trace"]
+            self.last_trace_id = self.client_options.headers["sentry-trace"]
             self.last_train_set_description = description
 
             def fit_task() -> UUID:
@@ -288,7 +291,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                     task="classification",
                     tabpfn_config=estimator_param,
                     description=description,
-                    client_options=client_options,
+                    client_options=self.client_options,
                 )
 
             self.last_fitted_train_set_id = run_task(fit_task, "Fitting")
@@ -301,11 +304,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             )
         return self
 
-    def predict(
-        self,
-        X,
-        client_options: ClientOptions | None = None,
-    ):
+    def predict(self, X):
         """Predict class labels for samples in X.
 
         Args:
@@ -314,17 +313,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         Returns:
             The predicted class labels.
         """
-        return self._predict(
-            X,
-            output_type="preds",
-            client_options=client_options,
-        )
+        return self._predict(X, output_type="preds")
 
-    def predict_proba(
-        self,
-        X,
-        client_options: ClientOptions | None = None,
-    ):
+    def predict_proba(self, X):
         """Predict class probabilities for X.
 
         Args:
@@ -333,26 +324,20 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         Returns:
             The class probabilities of the input samples.
         """
-        return self._predict(
-            X,
-            output_type="probas",
-            client_options=client_options,
-        )
+        return self._predict(X, output_type="probas")
 
     def _predict(
         self,
         X,
         output_type,
-        client_options: ClientOptions | None = None,
     ) -> dict[str, np.ndarray]:
         check_is_fitted(self)
         estimator_param = self._get_estimator_params_with_model_path("classification")
         validate_test_set(X, output_type, estimator_param["model_path"])
         X = _clean_text_features(X)
 
-        client_options = client_options or ClientOptions()
-        if "sentry-trace" not in client_options.headers:
-            client_options.headers["sentry-trace"] = self.last_trace_id
+        if "sentry-trace" not in self.client_options.headers:
+            self.client_options.headers["sentry-trace"] = self.last_trace_id
 
         def predict_task() -> PredictionResult:
             last_exc = None
@@ -369,7 +354,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                         task="classification",
                         tabpfn_config=estimator_param,
                         predict_params={"output_type": output_type},
-                        client_options=client_options,
+                        client_options=self.client_options,
                     )
                 except NeedsRefittingError as exc:
                     last_exc = exc
@@ -380,7 +365,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                         task="classification",
                         tabpfn_config=estimator_param,
                         description=self.last_train_set_description,
-                        client_options=client_options,
+                        client_options=self.client_options,
                         is_refitting=True,
                     )
 
@@ -451,6 +436,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         enhanced_fit_mode: bool = False,
         enhanced_fit_mode_metric: Optional[str] = None,
         enhanced_fit_mode_time_limit_s: Optional[float] = None,
+        force_refit: bool = False,
+        client_options: ClientOptions | None = None,
     ):
         """Construct a TabPFN regressor.
 
@@ -522,6 +509,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.enhanced_fit_mode = enhanced_fit_mode
         self.enhanced_fit_mode_metric = enhanced_fit_mode_metric
         self.enhanced_fit_mode_time_limit_s = enhanced_fit_mode_time_limit_s
+        self.force_refit = force_refit
+        self.client_options = client_options or ClientOptions()
+
         self.last_trace_id = None
         self.last_fitted_train_set_id = None
         self.last_train_X = None
@@ -534,7 +524,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         X: pd.DataFrame | np.ndarray,
         y: pd.Series | np.ndarray,
         description: str | None = None,
-        client_options: ClientOptions | None = None,
     ):
         # assert init() is called
         init()
@@ -546,11 +535,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         X = _clean_text_features(X)
 
         if Config.use_server:
-            client_options = client_options or ClientOptions()
-            if "sentry-trace" not in client_options.headers:
-                client_options.headers["sentry-trace"] = uuid4().hex
+            if "sentry-trace" not in self.client_options.headers:
+                self.client_options.headers["sentry-trace"] = uuid4().hex
 
-            self.last_trace_id = client_options.headers["sentry-trace"]
+            self.last_trace_id = self.client_options.headers["sentry-trace"]
             self.last_train_set_description = description
 
             def fit_task() -> UUID:
@@ -560,7 +548,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     task="regression",
                     tabpfn_config=estimator_param,
                     description=description,
-                    client_options=client_options,
+                    client_options=self.client_options,
                 )
 
             self.last_fitted_train_set_id = run_task(fit_task, "Fitting")
@@ -581,7 +569,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             "mean", "median", "mode", "quantiles", "full", "main"
         ] = "mean",
         quantiles: Optional[list[float]] = None,
-        client_options: ClientOptions | None = None,
     ) -> Union[np.ndarray, list[np.ndarray], dict[str, np.ndarray]]:
         """Predict regression target for X.
 
@@ -617,9 +604,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             "quantiles": quantiles,
         }
 
-        client_options = client_options or ClientOptions()
-        if "sentry-trace" not in client_options.headers:
-            client_options.headers["sentry-trace"] = self.last_trace_id
+        if "sentry-trace" not in self.client_options.headers:
+            self.client_options.headers["sentry-trace"] = self.last_trace_id
 
         def predict_task() -> PredictionResult:
             last_exc = None
@@ -636,7 +622,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                         task="regression",
                         tabpfn_config=estimator_param,
                         predict_params=predict_params,
-                        client_options=client_options,
+                        client_options=self.client_options,
                     )
                 except NeedsRefittingError as exc:
                     last_exc = exc
@@ -647,7 +633,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                         task="regression",
                         tabpfn_config=estimator_param,
                         description=self.last_train_set_description,
-                        client_options=client_options,
+                        client_options=self.client_options,
                         is_refitting=True,
                     )
 
