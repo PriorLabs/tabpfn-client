@@ -18,7 +18,7 @@ import time
 import traceback
 import warnings
 from pydantic import BaseModel, ValidationError
-from typing import Any, Callable, Dict, Literal, Union, cast
+from typing import Any, Callable, Dict, Literal, Union, cast, List
 
 import google_crc32c
 
@@ -56,6 +56,10 @@ from tabpfn_client.api_models import (
     PredictResponse,
     TaskConfig,
     ErrorResponse,
+    TabPFNSystem,
+    TextSystem,
+    PreprocessingSystem,
+    EnhancedSystem,
 )
 
 logger = logging.getLogger(__name__)
@@ -429,15 +433,27 @@ class ServiceClient(Singleton):
             else None
         )
 
+        systems = List[TabPFNSystem] = []
+        for name in tabpfn_systems:
+            if name == "text":
+                systems.append(TextSystem())
+            elif name == "preprocessing":
+                systems.append(PreprocessingSystem())
+            elif name == "enhanced":
+                systems.append(
+                    EnhancedSystem(
+                        metric=enhanced_fit_mode_metric,
+                        time_limit_s=enhanced_fit_time_limit_s,
+                        tabpfn_config=server_tabpfn_config,
+                    )
+                )
+
         res = cls._fit(
             req=FitRequest(
                 train_set_upload_id=prepare_resp.train_set_upload_id,
                 task=task,
-                tabpfn_systems=tabpfn_systems,
+                tabpfn_systems=systems,
                 force_refit=force_refit or force_refit_enabled(),
-                tabpfn_config=server_tabpfn_config,
-                enhanced_fit_mode_metric=enhanced_fit_mode_metric,
-                enhanced_fit_time_limit_s=enhanced_fit_time_limit_s,
             ),
             timeout=client_options.timeout,
             headers=client_options.headers,
