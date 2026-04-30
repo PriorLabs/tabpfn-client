@@ -291,6 +291,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                     task="classification",
                     tabpfn_config=estimator_param,
                     description=description,
+                    force_refit=self.force_refit,
                     client_options=self.client_options,
                 )
 
@@ -365,8 +366,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                         task="classification",
                         tabpfn_config=estimator_param,
                         description=self.last_train_set_description,
+                        force_refit=True,
                         client_options=self.client_options,
-                        is_refitting=True,
                     )
 
         result = run_task(predict_task, "Predicting")
@@ -496,6 +497,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             the default ~5-minute sweep leaves performance on the table.
             None falls back to the server-side default (300s). Capped at
             2400 seconds (40 minutes); higher values raise ValueError at fit.
+        force_refit: bool, default=False
+            Whether to force refit the model even if the model has already been fitted.
+        client_options : ClientOptions, default=None
+            Per-request options (e.g. timeout, headers) for the fitting API call
+            only. Does not apply to file uploads. Because uploads can run before fitting,
+            this method may return later than the timeout specified.
         """
         self.model_path = model_path
         self.n_estimators = n_estimators
@@ -548,6 +555,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     task="regression",
                     tabpfn_config=estimator_param,
                     description=description,
+                    force_refit=self.force_refit,
                     client_options=self.client_options,
                 )
 
@@ -633,8 +641,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                         task="regression",
                         tabpfn_config=estimator_param,
                         description=self.last_train_set_description,
+                        force_refit=True,
                         client_options=self.client_options,
-                        is_refitting=True,
                     )
 
         result = run_task(predict_task, "Predicting")

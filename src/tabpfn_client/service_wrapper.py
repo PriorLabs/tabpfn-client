@@ -261,8 +261,8 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         task: Literal["classification", "regression"],
         tabpfn_config=None,
         description: str | None = None,
+        force_refit: bool = False,
         client_options: ClientOptions | None = None,
-        is_refitting: bool = False,
     ) -> UUID:
         return ServiceClient.fit(
             X,
@@ -270,8 +270,8 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             task=task,
             tabpfn_config=tabpfn_config,
             description=description,
+            force_refit=force_refit,
             client_options=client_options,
-            is_refitting=is_refitting,
         )
 
     @classmethod

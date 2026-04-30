@@ -274,8 +274,8 @@ class ServiceClient(Singleton):
         task: Literal["classification", "regression"],
         tabpfn_config: Union[dict, None] = None,
         description: str | None = None,
+        force_refit: bool = False,
         client_options: ClientOptions | None = None,
-        is_refitting: bool = False,
     ) -> UUID:
         """
         Upload a train set to server and return the train set UID if successful.
@@ -293,6 +293,8 @@ class ServiceClient(Singleton):
             `paper_version`.
         description: str, optional
             Description of the dataset and task for the server.
+        force_refit: bool, optional
+            Whether to force refit the model even if the model has already been fitted.
         client_options : ClientOptions, optional
             Per-request options (e.g. timeout, headers) for the fitting API call
             only. Does not apply to file uploads. Because uploads can run before fitting,
@@ -432,7 +434,7 @@ class ServiceClient(Singleton):
                 train_set_upload_id=prepare_resp.train_set_upload_id,
                 task=task,
                 tabpfn_systems=tabpfn_systems,
-                force_refit=is_refitting or force_refit_enabled(),
+                force_refit=force_refit or force_refit_enabled(),
                 tabpfn_config=server_tabpfn_config,
                 enhanced_fit_mode_metric=enhanced_fit_mode_metric,
                 enhanced_fit_time_limit_s=enhanced_fit_time_limit_s,
