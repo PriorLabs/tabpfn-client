@@ -128,6 +128,9 @@ class TabPFNModelSelection:
         """
         estimator_param = self.get_params()
         estimator_param["model_path"] = self._model_name_to_path(task, self.model_path)
+        # Client-side concerns — passed separately to InferenceClient, not part of server config.
+        estimator_param.pop("client_options", None)
+        estimator_param.pop("force_refit", None)
         return estimator_param
 
 
