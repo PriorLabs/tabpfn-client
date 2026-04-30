@@ -261,6 +261,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.last_train_y = None
         self.last_meta = {}
         self.last_train_set_description = None
+        self.fit_count = 0
 
     def fit(
         self,
@@ -278,7 +279,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self._validate_targets_and_classes(y)
 
         if Config.use_server:
-            if "sentry-trace" not in self.client_options.headers:
+            # Create a new sentry trace at every fit, provided that:
+            # - The user has not explicitly set a sentry-trace header.
+            # - In any case if we're going to refit.
+            # - In any case if we have already called .fit() on this instance.
+            if (
+                self.force_refit
+                or self.fit_count > 0
+                or "sentry-trace" not in self.client_options.headers
+            ):
                 self.client_options.headers["sentry-trace"] = uuid4().hex
 
             self.last_trace_id = self.client_options.headers["sentry-trace"]
@@ -299,6 +308,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             self.last_train_X = X
             self.last_train_y = y
             self.fitted_ = True
+            self.fit_count += 1
         else:
             raise NotImplementedError(
                 "Only server mode is supported at the moment for init(use_server=False)"
@@ -525,6 +535,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.last_train_y = None
         self.last_meta = {}
         self.last_train_set_description = None
+        self.fit_count = 0
 
     def fit(
         self,
@@ -542,10 +553,19 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         X = _clean_text_features(X)
 
         if Config.use_server:
-            if "sentry-trace" not in self.client_options.headers:
+            # Create a new sentry trace at every fit, provided that:
+            # - The user has not explicitly set a sentry-trace header.
+            # - In any case if we're going to refit.
+            # - In any case if we have already called .fit() on this instance.
+            if (
+                self.force_refit
+                or self.fit_count > 0
+                or "sentry-trace" not in self.client_options.headers
+            ):
                 self.client_options.headers["sentry-trace"] = uuid4().hex
 
             self.last_trace_id = self.client_options.headers["sentry-trace"]
+
             self.last_train_set_description = description
 
             def fit_task() -> UUID:
@@ -563,6 +583,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             self.last_train_X = X
             self.last_train_y = y
             self.fitted_ = True
+            self.fit_count += 1
         else:
             raise NotImplementedError(
                 "Only server mode is supported at the moment for init(use_server=False)"
