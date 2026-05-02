@@ -232,7 +232,7 @@ class UserDataClient(ServiceClientWrapper, Singleton):
         from tabpfn_client.prompt_agent import PromptAgent
 
         if not PromptAgent.confirm_user_account_deletion():
-            logging.info("Account deletion cancelled — confirmation phrase not entered.")
+            logger.info("Account deletion cancelled — confirmation phrase not entered.")
             return
 
         try:
