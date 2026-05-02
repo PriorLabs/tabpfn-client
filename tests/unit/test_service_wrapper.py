@@ -259,37 +259,44 @@ class TestUserDataClient(unittest.TestCase):
         self.assertEqual(["dummy_uid"], UserDataClient.delete_all_datasets())
 
     @with_mock_server()
-    @patch(
-        "tabpfn_client.prompt_agent.PromptAgent.prompt_confirm_password_for_user_account_deletion"
-    )
-    def test_delete_user_account_with_valid_password(
-        self, mock_server, mock_prompt_confirm_password
+    @patch("tabpfn_client.prompt_agent.PromptAgent.confirm_user_account_deletion")
+    def test_delete_user_account_when_confirmed(
+        self, mock_server, mock_confirm_deletion
     ):
-        # mock delete_user_account response
-        mock_server.router.delete(
+        delete_route = mock_server.router.delete(
             mock_server.endpoints.delete_user_account.path
         ).respond(200)
+        mock_confirm_deletion.return_value = True
 
-        # mock password prompting
-        mock_prompt_confirm_password.return_value = "dummy_password"
-
-        # assert no exception is raised
         UserDataClient.delete_user_account()
 
+        # The wire call must NOT include confirm_password — the param is gone
+        # from the SDK as of this PR. That's the whole point of the change.
+        self.assertEqual(1, delete_route.call_count)
+        self.assertNotIn(b"confirm_password", delete_route.calls.last.request.url.query)
+
     @with_mock_server()
-    @patch(
-        "tabpfn_client.prompt_agent.PromptAgent.prompt_confirm_password_for_user_account_deletion"
-    )
-    def test_delete_user_account_with_invalid_password(
-        self, mock_server, mock_prompt_confirm_password
+    @patch("tabpfn_client.prompt_agent.PromptAgent.confirm_user_account_deletion")
+    def test_delete_user_account_when_cancelled(
+        self, mock_server, mock_confirm_deletion
     ):
-        # mock delete_user_account response
+        # Deliberately do NOT register a delete route. If the SDK calls the
+        # endpoint despite a declined confirmation, respx will raise on the
+        # unmocked request.
+        mock_confirm_deletion.return_value = False
+
+        UserDataClient.delete_user_account()
+
+        self.assertEqual(0, mock_server.router.calls.call_count)
+
+    @with_mock_server()
+    @patch("tabpfn_client.prompt_agent.PromptAgent.confirm_user_account_deletion")
+    def test_delete_user_account_propagates_server_error(
+        self, mock_server, mock_confirm_deletion
+    ):
         mock_server.router.delete(
             mock_server.endpoints.delete_user_account.path
-        ).respond(400)
+        ).respond(500)
+        mock_confirm_deletion.return_value = True
 
-        # mock password prompting
-        mock_prompt_confirm_password.return_value = "dummy_password"
-
-        # assert exception is raised
         self.assertRaises(RuntimeError, UserDataClient.delete_user_account)
