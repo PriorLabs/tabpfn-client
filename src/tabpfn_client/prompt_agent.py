@@ -598,7 +598,7 @@ class PromptAgent:
         typed = console.input(
             f"Type '{cls.CONFIRM_DELETION_PHRASE}' to proceed (anything else cancels): "
         )
-        return typed.strip().lower() == cls.CONFIRM_DELETION_PHRASE
+        return typed.strip().lower() == cls.CONFIRM_DELETION_PHRASE.lower()
 
     @classmethod
     def prompt_account_deleted(cls):
