@@ -49,6 +49,11 @@ DEFAULT_V2_MODEL_PATH = "v2_default"
 DEFAULT_V2_5_MODEL_PATH = "v2.5_default"
 DEFAULT_V3_MODEL_PATH = "v3_default"
 
+# Sentinel values for `model_path` that defer model selection to the server.
+# "auto" is the canonical name (matches the OSS tabpfn package); "default"
+# is kept as a backward-compatible alias.
+_AUTO_MODEL_PATH_ALIASES = frozenset({"auto", "default"})
+
 ENHANCED_FIT_MODE_MAX_TIME_LIMIT_S = 40 * 60
 
 
@@ -64,7 +69,10 @@ class TabPFNModelSelection:
 
     @classmethod
     def _validate_model_name(cls, model_name: str) -> None:
-        if model_name != "default" and model_name not in cls._AVAILABLE_MODELS:
+        if (
+            model_name not in _AUTO_MODEL_PATH_ALIASES
+            and model_name not in cls._AVAILABLE_MODELS
+        ):
             raise ValueError(
                 f"Invalid model name: {model_name}. "
                 f"Available models are: {cls.list_available_models()}"
@@ -76,8 +84,8 @@ class TabPFNModelSelection:
     ) -> Optional[str]:
         cls._validate_model_name(model_name)
         model_name_task = "classifier" if task == "classification" else "regressor"
-        # Let the server handle the default model. This enables v2.5 as well.
-        if model_name == "default":
+        # Let the server pick the default model when the caller defers to us.
+        if model_name in _AUTO_MODEL_PATH_ALIASES:
             return None
         if V_3_IDENTIFIER in model_name:
             return f"tabpfn-{V_3_IDENTIFIER}-{model_name_task}-{model_name}.ckpt"
@@ -147,6 +155,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         "v2.5_real",
         "v2.5_variant",
         DEFAULT_V2_MODEL_PATH,
+        "auto",
+        # Deprecated alias for "auto"; kept for backward compat with users and
+        # downstream packages (e.g. tabpfn-time-series) that read this list.
         "default",
         "gn2p4bpt",
         "llderlii",
@@ -157,7 +168,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
     def __init__(
         self,
-        model_path: str = "default",
+        model_path: str = "auto",
         n_estimators: int = 8,
         softmax_temperature: float = 0.9,
         balance_probabilities: bool = False,
@@ -166,7 +177,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         inference_precision: Literal["autocast", "auto"] = "auto",
         random_state: Optional[
             Union[int, np.random.RandomState, np.random.Generator]
-        ] = None,
+        ] = 0,
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
         enhanced_fit_mode: bool = False,
@@ -183,8 +194,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
         Parameters
         ----------
-        model_path: str, default="default"
-            The name of the model to use.
+        model_path: str, default="auto"
+            The name of the model to use. "auto" lets the server pick the
+            latest default model; "default" is accepted as a backward-compatible
+            alias. Use `create_default_for_version()` to pin to a specific
+            major version.
         n_estimators: int, default=8
             The number of estimators in the TabPFN ensemble. We aggregate the
              predictions of `n_estimators`-many forward passes of TabPFN. Each forward
@@ -211,11 +225,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             have been pre-trained on a specific range of input data. If the input data
             is outside of this range, the model may not perform well. You may ignore
             our limits to use the model on data outside the pre-training range.
+            Defaults to True (vs False in the OSS package): the server enforces its
+            own capacity limits, so the OSS check is redundant and stricter.
         inference_precision: "autocast" or "auto", default="auto"
             The precision to use for inference. This can dramatically affect the
             speed and reproducibility of the inference.
-        random_state: int or RandomState or RandomGenerator or None, default=None
-            Controls the randomness of the model. Pass an int for reproducible results.
+        random_state: int or RandomState or RandomGenerator or None, default=0
+            Controls the randomness of the model. Pass an int for reproducible
+            results; pass `None` to use a fresh random seed each run.
         inference_config: dict or None, default=None
             Additional advanced arguments for model interface. See the doc of InferenceConfig
             in the tabpfn package for more details. For the client, the inference_config and the
@@ -427,6 +444,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         "v2.5_small-samples",
         "v2.5_variant",
         DEFAULT_V2_MODEL_PATH,
+        "auto",
+        # Deprecated alias for "auto"; kept for backward compat with users and
+        # downstream packages (e.g. tabpfn-time-series) that read this list.
         "default",
         "2noar4o2",
         "5wof9ojf",
@@ -436,7 +456,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
     def __init__(
         self,
-        model_path: str = "default",
+        model_path: str = "auto",
         n_estimators: int = 8,
         softmax_temperature: float = 0.9,
         average_before_softmax: bool = False,
@@ -444,7 +464,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         inference_precision: Literal["autocast", "auto"] = "auto",
         random_state: Optional[
             Union[int, np.random.RandomState, np.random.Generator]
-        ] = None,
+        ] = 0,
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
         enhanced_fit_mode: bool = False,
@@ -461,8 +481,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
         Parameters
         ----------
-        model_path: str, default="default"
-            The name to the model to use.
+        model_path: str, default="auto"
+            The name of the model to use. "auto" lets the server pick the
+            latest default model; "default" is accepted as a backward-compatible
+            alias. Use `create_default_for_version()` to pin to a specific
+            major version.
         n_estimators: int, default=8
             The number of estimators in the TabPFN ensemble. We aggregate the
              predictions of `n_estimators`-many forward passes of TabPFN. Each forward
@@ -486,8 +509,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         inference_precision: "autocast" or "auto", default="auto"
             The precision to use for inference. This can dramatically affect the
             speed and reproducibility of the inference.
-        random_state: int or RandomState or RandomGenerator or None, default=None
-            Controls the randomness of the model. Pass an int for reproducible results.
+        random_state: int or RandomState or RandomGenerator or None, default=0
+            Controls the randomness of the model. Pass an int for reproducible
+            results; pass `None` to use a fresh random seed each run.
         inference_config: dict or None, default=None
             Additional advanced arguments for model interface. See the doc of InferenceConfig
             in the tabpfn package for more details. For the client, the inference_config and the
