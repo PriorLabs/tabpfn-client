@@ -893,7 +893,7 @@ class TestTabPFNModelSelection(unittest.TestCase):
             "v2.5_real",
             "v2.5_variant",
             "v2_default",
-            "default",
+            "auto",
             "gn2p4bpt",
             "llderlii",
             "od3j1g5m",
@@ -918,6 +918,8 @@ class TestTabPFNModelSelection(unittest.TestCase):
 
     def test_validate_model_name_with_valid_model_passes(self):
         # Should not raise any exception
+        TabPFNClassifier._validate_model_name("auto")
+        # "default" remains accepted as a backward-compatible alias for "auto".
         TabPFNClassifier._validate_model_name("default")
         TabPFNClassifier._validate_model_name("gn2p4bpt")
 
@@ -926,11 +928,13 @@ class TestTabPFNModelSelection(unittest.TestCase):
             TabPFNClassifier._validate_model_name("invalid_model")
 
     def test_model_name_to_path_returns_expected_path(self):
-        # Test default model path. Server decides.
-        expected_default_path = None
-        self.assertEqual(
+        # Test auto model path. Server decides.
+        self.assertIsNone(
+            TabPFNClassifier._model_name_to_path("classification", "auto"),
+        )
+        # "default" alias resolves the same way.
+        self.assertIsNone(
             TabPFNClassifier._model_name_to_path("classification", "default"),
-            expected_default_path,
         )
 
         # Test specific model path
