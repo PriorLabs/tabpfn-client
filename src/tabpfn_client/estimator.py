@@ -170,7 +170,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         softmax_temperature: float = 0.9,
         balance_probabilities: bool = False,
         average_before_softmax: bool = False,
-        ignore_pretraining_limits: bool = False,
+        ignore_pretraining_limits: bool = True,
         inference_precision: Literal["autocast", "auto"] = "auto",
         random_state: Optional[
             Union[int, np.random.RandomState, np.random.Generator]
@@ -217,11 +217,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
              predictive performance when there are many classes or when calibrating the
              model's confidence. This is only applied when predicting during a
              post-processing.
-        ignore_pretraining_limits: bool, default=False
+        ignore_pretraining_limits: bool, default=True
             Whether to ignore the pre-training limits of the model. The TabPFN models
             have been pre-trained on a specific range of input data. If the input data
             is outside of this range, the model may not perform well. You may ignore
             our limits to use the model on data outside the pre-training range.
+            Defaults to True (vs False in the OSS package): the server enforces its
+            own capacity limits, so the OSS check is redundant and stricter.
         inference_precision: "autocast" or "auto", default="auto"
             The precision to use for inference. This can dramatically affect the
             speed and reproducibility of the inference.
