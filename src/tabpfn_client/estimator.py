@@ -156,6 +156,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         "v2.5_variant",
         DEFAULT_V2_MODEL_PATH,
         "auto",
+        # Deprecated alias for "auto"; kept for backward compat with users and
+        # downstream packages (e.g. tabpfn-time-series) that read this list.
+        "default",
         "gn2p4bpt",
         "llderlii",
         "od3j1g5m",
@@ -442,6 +445,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         "v2.5_variant",
         DEFAULT_V2_MODEL_PATH,
         "auto",
+        # Deprecated alias for "auto"; kept for backward compat with users and
+        # downstream packages (e.g. tabpfn-time-series) that read this list.
+        "default",
         "2noar4o2",
         "5wof9ojf",
         "09gpqh39",

@@ -894,6 +894,7 @@ class TestTabPFNModelSelection(unittest.TestCase):
             "v2.5_variant",
             "v2_default",
             "auto",
+            "default",
             "gn2p4bpt",
             "llderlii",
             "od3j1g5m",
