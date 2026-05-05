@@ -851,6 +851,7 @@ class TestTabPFNModelSelection(unittest.TestCase):
             "v2.5_small-samples",
             "v2.5_variant",
             "v2_default",
+            "auto",
             "default",
             "2noar4o2",
             "5wof9ojf",
@@ -875,6 +876,8 @@ class TestTabPFNModelSelection(unittest.TestCase):
 
     def test_validate_model_name_with_valid_model_passes(self):
         # Should not raise any exception
+        TabPFNRegressor._validate_model_name("auto")
+        # "default" remains accepted as a backward-compatible alias for "auto".
         TabPFNRegressor._validate_model_name("default")
         TabPFNRegressor._validate_model_name("2noar4o2")
 
@@ -883,11 +886,13 @@ class TestTabPFNModelSelection(unittest.TestCase):
             TabPFNRegressor._validate_model_name("invalid_model")
 
     def test_model_name_to_path_returns_expected_path(self):
-        # Test default model path. Server decides.
-        expected_default_path = None
-        self.assertEqual(
+        # Test auto model path. Server decides.
+        self.assertIsNone(
+            TabPFNRegressor._model_name_to_path("regression", "auto"),
+        )
+        # "default" alias resolves the same way.
+        self.assertIsNone(
             TabPFNRegressor._model_name_to_path("regression", "default"),
-            expected_default_path,
         )
 
         # Test specific model path

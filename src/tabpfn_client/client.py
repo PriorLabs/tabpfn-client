@@ -1269,10 +1269,9 @@ class ServiceClient(Singleton):
         return response.json()["deleted_dataset_uids"]
 
     @classmethod
-    def delete_user_account(cls, confirm_pass: str) -> None:
+    def delete_user_account(cls) -> None:
         response = cls.httpx_client.delete(
             cls.server_endpoints.delete_user_account.path,
-            params={"confirm_password": confirm_pass},
         )
 
         cls._validate_response(response, "delete_user_account")
