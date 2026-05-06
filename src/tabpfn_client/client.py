@@ -388,27 +388,24 @@ class ServiceClient(Singleton):
                     raise
 
         tabpfn_systems = ["preprocessing", "text"]
+        effort = tabpfn_config.get("effort") if tabpfn_config else None
         if tabpfn_config:
             if tabpfn_config.get("paper_version") is True:
                 tabpfn_systems = []
-            elif tabpfn_config.get("enhanced_fit_mode") is True:
+            elif effort is not None:
                 # Enhanced mode runs on top of the base systems rather than
                 # replacing them — keep preprocessing + text alongside it.
                 tabpfn_systems = ["preprocessing", "text", "enhanced"]
 
-        # `enhanced_fit_mode_metric` and `enhanced_fit_mode_time_limit_s`
-        # are top-level FitRequest fields on the server (siblings to
-        # `tabpfn_systems`), not part of `tabpfn_config`. Lift them out
-        # before stripping the rest of the client-only keys. The server
-        # field drops the `mode_` infix (`enhanced_fit_time_limit_s`);
-        # units are seconds on both sides, no conversion.
-        enhanced_fit_mode_metric = (
-            tabpfn_config.get("enhanced_fit_mode_metric") if tabpfn_config else None
+        # `effort`, `effort_timeout_s`, `effort_metric` are top-level
+        # FitRequest fields on the server (siblings to `tabpfn_systems`),
+        # not part of `tabpfn_config`. Lift them out before stripping the
+        # rest of the client-only keys.
+        effort_timeout_s = (
+            tabpfn_config.get("effort_timeout_s") if tabpfn_config else None
         )
-        enhanced_fit_time_limit_s = (
-            tabpfn_config.get("enhanced_fit_mode_time_limit_s")
-            if tabpfn_config
-            else None
+        effort_metric = (
+            tabpfn_config.get("effort_metric") if tabpfn_config else None
         )
 
         # Strip client-only keys that the server does not expect (mirrors
@@ -420,9 +417,9 @@ class ServiceClient(Singleton):
                 if k
                 not in {
                     "paper_version",
-                    "enhanced_fit_mode",
-                    "enhanced_fit_mode_metric",
-                    "enhanced_fit_mode_time_limit_s",
+                    "effort",
+                    "effort_timeout_s",
+                    "effort_metric",
                 }
             }
             if tabpfn_config is not None
@@ -436,8 +433,9 @@ class ServiceClient(Singleton):
                 tabpfn_systems=tabpfn_systems,
                 force_refit=force_refit or force_refit_enabled(),
                 tabpfn_config=server_tabpfn_config,
-                enhanced_fit_mode_metric=enhanced_fit_mode_metric,
-                enhanced_fit_time_limit_s=enhanced_fit_time_limit_s,
+                effort=effort,
+                effort_timeout_s=effort_timeout_s,
+                effort_metric=effort_metric,
             ),
             timeout=client_options.timeout,
             headers=client_options.headers,
@@ -584,9 +582,9 @@ class ServiceClient(Singleton):
                 if k
                 not in {
                     "paper_version",
-                    "enhanced_fit_mode",
-                    "enhanced_fit_mode_metric",
-                    "enhanced_fit_mode_time_limit_s",
+                    "effort",
+                    "effort_timeout_s",
+                    "effort_metric",
                 }
             }
 

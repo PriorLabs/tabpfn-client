@@ -54,7 +54,10 @@ DEFAULT_V3_MODEL_PATH = "v3_default"
 # is kept as a backward-compatible alias.
 _AUTO_MODEL_PATH_ALIASES = frozenset({"auto", "default"})
 
-ENHANCED_FIT_MODE_MAX_TIME_LIMIT_S = 40 * 60
+EFFORT_TIMEOUT_MAX_S = 40 * 60
+
+EffortLevel = Literal["medium", "high"]
+_VALID_EFFORT_LEVELS = frozenset({"medium", "high"})
 
 
 class TabPFNModelSelection:
@@ -180,9 +183,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         ] = 0,
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
-        enhanced_fit_mode: bool = False,
-        enhanced_fit_mode_metric: Optional[str] = None,
-        enhanced_fit_mode_time_limit_s: Optional[float] = None,
+        effort: Optional[EffortLevel] = None,
+        effort_timeout_s: Optional[float] = None,
+        effort_metric: Optional[str] = None,
         force_refit: bool = False,
         client_options: ClientOptions | None = None,
     ):
@@ -240,24 +243,33 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
-        enhanced_fit_mode: bool, default=False
-            If True, trades off fit time for precision by running an
-            automated feature-engineering pipeline on top of TabPFN during
-            fit.
-        enhanced_fit_mode_metric: str or None, default=None
-            Only consulted when `enhanced_fit_mode=True`. Drives model
-            selection + ensemble weighting during the enhanced-fit sweep
-            (e.g. "accuracy"/"log_loss"/"roc_auc"/"balanced_accuracy"/
-            "f1" for classification). None falls back to the sweep's
-            default for the problem type. Distinct from the local
-            `eval_metric`/`tuning_config` knobs used for decision-threshold
-            tuning on the standalone TabPFN classifier.
-        enhanced_fit_mode_time_limit_s: float or None, default=None
-            Only consulted when `enhanced_fit_mode=True`. Ceiling on the
-            enhanced-fit sweep (seconds). Raise for larger datasets where
-            the default ~5-minute sweep leaves performance on the table.
-            None falls back to the server-side default (300s). Capped at
-            2400 seconds (40 minutes); higher values raise ValueError at fit.
+        effort: {"medium", "high"} or None, default=None
+            Spends extra fit-time compute for higher precision. None
+            disables it.
+        effort_timeout_s: float or None, default=None
+            Budget for the fit, in seconds. Only consulted when `effort`
+            is set. Capped at 2400.
+        effort_metric: str or None, default=None
+            Optimization metric for the fit. Only consulted when `effort`
+            is set.
+
+            Binary classification:
+                "accuracy", "balanced_accuracy", "mcc", "log_loss",
+                "pac", "quadratic_kappa", "roc_auc", "average_precision",
+                "precision", "precision_macro", "precision_micro",
+                "precision_weighted", "recall", "recall_macro",
+                "recall_micro", "recall_weighted", "f1", "f1_macro",
+                "f1_micro", "f1_weighted".
+            Multiclass classification:
+                "accuracy", "balanced_accuracy", "mcc", "log_loss",
+                "pac", "quadratic_kappa", "precision_macro",
+                "precision_micro", "precision_weighted", "recall_macro",
+                "recall_micro", "recall_weighted", "f1_macro",
+                "f1_micro", "f1_weighted", "roc_auc_ovo",
+                "roc_auc_ovo_macro", "roc_auc_ovr", "roc_auc_ovr_macro",
+                "roc_auc_ovr_micro", "roc_auc_ovr_weighted".
+
+            Aliases "acc", "nll", "pac_score" are also accepted.
         """
         self.model_path = model_path
         self.n_estimators = n_estimators
@@ -269,9 +281,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.random_state = random_state
         self.inference_config = inference_config
         self.paper_version = paper_version
-        self.enhanced_fit_mode = enhanced_fit_mode
-        self.enhanced_fit_mode_metric = enhanced_fit_mode_metric
-        self.enhanced_fit_mode_time_limit_s = enhanced_fit_mode_time_limit_s
+        self.effort = effort
+        self.effort_timeout_s = effort_timeout_s
+        self.effort_metric = effort_metric
         self.force_refit = force_refit
         self.client_options = client_options or ClientOptions()
 
@@ -294,7 +306,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
         estimator_param = self._get_estimator_params_with_model_path("classification")
         validate_train_set(X, y)
-        validate_enhanced_fit_mode_time_limit(self.enhanced_fit_mode_time_limit_s)
+        validate_effort(self.effort, self.effort_timeout_s, self.effort_metric)
         X = _clean_text_features(X)
         self._validate_targets_and_classes(y)
 
@@ -467,9 +479,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         ] = 0,
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
-        enhanced_fit_mode: bool = False,
-        enhanced_fit_mode_metric: Optional[str] = None,
-        enhanced_fit_mode_time_limit_s: Optional[float] = None,
+        effort: Optional[EffortLevel] = None,
+        effort_timeout_s: Optional[float] = None,
+        effort_metric: Optional[str] = None,
         force_refit: bool = False,
         client_options: ClientOptions | None = None,
     ):
@@ -519,21 +531,25 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
-        enhanced_fit_mode: bool, default=False
-            If True, trades off fit time for precision by running an
-            automated feature-engineering pipeline on top of TabPFN during
-            fit.
-        enhanced_fit_mode_metric: str or None, default=None
-            Only consulted when `enhanced_fit_mode=True`. Drives model
-            selection + ensemble weighting during the enhanced-fit sweep
-            (e.g. "rmse"/"mae"/"r2"/"mape" for regression). None falls
-            back to the sweep's default for the problem type.
-        enhanced_fit_mode_time_limit_s: float or None, default=None
-            Only consulted when `enhanced_fit_mode=True`. Ceiling on the
-            enhanced-fit sweep (seconds). Raise for larger datasets where
-            the default ~5-minute sweep leaves performance on the table.
-            None falls back to the server-side default (300s). Capped at
-            2400 seconds (40 minutes); higher values raise ValueError at fit.
+        effort: {"medium", "high"} or None, default=None
+            Spends extra fit-time compute for higher precision. None
+            disables it.
+        effort_timeout_s: float or None, default=None
+            Budget for the fit, in seconds. Only consulted when `effort`
+            is set. Capped at 2400.
+        effort_metric: str or None, default=None
+            Optimization metric for the fit. Only consulted when `effort`
+            is set.
+
+            Regression:
+                "r2", "mean_squared_error", "root_mean_squared_error",
+                "mean_absolute_error", "median_absolute_error",
+                "mean_absolute_percentage_error",
+                "symmetric_mean_absolute_percentage_error", "spearmanr",
+                "pearsonr".
+
+            Aliases "mse", "rmse", "mae", "mape", "smape" are also
+            accepted.
         force_refit: bool, default=False
             Whether to force refit the model even if the model has already been fitted.
         client_options : ClientOptions, default=None
@@ -548,9 +564,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.random_state = random_state
         self.inference_config = inference_config
         self.paper_version = paper_version
-        self.enhanced_fit_mode = enhanced_fit_mode
-        self.enhanced_fit_mode_metric = enhanced_fit_mode_metric
-        self.enhanced_fit_mode_time_limit_s = enhanced_fit_mode_time_limit_s
+        self.effort = effort
+        self.effort_timeout_s = effort_timeout_s
+        self.effort_metric = effort_metric
         self.force_refit = force_refit
         self.client_options = client_options or ClientOptions()
 
@@ -573,7 +589,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
         estimator_param = self._get_estimator_params_with_model_path("regression")
         validate_train_set(X, y)
-        validate_enhanced_fit_mode_time_limit(self.enhanced_fit_mode_time_limit_s)
+        validate_effort(self.effort, self.effort_timeout_s, self.effort_metric)
         self._validate_targets(y)
         X = _clean_text_features(X)
 
@@ -718,14 +734,26 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             raise ValueError("Input y contains NaN.")
 
 
-def validate_enhanced_fit_mode_time_limit(time_limit_s: Optional[float]) -> None:
-    if time_limit_s is None:
-        return
-    if time_limit_s > ENHANCED_FIT_MODE_MAX_TIME_LIMIT_S:
+def validate_effort(
+    effort: Optional[str],
+    effort_timeout_s: Optional[float],
+    effort_metric: Optional[str],
+) -> None:
+    if effort is not None and effort not in _VALID_EFFORT_LEVELS:
         raise ValueError(
-            f"enhanced_fit_mode_time_limit_s ({time_limit_s}) exceeds the "
-            f"maximum allowed of {ENHANCED_FIT_MODE_MAX_TIME_LIMIT_S} seconds "
-            f"({ENHANCED_FIT_MODE_MAX_TIME_LIMIT_S // 60} minutes)."
+            f"effort must be one of {sorted(_VALID_EFFORT_LEVELS)} or None, "
+            f"got {effort!r}."
+        )
+    if effort is None and (effort_timeout_s is not None or effort_metric is not None):
+        raise ValueError(
+            "effort_timeout_s and effort_metric are only consulted when "
+            "`effort` is set; pass effort='medium' or effort='high' to use them."
+        )
+    if effort_timeout_s is not None and effort_timeout_s > EFFORT_TIMEOUT_MAX_S:
+        raise ValueError(
+            f"effort_timeout_s ({effort_timeout_s}) exceeds the "
+            f"maximum allowed of {EFFORT_TIMEOUT_MAX_S} seconds "
+            f"({EFFORT_TIMEOUT_MAX_S // 60} minutes)."
         )
 
 
