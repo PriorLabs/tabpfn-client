@@ -475,9 +475,10 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             "model_path",
             "balance_probabilities",
             "paper_version",
-            "effort",
-            "effort_timeout_s",
-            "effort_metric",
+            "enhanced_fit_mode",
+            "enhanced_effort",
+            "enhanced_timeout_s",
+            "enhanced_effort_metric",
         }
         OPTIONAL_PARAMS = {
             # These may be emitted by newer model versions, but are not required.

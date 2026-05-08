@@ -469,9 +469,10 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             "inference_config",
             "model_path",
             "paper_version",
-            "effort",
-            "effort_timeout_s",
-            "effort_metric",
+            "enhanced_fit_mode",
+            "enhanced_effort",
+            "enhanced_timeout_s",
+            "enhanced_effort_metric",
         }
         OPTIONAL_PARAMS = {
             "thinking",

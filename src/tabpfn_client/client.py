@@ -388,25 +388,29 @@ class ServiceClient(Singleton):
                     raise
 
         tabpfn_systems = ["preprocessing", "text"]
-        effort = tabpfn_config.get("effort") if tabpfn_config else None
+        enhanced_fit_mode = (
+            bool(tabpfn_config.get("enhanced_fit_mode")) if tabpfn_config else False
+        )
         if tabpfn_config:
             if tabpfn_config.get("paper_version") is True:
                 tabpfn_systems = []
-            elif effort is not None:
+            elif enhanced_fit_mode:
                 # Enhanced mode runs on top of the base systems rather than
                 # replacing them — keep preprocessing + text alongside it.
                 tabpfn_systems = ["preprocessing", "text", "enhanced"]
 
-        # `effort`, `effort_timeout_s`, `effort_metric` are top-level
-        # FitRequest fields on the server (siblings to `tabpfn_systems`),
-        # not part of `tabpfn_config`. Lift them out before stripping the
-        # rest of the client-only keys.
-        effort_timeout_s = (
-            tabpfn_config.get("effort_timeout_s") if tabpfn_config else None
-        )
-        effort_metric = (
-            tabpfn_config.get("effort_metric") if tabpfn_config else None
-        )
+        # The client-side `enhanced_*` knobs are translated to the server's
+        # top-level FitRequest fields (`effort`, `effort_timeout_s`,
+        # `effort_metric`). They are only consulted when enhanced fit mode
+        # is enabled; otherwise we send None.
+        if enhanced_fit_mode and tabpfn_config:
+            effort = tabpfn_config.get("enhanced_effort", "medium")
+            effort_timeout_s = tabpfn_config.get("enhanced_timeout_s")
+            effort_metric = tabpfn_config.get("enhanced_effort_metric")
+        else:
+            effort = None
+            effort_timeout_s = None
+            effort_metric = None
 
         # Strip client-only keys that the server does not expect (mirrors
         # the predict path's filter below).
@@ -417,9 +421,10 @@ class ServiceClient(Singleton):
                 if k
                 not in {
                     "paper_version",
-                    "effort",
-                    "effort_timeout_s",
-                    "effort_metric",
+                    "enhanced_fit_mode",
+                    "enhanced_effort",
+                    "enhanced_timeout_s",
+                    "enhanced_effort_metric",
                 }
             }
             if tabpfn_config is not None
@@ -582,9 +587,10 @@ class ServiceClient(Singleton):
                 if k
                 not in {
                     "paper_version",
-                    "effort",
-                    "effort_timeout_s",
-                    "effort_metric",
+                    "enhanced_fit_mode",
+                    "enhanced_effort",
+                    "enhanced_timeout_s",
+                    "enhanced_effort_metric",
                 }
             }
 
