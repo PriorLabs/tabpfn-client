@@ -54,10 +54,10 @@ DEFAULT_V3_MODEL_PATH = "v3_default"
 # is kept as a backward-compatible alias.
 _AUTO_MODEL_PATH_ALIASES = frozenset({"auto", "default"})
 
-ENHANCED_TIMEOUT_MAX_S = 40 * 60
+THINKING_TIMEOUT_MAX_S = 40 * 60
 
-EnhancedEffort = Literal["medium", "high"]
-_VALID_ENHANCED_EFFORT_LEVELS = frozenset({"medium", "high"})
+ThinkingEffort = Literal["medium", "high"]
+_VALID_THINKING_EFFORT_LEVELS = frozenset({"medium", "high"})
 
 
 class TabPFNModelSelection:
@@ -183,10 +183,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         ] = 0,
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
-        enhanced_fit_mode: bool = False,
-        enhanced_effort: EnhancedEffort = "medium",
-        enhanced_timeout_s: Optional[float] = None,
-        enhanced_effort_metric: Optional[str] = None,
+        thinking_mode: bool = False,
+        thinking_effort: ThinkingEffort = "medium",
+        thinking_timeout_s: Optional[float] = None,
+        thinking_effort_metric: Optional[str] = None,
         force_refit: bool = False,
         client_options: ClientOptions | None = None,
     ):
@@ -244,19 +244,19 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
-        enhanced_fit_mode: bool, default=False
+        thinking_mode: bool, default=False
             If True, spend extra fit-time compute for higher precision.
-            The remaining `enhanced_*` parameters are only consulted when
+            The remaining `thinking_*` parameters are only consulted when
             this is True.
-        enhanced_effort: {"medium", "high"}, default="medium"
-            Effort level for enhanced fit mode. Only consulted when
-            `enhanced_fit_mode=True`.
-        enhanced_timeout_s: float or None, default=None
+        thinking_effort: {"medium", "high"}, default="medium"
+            Effort level for thinking mode. Only consulted when
+            `thinking_mode=True`.
+        thinking_timeout_s: float or None, default=None
             Budget for the fit, in seconds. Only consulted when
-            `enhanced_fit_mode=True`. Capped at 2400.
-        enhanced_effort_metric: str or None, default=None
+            `thinking_mode=True`. Capped at 2400.
+        thinking_effort_metric: str or None, default=None
             Optimization metric for the fit. Only consulted when
-            `enhanced_fit_mode=True`.
+            `thinking_mode=True`.
 
             Binary classification:
                 "accuracy", "balanced_accuracy", "mcc", "log_loss",
@@ -286,10 +286,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.random_state = random_state
         self.inference_config = inference_config
         self.paper_version = paper_version
-        self.enhanced_fit_mode = enhanced_fit_mode
-        self.enhanced_effort = enhanced_effort
-        self.enhanced_timeout_s = enhanced_timeout_s
-        self.enhanced_effort_metric = enhanced_effort_metric
+        self.thinking_mode = thinking_mode
+        self.thinking_effort = thinking_effort
+        self.thinking_timeout_s = thinking_timeout_s
+        self.thinking_effort_metric = thinking_effort_metric
         self.force_refit = force_refit
         self.client_options = client_options or ClientOptions()
 
@@ -312,11 +312,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
         estimator_param = self._get_estimator_params_with_model_path("classification")
         validate_train_set(X, y)
-        validate_enhanced_fit_mode(
-            self.enhanced_fit_mode,
-            self.enhanced_effort,
-            self.enhanced_timeout_s,
-            self.enhanced_effort_metric,
+        validate_thinking_mode(
+            self.thinking_mode,
+            self.thinking_effort,
+            self.thinking_timeout_s,
+            self.thinking_effort_metric,
         )
         X = _clean_text_features(X)
         self._validate_targets_and_classes(y)
@@ -490,10 +490,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         ] = 0,
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
-        enhanced_fit_mode: bool = False,
-        enhanced_effort: EnhancedEffort = "medium",
-        enhanced_timeout_s: Optional[float] = None,
-        enhanced_effort_metric: Optional[str] = None,
+        thinking_mode: bool = False,
+        thinking_effort: ThinkingEffort = "medium",
+        thinking_timeout_s: Optional[float] = None,
+        thinking_effort_metric: Optional[str] = None,
         force_refit: bool = False,
         client_options: ClientOptions | None = None,
     ):
@@ -543,19 +543,19 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
-        enhanced_fit_mode: bool, default=False
+        thinking_mode: bool, default=False
             If True, spend extra fit-time compute for higher precision.
-            The remaining `enhanced_*` parameters are only consulted when
+            The remaining `thinking_*` parameters are only consulted when
             this is True.
-        enhanced_effort: {"medium", "high"}, default="medium"
-            Effort level for enhanced fit mode. Only consulted when
-            `enhanced_fit_mode=True`.
-        enhanced_timeout_s: float or None, default=None
+        thinking_effort: {"medium", "high"}, default="medium"
+            Effort level for thinking mode. Only consulted when
+            `thinking_mode=True`.
+        thinking_timeout_s: float or None, default=None
             Budget for the fit, in seconds. Only consulted when
-            `enhanced_fit_mode=True`. Capped at 2400.
-        enhanced_effort_metric: str or None, default=None
+            `thinking_mode=True`. Capped at 2400.
+        thinking_effort_metric: str or None, default=None
             Optimization metric for the fit. Only consulted when
-            `enhanced_fit_mode=True`.
+            `thinking_mode=True`.
 
             Regression:
                 "r2", "mean_squared_error", "root_mean_squared_error",
@@ -580,10 +580,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.random_state = random_state
         self.inference_config = inference_config
         self.paper_version = paper_version
-        self.enhanced_fit_mode = enhanced_fit_mode
-        self.enhanced_effort = enhanced_effort
-        self.enhanced_timeout_s = enhanced_timeout_s
-        self.enhanced_effort_metric = enhanced_effort_metric
+        self.thinking_mode = thinking_mode
+        self.thinking_effort = thinking_effort
+        self.thinking_timeout_s = thinking_timeout_s
+        self.thinking_effort_metric = thinking_effort_metric
         self.force_refit = force_refit
         self.client_options = client_options or ClientOptions()
 
@@ -606,11 +606,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
         estimator_param = self._get_estimator_params_with_model_path("regression")
         validate_train_set(X, y)
-        validate_enhanced_fit_mode(
-            self.enhanced_fit_mode,
-            self.enhanced_effort,
-            self.enhanced_timeout_s,
-            self.enhanced_effort_metric,
+        validate_thinking_mode(
+            self.thinking_mode,
+            self.thinking_effort,
+            self.thinking_timeout_s,
+            self.thinking_effort_metric,
         )
         self._validate_targets(y)
         X = _clean_text_features(X)
@@ -756,33 +756,33 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             raise ValueError("Input y contains NaN.")
 
 
-def validate_enhanced_fit_mode(
-    enhanced_fit_mode: bool,
-    enhanced_effort: str,
-    enhanced_timeout_s: Optional[float],
-    enhanced_effort_metric: Optional[str],
+def validate_thinking_mode(
+    thinking_mode: bool,
+    thinking_effort: str,
+    thinking_timeout_s: Optional[float],
+    thinking_effort_metric: Optional[str],
 ) -> None:
-    if enhanced_effort not in _VALID_ENHANCED_EFFORT_LEVELS:
+    if thinking_effort not in _VALID_THINKING_EFFORT_LEVELS:
         raise ValueError(
-            f"enhanced_effort must be one of "
-            f"{sorted(_VALID_ENHANCED_EFFORT_LEVELS)}, got {enhanced_effort!r}."
+            f"thinking_effort must be one of "
+            f"{sorted(_VALID_THINKING_EFFORT_LEVELS)}, got {thinking_effort!r}."
         )
-    if not enhanced_fit_mode and (
-        enhanced_timeout_s is not None or enhanced_effort_metric is not None
+    if not thinking_mode and (
+        thinking_timeout_s is not None or thinking_effort_metric is not None
     ):
         raise ValueError(
-            "enhanced_timeout_s and enhanced_effort_metric are only consulted "
-            "when `enhanced_fit_mode=True`; pass enhanced_fit_mode=True to use "
+            "thinking_timeout_s and thinking_effort_metric are only consulted "
+            "when `thinking_mode=True`; pass thinking_mode=True to use "
             "them."
         )
     if (
-        enhanced_timeout_s is not None
-        and enhanced_timeout_s > ENHANCED_TIMEOUT_MAX_S
+        thinking_timeout_s is not None
+        and thinking_timeout_s > THINKING_TIMEOUT_MAX_S
     ):
         raise ValueError(
-            f"enhanced_timeout_s ({enhanced_timeout_s}) exceeds the "
-            f"maximum allowed of {ENHANCED_TIMEOUT_MAX_S} seconds "
-            f"({ENHANCED_TIMEOUT_MAX_S // 60} minutes)."
+            f"thinking_timeout_s ({thinking_timeout_s}) exceeds the "
+            f"maximum allowed of {THINKING_TIMEOUT_MAX_S} seconds "
+            f"({THINKING_TIMEOUT_MAX_S // 60} minutes)."
         )
 
 
