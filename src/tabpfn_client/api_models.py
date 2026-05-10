@@ -1,5 +1,5 @@
 from uuid import UUID
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
 # Classification output_type="preds" preserves the original label type, so
@@ -103,14 +103,12 @@ class FitRequest(BaseModel):
     # `tabpfn_systems` values on the server need this at fit time; the
     # server ignores it otherwise.
     tabpfn_config: TabPFNConfig = None
-    # Drives model selection + ensemble weighting during the enhanced-fit
-    # sweep. Only consulted when `"enhanced"` is in `tabpfn_systems`. None
-    # falls back to the sweep's default per problem type.
-    enhanced_fit_mode_metric: Optional[str] = None
-    # Ceiling on the enhanced-fit sweep (seconds). Only consulted when
-    # `"enhanced"` is in `tabpfn_systems`. None falls back to the server
-    # default (300s).
-    enhanced_fit_time_limit_s: Optional[float] = None
+    # User-facing thinking-effort level. None disables it.
+    thinking_effort: Optional[Literal["medium", "high"]] = None
+    # Budget for the fit (seconds). Only consulted when `thinking_effort` is set.
+    thinking_timeout_s: Optional[float] = None
+    # Optimization metric for the fit. Only consulted when `thinking_effort` is set.
+    thinking_effort_metric: Optional[str] = None
 
 
 class FitResponse(BaseModel):

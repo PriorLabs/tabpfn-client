@@ -388,28 +388,35 @@ class ServiceClient(Singleton):
                     raise
 
         tabpfn_systems = ["preprocessing", "text"]
+        # Thinking is enabled when either flag is set: explicit `thinking_mode=True`,
+        # or any non-None `thinking_effort`. Setting `thinking_effort` alone is
+        # enough — the server-side validator on FitRequest also normalises this,
+        # but doing it here means the request body itself is consistent.
+        thinking_enabled = bool(tabpfn_config) and (
+            bool(tabpfn_config.get("thinking_mode"))
+            or tabpfn_config.get("thinking_effort") is not None
+        )
         if tabpfn_config:
             if tabpfn_config.get("paper_version") is True:
                 tabpfn_systems = []
-            elif tabpfn_config.get("enhanced_fit_mode") is True:
-                # Enhanced mode runs on top of the base systems rather than
+            elif thinking_enabled:
+                # Thinking runs on top of the base systems rather than
                 # replacing them — keep preprocessing + text alongside it.
-                tabpfn_systems = ["preprocessing", "text", "enhanced"]
+                tabpfn_systems = ["preprocessing", "text", "thinking"]
 
-        # `enhanced_fit_mode_metric` and `enhanced_fit_mode_time_limit_s`
-        # are top-level FitRequest fields on the server (siblings to
-        # `tabpfn_systems`), not part of `tabpfn_config`. Lift them out
-        # before stripping the rest of the client-only keys. The server
-        # field drops the `mode_` infix (`enhanced_fit_time_limit_s`);
-        # units are seconds on both sides, no conversion.
-        enhanced_fit_mode_metric = (
-            tabpfn_config.get("enhanced_fit_mode_metric") if tabpfn_config else None
-        )
-        enhanced_fit_time_limit_s = (
-            tabpfn_config.get("enhanced_fit_mode_time_limit_s")
-            if tabpfn_config
-            else None
-        )
+        # The client-side `thinking_*` knobs forward 1:1 to the server's
+        # top-level FitRequest fields. When the user enabled thinking via
+        # `thinking_mode=True` without picking a level, default to "medium".
+        # The user-facing kwarg is `thinking_metric`; on the wire it is sent
+        # as `thinking_effort_metric` (matching the server's FitRequest schema).
+        if thinking_enabled and tabpfn_config:
+            thinking_effort = tabpfn_config.get("thinking_effort") or "medium"
+            thinking_timeout_s = tabpfn_config.get("thinking_timeout_s")
+            thinking_metric = tabpfn_config.get("thinking_metric")
+        else:
+            thinking_effort = None
+            thinking_timeout_s = None
+            thinking_metric = None
 
         # Strip client-only keys that the server does not expect (mirrors
         # the predict path's filter below).
@@ -420,9 +427,10 @@ class ServiceClient(Singleton):
                 if k
                 not in {
                     "paper_version",
-                    "enhanced_fit_mode",
-                    "enhanced_fit_mode_metric",
-                    "enhanced_fit_mode_time_limit_s",
+                    "thinking_mode",
+                    "thinking_effort",
+                    "thinking_timeout_s",
+                    "thinking_metric",
                 }
             }
             if tabpfn_config is not None
@@ -436,8 +444,9 @@ class ServiceClient(Singleton):
                 tabpfn_systems=tabpfn_systems,
                 force_refit=force_refit or force_refit_enabled(),
                 tabpfn_config=server_tabpfn_config,
-                enhanced_fit_mode_metric=enhanced_fit_mode_metric,
-                enhanced_fit_time_limit_s=enhanced_fit_time_limit_s,
+                thinking_effort=thinking_effort,
+                thinking_timeout_s=thinking_timeout_s,
+                thinking_effort_metric=thinking_metric,
             ),
             timeout=client_options.timeout,
             headers=client_options.headers,
@@ -584,9 +593,10 @@ class ServiceClient(Singleton):
                 if k
                 not in {
                     "paper_version",
-                    "enhanced_fit_mode",
-                    "enhanced_fit_mode_metric",
-                    "enhanced_fit_mode_time_limit_s",
+                    "thinking_mode",
+                    "thinking_effort",
+                    "thinking_timeout_s",
+                    "thinking_metric",
                 }
             }
 
