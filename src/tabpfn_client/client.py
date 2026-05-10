@@ -388,22 +388,27 @@ class ServiceClient(Singleton):
                     raise
 
         tabpfn_systems = ["preprocessing", "text"]
-        thinking_mode = (
-            bool(tabpfn_config.get("thinking_mode")) if tabpfn_config else False
+        # Thinking is enabled when either flag is set: explicit `thinking_mode=True`,
+        # or any non-None `thinking_effort`. Setting `thinking_effort` alone is
+        # enough — the server-side validator on FitRequest also normalises this,
+        # but doing it here means the request body itself is consistent.
+        thinking_enabled = bool(tabpfn_config) and (
+            bool(tabpfn_config.get("thinking_mode"))
+            or tabpfn_config.get("thinking_effort") is not None
         )
         if tabpfn_config:
             if tabpfn_config.get("paper_version") is True:
                 tabpfn_systems = []
-            elif thinking_mode:
-                # Thinking mode runs on top of the base systems rather than
+            elif thinking_enabled:
+                # Thinking runs on top of the base systems rather than
                 # replacing them — keep preprocessing + text alongside it.
                 tabpfn_systems = ["preprocessing", "text", "thinking"]
 
         # The client-side `thinking_*` knobs forward 1:1 to the server's
-        # top-level FitRequest fields. Only consulted when thinking_mode
-        # is enabled; otherwise we send None.
-        if thinking_mode and tabpfn_config:
-            thinking_effort = tabpfn_config.get("thinking_effort", "medium")
+        # top-level FitRequest fields. When the user enabled thinking via
+        # `thinking_mode=True` without picking a level, default to "medium".
+        if thinking_enabled and tabpfn_config:
+            thinking_effort = tabpfn_config.get("thinking_effort") or "medium"
             thinking_timeout_s = tabpfn_config.get("thinking_timeout_s")
             thinking_effort_metric = tabpfn_config.get("thinking_effort_metric")
         else:

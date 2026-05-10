@@ -184,7 +184,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
         thinking_mode: bool = False,
-        thinking_effort: ThinkingEffort = "medium",
+        thinking_effort: Optional[ThinkingEffort] = None,
         thinking_timeout_s: Optional[float] = None,
         thinking_effort_metric: Optional[str] = None,
         force_refit: bool = False,
@@ -246,17 +246,19 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             version available on the API, which e.g handles text features better.
         thinking_mode: bool, default=False
             If True, spend extra fit-time compute for higher precision.
-            The remaining `thinking_*` parameters are only consulted when
-            this is True.
-        thinking_effort: {"medium", "high"}, default="medium"
-            Effort level for thinking mode. Only consulted when
-            `thinking_mode=True`.
+            Equivalent to passing `thinking_effort="medium"` — setting any
+            `thinking_effort` value also enables thinking, so this flag is
+            optional when you've set the level explicitly.
+        thinking_effort: {"medium", "high"} or None, default=None
+            Effort level for thinking mode. When set, thinking is enabled
+            (you don't also need `thinking_mode=True`). When None and
+            `thinking_mode=True`, defaults to "medium".
         thinking_timeout_s: float or None, default=None
-            Budget for the fit, in seconds. Only consulted when
-            `thinking_mode=True`. Capped at 2400.
+            Budget for the fit, in seconds. Only consulted when thinking is
+            enabled. Capped at 2400.
         thinking_effort_metric: str or None, default=None
-            Optimization metric for the fit. Only consulted when
-            `thinking_mode=True`.
+            Optimization metric for the fit. Only consulted when thinking
+            is enabled.
 
             Binary classification:
                 "accuracy", "balanced_accuracy", "mcc", "log_loss",
@@ -491,7 +493,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         inference_config: Optional[Dict] = None,
         paper_version: bool = False,
         thinking_mode: bool = False,
-        thinking_effort: ThinkingEffort = "medium",
+        thinking_effort: Optional[ThinkingEffort] = None,
         thinking_timeout_s: Optional[float] = None,
         thinking_effort_metric: Optional[str] = None,
         force_refit: bool = False,
@@ -545,17 +547,19 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             version available on the API, which e.g handles text features better.
         thinking_mode: bool, default=False
             If True, spend extra fit-time compute for higher precision.
-            The remaining `thinking_*` parameters are only consulted when
-            this is True.
-        thinking_effort: {"medium", "high"}, default="medium"
-            Effort level for thinking mode. Only consulted when
-            `thinking_mode=True`.
+            Equivalent to passing `thinking_effort="medium"` — setting any
+            `thinking_effort` value also enables thinking, so this flag is
+            optional when you've set the level explicitly.
+        thinking_effort: {"medium", "high"} or None, default=None
+            Effort level for thinking mode. When set, thinking is enabled
+            (you don't also need `thinking_mode=True`). When None and
+            `thinking_mode=True`, defaults to "medium".
         thinking_timeout_s: float or None, default=None
-            Budget for the fit, in seconds. Only consulted when
-            `thinking_mode=True`. Capped at 2400.
+            Budget for the fit, in seconds. Only consulted when thinking is
+            enabled. Capped at 2400.
         thinking_effort_metric: str or None, default=None
-            Optimization metric for the fit. Only consulted when
-            `thinking_mode=True`.
+            Optimization metric for the fit. Only consulted when thinking
+            is enabled.
 
             Regression:
                 "r2", "mean_squared_error", "root_mean_squared_error",
@@ -758,22 +762,29 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
 def validate_thinking_mode(
     thinking_mode: bool,
-    thinking_effort: str,
+    thinking_effort: Optional[str],
     thinking_timeout_s: Optional[float],
     thinking_effort_metric: Optional[str],
 ) -> None:
-    if thinking_effort not in _VALID_THINKING_EFFORT_LEVELS:
+    if (
+        thinking_effort is not None
+        and thinking_effort not in _VALID_THINKING_EFFORT_LEVELS
+    ):
         raise ValueError(
             f"thinking_effort must be one of "
             f"{sorted(_VALID_THINKING_EFFORT_LEVELS)}, got {thinking_effort!r}."
         )
-    if not thinking_mode and (
+    # Setting `thinking_effort` is itself a way to enable thinking, so the
+    # effective state is "either flag set". Knobs that only make sense when
+    # thinking is on are rejected only when neither is set.
+    thinking_enabled = thinking_mode or thinking_effort is not None
+    if not thinking_enabled and (
         thinking_timeout_s is not None or thinking_effort_metric is not None
     ):
         raise ValueError(
-            "thinking_timeout_s and thinking_effort_metric are only consulted "
-            "when `thinking_mode=True`; pass thinking_mode=True to use "
-            "them."
+            "thinking_timeout_s and thinking_effort_metric are only "
+            "consulted when thinking is enabled; pass `thinking_mode=True` "
+            "or `thinking_effort=...` to use them."
         )
     if (
         thinking_timeout_s is not None
