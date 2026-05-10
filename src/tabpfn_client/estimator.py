@@ -43,10 +43,12 @@ logger = logging.getLogger(__name__)
 
 # Special strings used to identify model families in model paths.
 V_2_5_IDENTIFIER = "v2.5"
+V_2_6_IDENTIFIER = "v2.6"
 V_3_IDENTIFIER = "v3"
 
 DEFAULT_V2_MODEL_PATH = "v2_default"
 DEFAULT_V2_5_MODEL_PATH = "v2.5_default"
+DEFAULT_V2_6_MODEL_PATH = "v2.6_default"
 DEFAULT_V3_MODEL_PATH = "v3_default"
 
 # Sentinel values for `model_path` that defer model selection to the server.
@@ -92,6 +94,8 @@ class TabPFNModelSelection:
             return None
         if V_3_IDENTIFIER in model_name:
             return f"tabpfn-{V_3_IDENTIFIER}-{model_name_task}-{model_name}.ckpt"
+        if V_2_6_IDENTIFIER in model_name:
+            return f"tabpfn-{V_2_6_IDENTIFIER}-{model_name_task}-{model_name}.ckpt"
         if V_2_5_IDENTIFIER in model_name:
             return f"tabpfn-{V_2_5_IDENTIFIER}-{model_name_task}-{model_name}.ckpt"
         return f"tabpfn-v2-{model_name_task}-{model_name}.ckpt"
@@ -113,6 +117,8 @@ class TabPFNModelSelection:
             options["model_path"] = DEFAULT_V2_MODEL_PATH
         elif version == ModelVersion.V2_5:
             options["model_path"] = DEFAULT_V2_5_MODEL_PATH
+        elif version == ModelVersion.V2_6:
+            options["model_path"] = DEFAULT_V2_6_MODEL_PATH
         elif version == ModelVersion.V3:
             options["model_path"] = DEFAULT_V3_MODEL_PATH
         else:
@@ -148,6 +154,7 @@ class TabPFNModelSelection:
 class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
         DEFAULT_V3_MODEL_PATH,
+        DEFAULT_V2_6_MODEL_PATH,
         "v2.5_default-2",
         DEFAULT_V2_5_MODEL_PATH,
         "v2.5_large-features-L",
@@ -461,6 +468,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
         DEFAULT_V3_MODEL_PATH,
+        DEFAULT_V2_6_MODEL_PATH,
         DEFAULT_V2_5_MODEL_PATH,
         "v2.5_low-skew",
         "v2.5_quantiles",

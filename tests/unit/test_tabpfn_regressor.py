@@ -844,6 +844,7 @@ class TestTabPFNModelSelection(unittest.TestCase):
     def test_list_available_models_returns_expected_models(self):
         expected_models = [
             "v3_default",
+            "v2.6_default",
             "v2.5_default",
             "v2.5_low-skew",
             "v2.5_quantiles",
