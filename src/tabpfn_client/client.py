@@ -410,11 +410,11 @@ class ServiceClient(Singleton):
         if thinking_enabled and tabpfn_config:
             thinking_effort = tabpfn_config.get("thinking_effort") or "medium"
             thinking_timeout_s = tabpfn_config.get("thinking_timeout_s")
-            thinking_effort_metric = tabpfn_config.get("thinking_effort_metric")
+            thinking_metric = tabpfn_config.get("thinking_metric")
         else:
             thinking_effort = None
             thinking_timeout_s = None
-            thinking_effort_metric = None
+            thinking_metric = None
 
         # Strip client-only keys that the server does not expect (mirrors
         # the predict path's filter below).
@@ -428,7 +428,7 @@ class ServiceClient(Singleton):
                     "thinking_mode",
                     "thinking_effort",
                     "thinking_timeout_s",
-                    "thinking_effort_metric",
+                    "thinking_metric",
                 }
             }
             if tabpfn_config is not None
@@ -444,7 +444,7 @@ class ServiceClient(Singleton):
                 tabpfn_config=server_tabpfn_config,
                 thinking_effort=thinking_effort,
                 thinking_timeout_s=thinking_timeout_s,
-                thinking_effort_metric=thinking_effort_metric,
+                thinking_metric=thinking_metric,
             ),
             timeout=client_options.timeout,
             headers=client_options.headers,
@@ -594,7 +594,7 @@ class ServiceClient(Singleton):
                     "thinking_mode",
                     "thinking_effort",
                     "thinking_timeout_s",
-                    "thinking_effort_metric",
+                    "thinking_metric",
                 }
             }
 

@@ -472,7 +472,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             "thinking_mode",
             "thinking_effort",
             "thinking_timeout_s",
-            "thinking_effort_metric",
+            "thinking_metric",
         }
         OPTIONAL_PARAMS = {
             "thinking",

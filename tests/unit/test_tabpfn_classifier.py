@@ -478,7 +478,7 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             "thinking_mode",
             "thinking_effort",
             "thinking_timeout_s",
-            "thinking_effort_metric",
+            "thinking_metric",
         }
         OPTIONAL_PARAMS = {
             # These may be emitted by newer model versions, but are not required.

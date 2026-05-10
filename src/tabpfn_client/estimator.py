@@ -186,7 +186,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         thinking_mode: bool = False,
         thinking_effort: Optional[ThinkingEffort] = None,
         thinking_timeout_s: Optional[float] = None,
-        thinking_effort_metric: Optional[str] = None,
+        thinking_metric: Optional[str] = None,
         force_refit: bool = False,
         client_options: ClientOptions | None = None,
     ):
@@ -256,7 +256,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         thinking_timeout_s: float or None, default=None
             Budget for the fit, in seconds. Only consulted when thinking is
             enabled. Capped at 2400.
-        thinking_effort_metric: str or None, default=None
+        thinking_metric: str or None, default=None
             Optimization metric for the fit. Only consulted when thinking
             is enabled.
 
@@ -291,7 +291,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.thinking_mode = thinking_mode
         self.thinking_effort = thinking_effort
         self.thinking_timeout_s = thinking_timeout_s
-        self.thinking_effort_metric = thinking_effort_metric
+        self.thinking_metric = thinking_metric
         self.force_refit = force_refit
         self.client_options = client_options or ClientOptions()
 
@@ -318,7 +318,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             self.thinking_mode,
             self.thinking_effort,
             self.thinking_timeout_s,
-            self.thinking_effort_metric,
+            self.thinking_metric,
         )
         X = _clean_text_features(X)
         self._validate_targets_and_classes(y)
@@ -495,7 +495,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         thinking_mode: bool = False,
         thinking_effort: Optional[ThinkingEffort] = None,
         thinking_timeout_s: Optional[float] = None,
-        thinking_effort_metric: Optional[str] = None,
+        thinking_metric: Optional[str] = None,
         force_refit: bool = False,
         client_options: ClientOptions | None = None,
     ):
@@ -557,7 +557,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         thinking_timeout_s: float or None, default=None
             Budget for the fit, in seconds. Only consulted when thinking is
             enabled. Capped at 2400.
-        thinking_effort_metric: str or None, default=None
+        thinking_metric: str or None, default=None
             Optimization metric for the fit. Only consulted when thinking
             is enabled.
 
@@ -587,7 +587,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.thinking_mode = thinking_mode
         self.thinking_effort = thinking_effort
         self.thinking_timeout_s = thinking_timeout_s
-        self.thinking_effort_metric = thinking_effort_metric
+        self.thinking_metric = thinking_metric
         self.force_refit = force_refit
         self.client_options = client_options or ClientOptions()
 
@@ -614,7 +614,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             self.thinking_mode,
             self.thinking_effort,
             self.thinking_timeout_s,
-            self.thinking_effort_metric,
+            self.thinking_metric,
         )
         self._validate_targets(y)
         X = _clean_text_features(X)
@@ -764,7 +764,7 @@ def validate_thinking_mode(
     thinking_mode: bool,
     thinking_effort: Optional[str],
     thinking_timeout_s: Optional[float],
-    thinking_effort_metric: Optional[str],
+    thinking_metric: Optional[str],
 ) -> None:
     if (
         thinking_effort is not None
@@ -779,10 +779,10 @@ def validate_thinking_mode(
     # thinking is on are rejected only when neither is set.
     thinking_enabled = thinking_mode or thinking_effort is not None
     if not thinking_enabled and (
-        thinking_timeout_s is not None or thinking_effort_metric is not None
+        thinking_timeout_s is not None or thinking_metric is not None
     ):
         raise ValueError(
-            "thinking_timeout_s and thinking_effort_metric are only "
+            "thinking_timeout_s and thinking_metric are only "
             "consulted when thinking is enabled; pass `thinking_mode=True` "
             "or `thinking_effort=...` to use them."
         )

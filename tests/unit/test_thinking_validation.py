@@ -17,7 +17,7 @@ def _v(**overrides):
         thinking_mode=False,
         thinking_effort=None,
         thinking_timeout_s=None,
-        thinking_effort_metric=None,
+        thinking_metric=None,
     )
     args.update(overrides)
     return validate_thinking_mode(**args)
@@ -40,15 +40,15 @@ class TestThinkingValidator:
 
     def test_extra_knobs_with_thinking_effort_set_are_allowed(self):
         # If thinking is on (via either flag), the budget/metric knobs apply.
-        _v(thinking_effort="high", thinking_timeout_s=60.0, thinking_effort_metric="rmse")
-        _v(thinking_mode=True, thinking_timeout_s=60.0, thinking_effort_metric="rmse")
+        _v(thinking_effort="high", thinking_timeout_s=60.0, thinking_metric="rmse")
+        _v(thinking_mode=True, thinking_timeout_s=60.0, thinking_metric="rmse")
 
     def test_extra_knobs_without_thinking_are_rejected(self):
         # Knobs that only matter when thinking is on must error if neither flag is set.
         with pytest.raises(ValueError, match="thinking is enabled"):
             _v(thinking_timeout_s=60.0)
         with pytest.raises(ValueError, match="thinking is enabled"):
-            _v(thinking_effort_metric="rmse")
+            _v(thinking_metric="rmse")
 
     def test_invalid_effort_level_rejected(self):
         with pytest.raises(ValueError, match="thinking_effort must be one of"):

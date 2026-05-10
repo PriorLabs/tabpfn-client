@@ -1,5 +1,5 @@
 from uuid import UUID
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
 # Classification output_type="preds" preserves the original label type, so
@@ -103,12 +103,12 @@ class FitRequest(BaseModel):
     # `tabpfn_systems` values on the server need this at fit time; the
     # server ignores it otherwise.
     tabpfn_config: TabPFNConfig = None
-    # User-facing thinking-effort level ("medium" or "high"). None disables it.
-    thinking_effort: Optional[str] = None
+    # User-facing thinking-effort level. None disables it.
+    thinking_effort: Optional[Literal["medium", "high"]] = None
     # Budget for the fit (seconds). Only consulted when `thinking_effort` is set.
     thinking_timeout_s: Optional[float] = None
     # Optimization metric for the fit. Only consulted when `thinking_effort` is set.
-    thinking_effort_metric: Optional[str] = None
+    thinking_metric: Optional[str] = None
 
 
 class FitResponse(BaseModel):
