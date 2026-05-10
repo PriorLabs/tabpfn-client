@@ -407,6 +407,8 @@ class ServiceClient(Singleton):
         # The client-side `thinking_*` knobs forward 1:1 to the server's
         # top-level FitRequest fields. When the user enabled thinking via
         # `thinking_mode=True` without picking a level, default to "medium".
+        # The user-facing kwarg is `thinking_metric`; on the wire it is sent
+        # as `thinking_effort_metric` (matching the server's FitRequest schema).
         if thinking_enabled and tabpfn_config:
             thinking_effort = tabpfn_config.get("thinking_effort") or "medium"
             thinking_timeout_s = tabpfn_config.get("thinking_timeout_s")
@@ -444,7 +446,7 @@ class ServiceClient(Singleton):
                 tabpfn_config=server_tabpfn_config,
                 thinking_effort=thinking_effort,
                 thinking_timeout_s=thinking_timeout_s,
-                thinking_metric=thinking_metric,
+                thinking_effort_metric=thinking_metric,
             ),
             timeout=client_options.timeout,
             headers=client_options.headers,
