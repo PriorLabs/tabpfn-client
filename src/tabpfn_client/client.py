@@ -399,18 +399,17 @@ class ServiceClient(Singleton):
                 # replacing them — keep preprocessing + text alongside it.
                 tabpfn_systems = ["preprocessing", "text", "thinking"]
 
-        # The client-side `thinking_*` knobs are translated to the server's
-        # top-level FitRequest fields (`effort`, `effort_timeout_s`,
-        # `effort_metric`). They are only consulted when thinking mode
+        # The client-side `thinking_*` knobs forward 1:1 to the server's
+        # top-level FitRequest fields. Only consulted when thinking_mode
         # is enabled; otherwise we send None.
         if thinking_mode and tabpfn_config:
-            effort = tabpfn_config.get("thinking_effort", "medium")
-            effort_timeout_s = tabpfn_config.get("thinking_timeout_s")
-            effort_metric = tabpfn_config.get("thinking_effort_metric")
+            thinking_effort = tabpfn_config.get("thinking_effort", "medium")
+            thinking_timeout_s = tabpfn_config.get("thinking_timeout_s")
+            thinking_effort_metric = tabpfn_config.get("thinking_effort_metric")
         else:
-            effort = None
-            effort_timeout_s = None
-            effort_metric = None
+            thinking_effort = None
+            thinking_timeout_s = None
+            thinking_effort_metric = None
 
         # Strip client-only keys that the server does not expect (mirrors
         # the predict path's filter below).
@@ -438,9 +437,9 @@ class ServiceClient(Singleton):
                 tabpfn_systems=tabpfn_systems,
                 force_refit=force_refit or force_refit_enabled(),
                 tabpfn_config=server_tabpfn_config,
-                effort=effort,
-                effort_timeout_s=effort_timeout_s,
-                effort_metric=effort_metric,
+                thinking_effort=thinking_effort,
+                thinking_timeout_s=thinking_timeout_s,
+                thinking_effort_metric=thinking_effort_metric,
             ),
             timeout=client_options.timeout,
             headers=client_options.headers,
