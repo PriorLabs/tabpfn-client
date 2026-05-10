@@ -108,7 +108,7 @@ class FitRequest(BaseModel):
     # Budget for the fit (seconds). Only consulted when `thinking_effort` is set.
     thinking_timeout_s: Optional[float] = None
     # Optimization metric for the fit. Only consulted when `thinking_effort` is set.
-    thinking_metric: Optional[str] = None
+    thinking_effort_metric: Optional[str] = None
 
 
 class FitResponse(BaseModel):
