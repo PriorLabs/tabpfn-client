@@ -18,6 +18,7 @@ def _v(**overrides):
         thinking_effort=None,
         thinking_timeout_s=None,
         thinking_metric=None,
+        model_path="auto",
     )
     args.update(overrides)
     return validate_thinking_mode(**args)
@@ -60,3 +61,32 @@ class TestThinkingValidator:
 
     def test_timeout_at_cap_allowed(self):
         _v(thinking_effort="high", thinking_timeout_s=THINKING_TIMEOUT_MAX_S)
+
+    def test_thinking_with_v3_model_path_allowed(self):
+        _v(thinking_mode=True, model_path="v3_default")
+        _v(thinking_effort="high", model_path="v3_default")
+
+    def test_thinking_with_auto_model_path_allowed(self):
+        # "auto" defers selection to the server (which picks v3 currently).
+        _v(thinking_mode=True, model_path="auto")
+        # "default" is the backward-compatible alias for "auto".
+        _v(thinking_mode=True, model_path="default")
+
+    def test_thinking_with_v25_model_path_rejected(self):
+        with pytest.raises(ValueError, match="only supported on v3 models"):
+            _v(thinking_mode=True, model_path="v2.5_default")
+        with pytest.raises(ValueError, match="only supported on v3 models"):
+            _v(thinking_effort="high", model_path="v2.5_default")
+
+    def test_thinking_with_v2_model_path_rejected(self):
+        with pytest.raises(ValueError, match="only supported on v3 models"):
+            _v(thinking_mode=True, model_path="v2_default")
+
+    def test_thinking_with_v26_model_path_rejected(self):
+        with pytest.raises(ValueError, match="only supported on v3 models"):
+            _v(thinking_mode=True, model_path="v2.6_default")
+
+    def test_thinking_off_with_non_v3_model_path_allowed(self):
+        # The guard only kicks in when thinking is enabled.
+        _v(model_path="v2.5_default")
+        _v(model_path="v2_default")

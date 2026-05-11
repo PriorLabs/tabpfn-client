@@ -7,7 +7,7 @@
 [![Twitter Follow](https://img.shields.io/twitter/follow/Prior_Labs?style=social)](https://twitter.com/Prior_Labs)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python Versions](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://pypi.org/project/tabpfn-client/)
-![Last Commit](https://img.shields.io/github/last-commit/automl/tabpfn-client)
+![Last Commit](https://img.shields.io/github/last-commit/PriorLabs/tabpfn-client)
 
 TabPFN is a foundation model for tabular data that outperforms traditional methods while being dramatically faster. This client library provides easy access to the TabPFN API, enabling state-of-the-art tabular machine learning in just a few lines of code.
 
@@ -68,6 +68,41 @@ probabilities = model.predict_proba(X_test)
 
 For optimal performance, use the `AutoTabPFNClassifier` or `AutoTabPFNRegressor` for post-hoc ensembling. These can be found in the [TabPFN Extensions](https://github.com/PriorLabs/tabpfn-extensions) repository. Post-hoc ensembling combines multiple TabPFN models into an ensemble.
 
+## Thinking Mode
+
+Thinking mode trades extra fit-time compute for higher predictive quality. The server explores additional configurations during `fit()` and returns a tuned model; `predict()` then runs as usual.
+
+```python
+from tabpfn_client import TabPFNClassifier
+
+# Simplest form: enable with defaults (effort="medium").
+model = TabPFNClassifier(thinking_mode=True)
+model.fit(X_train, y_train)
+model.predict(X_test)
+```
+
+Knobs:
+
+- `thinking_mode: bool = False` — enable thinking with default effort. Equivalent to `thinking_effort="medium"`.
+- `thinking_effort: {"medium", "high"} | None` — effort level. Setting this also enables thinking, so `thinking_mode=True` is optional when you've set the level explicitly.
+- `thinking_timeout_s: float | None` — budget for the fit, in seconds. Only consulted when thinking is enabled. Capped at 2400 (40 minutes).
+- `thinking_metric: str | None` — optimization metric for the fit. Only consulted when thinking is enabled. See the constructor docstring of `TabPFNClassifier` / `TabPFNRegressor` for the full list of supported metrics per task (classification, multiclass, regression) and their aliases.
+
+```python
+model = TabPFNClassifier(
+    thinking_effort="high",
+    thinking_timeout_s=600,
+    thinking_metric="roc_auc",
+)
+```
+
+Notes:
+
+- Thinking mode is only supported on v3 models. Leave `model_path` at its default (`"auto"`, which lets the server pick the latest default — currently a v3 model) or set it explicitly to a v3 model. Combining thinking with a v2 or v2.5 `model_path` raises `ValueError` client-side.
+- `thinking_timeout_s` and `thinking_metric` are only consulted when thinking is enabled; passing them without `thinking_mode=True` or `thinking_effort=...` raises `ValueError`.
+- Thinking-mode fits take longer than regular fits (often several minutes).
+- Thinking-mode fits draw from a **separate, smaller budget** than regular fits — they do not count against your regular prediction allowance, and you cannot use your regular allowance for them. The number of thinking-mode fits you can run per day is limited. If you need more capacity, request an increase via [ux.priorlabs.ai](https://ux.priorlabs.ai).
+
 ## 🔑 Authentication
 
 ### Load Your Token
@@ -91,7 +126,7 @@ We're building the future of tabular machine learning and would love your involv
 2. **Connect & Learn**:
    - Join our [Discord Community](https://discord.gg/VJRuU3bSxt) for discussions and support
    - Read our [Documentation](https://priorlabs.ai/) for detailed guides
-   - Check out [GitHub Issues](https://github.com/automl/tabpfn-client/issues) for known issues and feature requests
+   - Check out [GitHub Issues](https://github.com/PriorLabs/tabpfn-client/issues) for known issues and feature requests
 3. **Contribute**:
    - Report bugs or request features through issues
    - Submit pull requests (see development guide below)
@@ -126,18 +161,9 @@ Usage limits reset daily at 00:00:00 UTC.
 
 ### Size Limitations
 
-1. Maximum total cells per request must be below 20,000,000:
+Per-model size limits (rows, columns, cells, classes) are enforced by the server and are returned from `/tabpfn/get_model_limits`. The client validates against the most permissive limit at `fit` time and against the selected model's limit at `predict` time, raising `ValueError` before the request is sent.
 
-```python
-max_cells = (num_train_rows + num_test_rows) * num_cols
-```
-
-2. For regression with full output (`return_full_output=True`), the number of test samples must be below 500:
-
-```python
-if task == 'regression' and return_full_output and num_test_samples > 500:
-    raise ValueError("Cannot return full output for regression with >500 test samples")
-```
+In particular, regression with `output_type="full"` has a stricter cap on the number of test rows than regular regression predictions; split the test set across calls if you hit it.
 
 These limits will be increased in future releases.
 

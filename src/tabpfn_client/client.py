@@ -796,6 +796,26 @@ class ServiceClient(Singleton):
         except json.JSONDecodeError as e:
             logging.info(f"Failed to parse JSON from response in {method_name}: {e}")
 
+        # Streamed-error envelope: long-running endpoints (e.g. /tabpfn/fit with
+        # thinking mode) return a chunked 200 response, and on mid-stream failure
+        # the server emits `{"_streamed_error": True, "message": "..."}` as the
+        # body. Without this short-circuit, the success-schema validation below
+        # turns that into a misleading pydantic `Field required` error and the
+        # real message is buried inside `input_value`.
+        if isinstance(load, dict) and load.get("_streamed_error"):
+            message = (
+                load.get("message")
+                or load.get("detail", "")
+                or response.reason_phrase
+            )
+            logger.info(
+                f"Fail to call {method_name}, streamed error on status "
+                f"{response.status_code}: {message}"
+            )
+            raise RuntimeError(
+                f"Fail to call {method_name} with error: streamed, {message}"
+            )
+
         # Check if the server requires a newer client version.
         if response.status_code == 426:
             logger.info(
