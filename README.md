@@ -98,8 +98,10 @@ model = TabPFNClassifier(
 
 Notes:
 
+- Thinking mode is only supported on v3 models. Leave `model_path` at its default (`"auto"`, which lets the server pick the latest default — currently a v3 model) or set it explicitly to a v3 model. Combining thinking with a v2 or v2.5 `model_path` raises `ValueError` client-side.
 - `thinking_timeout_s` and `thinking_metric` are only consulted when thinking is enabled; passing them without `thinking_mode=True` or `thinking_effort=...` raises `ValueError`.
-- Thinking-mode fits take longer than regular fits (often several minutes). They count toward your usage just like a regular fit, but each `fit()` may do more work server-side.
+- Thinking-mode fits take longer than regular fits (often several minutes).
+- Thinking-mode fits draw from a **separate, smaller budget** than regular fits — they do not count against your regular prediction allowance, and you cannot use your regular allowance for them. The number of thinking-mode fits you can run per day is limited. If you need more capacity, request an increase via [ux.priorlabs.ai](https://ux.priorlabs.ai).
 
 ## 🔑 Authentication
 

@@ -326,6 +326,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             self.thinking_effort,
             self.thinking_timeout_s,
             self.thinking_metric,
+            self.model_path,
         )
         X = _clean_text_features(X)
         self._validate_targets_and_classes(y)
@@ -623,6 +624,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             self.thinking_effort,
             self.thinking_timeout_s,
             self.thinking_metric,
+            self.model_path,
         )
         self._validate_targets(y)
         X = _clean_text_features(X)
@@ -768,11 +770,20 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             raise ValueError("Input y contains NaN.")
 
 
+def _is_thinking_supported_model_path(model_path: str) -> bool:
+    """Thinking is server-side supported only for v3 models (or the auto sentinel,
+    which lets the server pick — currently a v3 model)."""
+    if model_path in _AUTO_MODEL_PATH_ALIASES:
+        return True
+    return V_3_IDENTIFIER in model_path
+
+
 def validate_thinking_mode(
     thinking_mode: bool,
     thinking_effort: Optional[str],
     thinking_timeout_s: Optional[float],
     thinking_metric: Optional[str],
+    model_path: str,
 ) -> None:
     if (
         thinking_effort is not None
@@ -802,6 +813,14 @@ def validate_thinking_mode(
             f"thinking_timeout_s ({thinking_timeout_s}) exceeds the "
             f"maximum allowed of {THINKING_TIMEOUT_MAX_S} seconds "
             f"({THINKING_TIMEOUT_MAX_S // 60} minutes)."
+        )
+    # Server silently no-ops thinking on non-v3 models, so users can pay for a
+    # request expecting a thinking fit and get a plain one back. Reject upfront.
+    if thinking_enabled and not _is_thinking_supported_model_path(model_path):
+        raise ValueError(
+            f"Thinking mode is only supported on v3 models, got "
+            f"model_path={model_path!r}. Either leave model_path at its "
+            f"default ('auto') or set it to a v3 model (e.g. 'v3_default')."
         )
 
 
