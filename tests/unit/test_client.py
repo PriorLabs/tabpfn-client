@@ -277,6 +277,43 @@ class TestServiceClient(unittest.TestCase):
             ServiceClient._validate_response(response, "test")
         self.assertTrue(str(cm.exception).startswith("Fail to call test"))
 
+    def test_validate_response_streamed_error_envelope(self):
+        # Long-running endpoints can emit a chunked 200 whose body is
+        # {"_streamed_error": True, "message": "..."} when the fit fails
+        # mid-stream. The handler must surface the message, not let the
+        # success-schema validation turn it into a misleading pydantic error.
+        from tabpfn_client.api_models import FitResponse
+
+        response = Mock()
+        response.status_code = 200
+        response.is_closed = True
+        response.json.return_value = {
+            "_streamed_error": True,
+            "message": "thinking fits require at least 500 rows of training data; got 225.",
+        }
+        with self.assertRaises(RuntimeError) as cm:
+            ServiceClient._validate_response(
+                response, "fit", response_models={200: FitResponse}
+            )
+        self.assertIn("streamed", str(cm.exception))
+        self.assertIn("500 rows", str(cm.exception))
+
+    def test_validate_response_streamed_error_falls_back_to_detail(self):
+        from tabpfn_client.api_models import FitResponse
+
+        response = Mock()
+        response.status_code = 200
+        response.is_closed = True
+        response.json.return_value = {
+            "_streamed_error": True,
+            "detail": "fallback detail field",
+        }
+        with self.assertRaises(RuntimeError) as cm:
+            ServiceClient._validate_response(
+                response, "fit", response_models={200: FitResponse}
+            )
+        self.assertIn("fallback detail field", str(cm.exception))
+
     def test_validate_response_only_version_check(self):
         response = Mock()
         response.status_code = 426
