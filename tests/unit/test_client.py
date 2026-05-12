@@ -11,6 +11,7 @@ from tabpfn_client.client import (
     GetModelLimitsResponse,
     NeedsRefittingError,
     ServiceClient,
+    _thinking_aware_dedup_hash,
 )
 from tests.mock_tabpfn_server import with_mock_server
 
@@ -530,3 +531,94 @@ class TestServiceClientPredictionNormalization(unittest.TestCase):
             np.array([[1.0, np.nan], [np.nan, 4.0]]),
             equal_nan=True,
         )
+
+
+class TestThinkingAwareDedupHash(unittest.TestCase):
+    """Pins the cache-partitioning rules for thinking-mode fits.
+
+    Thinking mode is deterministic: same dataset + same thinking config must
+    collide on the server's dedup/fit cache (cache hit -> identical result),
+    but a *different* thinking config (e.g. effort medium -> high) must miss
+    so the fit actually runs at the requested effort.
+    """
+
+    CONTENT = "content-hash-abc"
+
+    def test_no_thinking_returns_content_hash_unchanged(self):
+        # Preserves existing dedup behavior for non-thinking fits.
+        self.assertEqual(
+            _thinking_aware_dedup_hash(
+                self.CONTENT,
+                thinking_effort=None,
+                thinking_timeout_s=None,
+                thinking_metric=None,
+            ),
+            self.CONTENT,
+        )
+
+    def test_same_thinking_config_is_stable(self):
+        # Two calls with identical (dataset, thinking config) must hash to the
+        # same value so the server's cache hits.
+        h1 = _thinking_aware_dedup_hash(
+            self.CONTENT,
+            thinking_effort="medium",
+            thinking_timeout_s=60.0,
+            thinking_metric="rmse",
+        )
+        h2 = _thinking_aware_dedup_hash(
+            self.CONTENT,
+            thinking_effort="medium",
+            thinking_timeout_s=60.0,
+            thinking_metric="rmse",
+        )
+        self.assertEqual(h1, h2)
+
+    def test_effort_change_partitions_cache(self):
+        # The bug fix: medium -> high on the same dataset must NOT collide.
+        medium = _thinking_aware_dedup_hash(
+            self.CONTENT,
+            thinking_effort="medium",
+            thinking_timeout_s=None,
+            thinking_metric=None,
+        )
+        high = _thinking_aware_dedup_hash(
+            self.CONTENT,
+            thinking_effort="high",
+            thinking_timeout_s=None,
+            thinking_metric=None,
+        )
+        self.assertNotEqual(medium, high)
+
+    def test_timeout_and_metric_also_partition(self):
+        base = _thinking_aware_dedup_hash(
+            self.CONTENT,
+            thinking_effort="medium",
+            thinking_timeout_s=None,
+            thinking_metric=None,
+        )
+        different_timeout = _thinking_aware_dedup_hash(
+            self.CONTENT,
+            thinking_effort="medium",
+            thinking_timeout_s=120.0,
+            thinking_metric=None,
+        )
+        different_metric = _thinking_aware_dedup_hash(
+            self.CONTENT,
+            thinking_effort="medium",
+            thinking_timeout_s=None,
+            thinking_metric="rmse",
+        )
+        self.assertNotEqual(base, different_timeout)
+        self.assertNotEqual(base, different_metric)
+        self.assertNotEqual(different_timeout, different_metric)
+
+    def test_thinking_hash_differs_from_content_hash(self):
+        # Enabling thinking must change the hash, otherwise a prior
+        # non-thinking fit on the same dataset would be served.
+        with_thinking = _thinking_aware_dedup_hash(
+            self.CONTENT,
+            thinking_effort="medium",
+            thinking_timeout_s=None,
+            thinking_metric=None,
+        )
+        self.assertNotEqual(with_thinking, self.CONTENT)

@@ -152,6 +152,38 @@ def _serialize_to_parquet(df: pd.DataFrame) -> tuple[bytes, str]:
     return parquet_bytes, crc32c_b64
 
 
+def _thinking_aware_dedup_hash(
+    content_hash: str,
+    *,
+    thinking_effort: str | None,
+    thinking_timeout_s: float | None,
+    thinking_metric: str | None,
+) -> str:
+    """Return a dedup hash that partitions by thinking config.
+
+    When thinking is disabled (all params None) the content hash is returned
+    unchanged so non-thinking calls keep the existing dedup semantics. When
+    thinking is enabled, the thinking config is folded into the hash so that
+    `(dataset, thinking_config)` becomes the cache unit — same config hits
+    the existing fit, different config misses it.
+    """
+    if (
+        thinking_effort is None
+        and thinking_timeout_s is None
+        and thinking_metric is None
+    ):
+        return content_hash
+    discriminator = json.dumps(
+        {
+            "thinking_effort": thinking_effort,
+            "thinking_timeout_s": thinking_timeout_s,
+            "thinking_metric": thinking_metric,
+        },
+        sort_keys=True,
+    )
+    return _get_crc32c_hash(f"{content_hash}|{discriminator}".encode("utf-8"))
+
+
 class NeedsRefittingError(Exception):
     """
     Exception raised when the server is not able to predict given the current state.
@@ -315,12 +347,49 @@ class ServiceClient(Singleton):
                         f"the server limit of {limits.dataset_max_size_bytes} bytes."
                     )
 
+        # Resolve thinking config up-front: it feeds both the dedup hash below
+        # and the FitRequest fields further down. Thinking is enabled when
+        # either `thinking_mode=True` is set or `thinking_effort` is set; when
+        # only `thinking_mode=True` is supplied, the effective effort is
+        # "medium" (matches the server's FitRequest default).
+        thinking_enabled = bool(tabpfn_config) and (
+            bool(tabpfn_config.get("thinking_mode"))
+            or tabpfn_config.get("thinking_effort") is not None
+        )
+        if thinking_enabled and tabpfn_config:
+            thinking_effort = tabpfn_config.get("thinking_effort") or "medium"
+            thinking_timeout_s = tabpfn_config.get("thinking_timeout_s")
+            thinking_metric = tabpfn_config.get("thinking_metric")
+        else:
+            thinking_effort = None
+            thinking_timeout_s = None
+            thinking_metric = None
+
         x_bytes, x_crc32c_hash = _serialize_to_parquet(df_X)
         y_bytes, y_crc32c_hash = _serialize_to_parquet(df_y)
 
         if dedup_datasets_enabled():
-            x_dedup_hash = x_crc32c_hash
-            y_dedup_hash = y_crc32c_hash
+            # When thinking is enabled, mix the thinking config into the dedup
+            # hash so the server treats (dataset, thinking_config) as the
+            # cache unit. Thinking is deterministic, so a second call with the
+            # same dataset *and* same thinking config should hit the existing
+            # fit; but a follow-up call with a different `thinking_effort` (or
+            # timeout / metric) must miss it instead of silently reusing the
+            # earlier fit. The hash is opaque to the server's dedup layer, so
+            # discriminating it by thinking config is enough to partition the
+            # cache keys without any server change.
+            x_dedup_hash = _thinking_aware_dedup_hash(
+                x_crc32c_hash,
+                thinking_effort=thinking_effort,
+                thinking_timeout_s=thinking_timeout_s,
+                thinking_metric=thinking_metric,
+            )
+            y_dedup_hash = _thinking_aware_dedup_hash(
+                y_crc32c_hash,
+                thinking_effort=thinking_effort,
+                thinking_timeout_s=thinking_timeout_s,
+                thinking_metric=thinking_metric,
+            )
         else:
             x_dedup_hash = None
             y_dedup_hash = None
@@ -382,14 +451,6 @@ class ServiceClient(Singleton):
                     raise
 
         tabpfn_systems = ["preprocessing", "text"]
-        # Thinking is enabled when either flag is set: explicit `thinking_mode=True`,
-        # or any non-None `thinking_effort`. Setting `thinking_effort` alone is
-        # enough — the server-side validator on FitRequest also normalises this,
-        # but doing it here means the request body itself is consistent.
-        thinking_enabled = bool(tabpfn_config) and (
-            bool(tabpfn_config.get("thinking_mode"))
-            or tabpfn_config.get("thinking_effort") is not None
-        )
         if tabpfn_config:
             if tabpfn_config.get("paper_version") is True:
                 tabpfn_systems = []
@@ -399,18 +460,10 @@ class ServiceClient(Singleton):
                 tabpfn_systems = ["preprocessing", "text", "thinking"]
 
         # The client-side `thinking_*` knobs forward 1:1 to the server's
-        # top-level FitRequest fields. When the user enabled thinking via
-        # `thinking_mode=True` without picking a level, default to "medium".
-        # The user-facing kwarg is `thinking_metric`; on the wire it is sent
-        # as `thinking_effort_metric` (matching the server's FitRequest schema).
-        if thinking_enabled and tabpfn_config:
-            thinking_effort = tabpfn_config.get("thinking_effort") or "medium"
-            thinking_timeout_s = tabpfn_config.get("thinking_timeout_s")
-            thinking_metric = tabpfn_config.get("thinking_metric")
-        else:
-            thinking_effort = None
-            thinking_timeout_s = None
-            thinking_metric = None
+        # top-level FitRequest fields. The user-facing kwarg is
+        # `thinking_metric`; on the wire it is sent as `thinking_effort_metric`
+        # (matching the server's FitRequest schema). The effective values were
+        # resolved above so they could feed into the dedup hash.
 
         # Strip client-only keys that the server does not expect (mirrors
         # the predict path's filter below).
