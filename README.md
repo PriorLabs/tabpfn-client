@@ -133,17 +133,7 @@ We're building the future of tabular machine learning and would love your involv
 
 ### API Cost Calculation
 
-Each API request consumes usage credits based on the following formula:
-
-```python
-api_cost = max((num_train_rows + num_test_rows) * num_cols * n_estimators, 5000)
-```
-
-Where `n_estimators` defaults to:
-
-- 8 for both classification and regression
-
-Per day the current prediction allowance is 100,000,000 credits. We will adjust this limit based on usage patterns. If you require further credits, please fill out [this form](https://forms.gle/2xbHnkxbpb7BtpE47).
+Each API request consumes usage credits; the cost grows with the number of rows and columns in your dataset. The default allowance is **50,000,000 credits per day** and **200,000,000 credits per month**. You can check your current usage at [ux.priorlabs.ai/api/usage](https://ux.priorlabs.ai/api/usage). If you need more, please fill out [this form](https://forms.gle/2xbHnkxbpb7BtpE47).
 
 ### Monitoring Usage
 
