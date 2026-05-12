@@ -18,7 +18,7 @@ TabPFN is a foundation model for tabular data that outperforms traditional metho
 >
 > [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/PriorLabs/TabPFN/blob/main/examples/notebooks/TabPFN_Demo_Local.ipynb)
 
-## ✅ Stable Release
+## Stable Release
 
 This API is now in a stable release. It has been extensively tested and is used across multiple use cases. While we continue to make improvements, the core service is reliable for day-to-day use. Please reach out to us if you encounter any stability issues.
 
@@ -26,7 +26,7 @@ This is a cloud-based service: your data will be sent to our servers for process
 
 Please only upload data you have permission to share, and avoid sensitive, confidential, or personally identifiable information. Consider anonymizing or pseudonymizing your data in line with your organization’s policies.
 
-## 🌐 TabPFN Ecosystem
+## TabPFN Ecosystem
 
 Choose the right TabPFN implementation for your needs:
 
@@ -35,7 +35,7 @@ Choose the right TabPFN implementation for your needs:
 - **[TabPFN](https://github.com/priorlabs/tabpfn)**: Core implementation for local deployment and research
 - **[TabPFN UX](https://ux.priorlabs.ai)**: No-code TabPFN usage
 
-## 🏁 Quick Start
+## Quick Start
 
 ### Installation
 
@@ -63,10 +63,6 @@ predictions = model.predict(X_test)
 # Get probability estimates
 probabilities = model.predict_proba(X_test)
 ```
-
-### Best Results
-
-For optimal performance, use the `AutoTabPFNClassifier` or `AutoTabPFNRegressor` for post-hoc ensembling. These can be found in the [TabPFN Extensions](https://github.com/PriorLabs/tabpfn-extensions) repository. Post-hoc ensembling combines multiple TabPFN models into an ensemble.
 
 ## Thinking Mode
 
@@ -103,7 +99,7 @@ Notes:
 - Thinking-mode fits take longer than regular fits (often several minutes).
 - Thinking-mode fits draw from a **separate, smaller budget** than regular fits — they do not count against your regular prediction allowance, and you cannot use your regular allowance for them. The number of thinking-mode fits you can run per day is limited. If you need more capacity, request an increase via [ux.priorlabs.ai](https://ux.priorlabs.ai).
 
-## 🔑 Authentication
+## Authentication
 
 ### Load Your Token
 
@@ -118,7 +114,7 @@ and login (on another machine) using your access token, skipping the interactive
 tabpfn_client.set_access_token(token)
 ```
 
-## 🤝 Join Our Community
+## Join Our Community
 
 We're building the future of tabular machine learning and would love your involvement! Here's how you can participate and get help:
 
@@ -133,21 +129,11 @@ We're building the future of tabular machine learning and would love your involv
    - Share your success stories and use cases
 4. **Stay Updated**: Star the repo and join Discord for the latest updates
 
-## 📊 Usage Limits
+## Usage Limits
 
 ### API Cost Calculation
 
-Each API request consumes usage credits based on the following formula:
-
-```python
-api_cost = max((num_train_rows + num_test_rows) * num_cols * n_estimators, 5000)
-```
-
-Where `n_estimators` defaults to:
-
-- 8 for both classification and regression
-
-Per day the current prediction allowance is 100,000,000 credits. We will adjust this limit based on usage patterns. If you require further credits, please fill out [this form](https://forms.gle/2xbHnkxbpb7BtpE47).
+Each API request consumes usage credits; the cost grows with the number of rows and columns in your dataset. You can check your current usage at [ux.priorlabs.ai/api/usage](https://ux.priorlabs.ai/api/usage).
 
 ### Monitoring Usage
 
@@ -167,7 +153,7 @@ In particular, regression with `output_type="full"` has a stricter cap on the nu
 
 These limits will be increased in future releases.
 
-## Access/Delete Personal Information
+## Access/Delete Data
 
 You can use our `UserDataClient` to access and delete personal information.
 
@@ -177,9 +163,27 @@ from tabpfn_client import UserDataClient
 print(UserDataClient.get_data_summary())
 ```
 
-## 📚 Citation
+## Citation
+
+You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586-024-08328-6), and the model report of TabPFN-2.5 [here](https://arxiv.org/abs/2511.08667).
+
+<details>
+<summary><b>BibTeX</b></summary>
 
 ```bibtex
+@misc{grinsztajn2025tabpfn,
+  title={TabPFN-2.5: Advancing the State of the Art in Tabular Foundation Models},
+  author={Léo Grinsztajn and Klemens Flöge and Oscar Key and Felix Birkel and Philipp Jund and Brendan Roof and
+          Benjamin Jäger and Dominik Safaric and Simone Alessi and Adrian Hayler and Mihir Manium and Rosen Yu and
+          Felix Jablonski and Shi Bin Hoo and Anurag Garg and Jake Robertson and Magnus Bühler and Vladyslav Moroshan and
+          Lennart Purucker and Clara Cornu and Lilly Charlotte Wehrhahn and Alessandro Bonetto and
+          Bernhard Schölkopf and Sauraj Gambhir and Noah Hollmann and Frank Hutter},
+  year={2025},
+  eprint={2511.08667},
+  archivePrefix={arXiv},
+  url={https://arxiv.org/abs/2511.08667},
+}
+
 @article{hollmann2025tabpfn,
  title={Accurate predictions on small data with a tabular foundation model},
  author={Hollmann, Noah and M{\"u}ller, Samuel and Purucker, Lennart and
@@ -202,11 +206,16 @@ print(UserDataClient.get_data_summary())
 }
 ```
 
-## 🤝 License
+</details>
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+## License
+
+This project is licensed under the Apache License 2.0 — see the [LICENSE](LICENSE) file for details.
 
 ## Development
+
+<details>
+<summary><b>Setup, build, and release instructions</b></summary>
 
 To encourage better coding practices, `ruff` has been added to the pre-commit hooks. This will ensure that the code is formatted properly before being committed. To enable pre-commit (if you haven't), run the following command:
 
@@ -269,3 +278,8 @@ uv venv && source .venv/bin/activate
 uv pip install -U --pre tabpfn-client
 python quick_test.py
 ```
+
+</details>
+
+---
+Built with ❤️ by the TabPFN community
