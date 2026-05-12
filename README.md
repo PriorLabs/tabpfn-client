@@ -133,7 +133,7 @@ We're building the future of tabular machine learning and would love your involv
 
 ### API Cost Calculation
 
-Each API request consumes usage credits; the cost grows with the number of rows and columns in your dataset. The default allowance is **50,000,000 credits per day** and **200,000,000 credits per month**. You can check your current usage at [ux.priorlabs.ai/api/usage](https://ux.priorlabs.ai/api/usage). If you need more, please fill out [this form](https://forms.gle/2xbHnkxbpb7BtpE47).
+Each API request consumes usage credits; the cost grows with the number of rows and columns in your dataset. You can check your current usage at [ux.priorlabs.ai/api/usage](https://ux.priorlabs.ai/api/usage). If you need more, please fill out [this form](https://forms.gle/2xbHnkxbpb7BtpE47).
 
 ### Monitoring Usage
 
