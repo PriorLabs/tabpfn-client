@@ -211,3 +211,6 @@ You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586
 ## License
 
 This project is licensed under the Apache License 2.0 — see the [LICENSE](LICENSE) file for details.
+
+---
+Built with ❤️ by the TabPFN community
