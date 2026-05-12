@@ -212,5 +212,74 @@ You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586
 
 This project is licensed under the Apache License 2.0 — see the [LICENSE](LICENSE) file for details.
 
+## Development
+
+<details>
+<summary><b>Setup, build, and release instructions</b></summary>
+
+To encourage better coding practices, `ruff` has been added to the pre-commit hooks. This will ensure that the code is formatted properly before being committed. To enable pre-commit (if you haven't), run the following command:
+
+```bash
+pre-commit install
+```
+
+Additionally, it is recommended that developers install the ruff extension in their preferred editor. For installation instructions, refer to the [Ruff Integrations Documentation](https://docs.astral.sh/ruff/integrations/).
+
+### Build from GitHub
+
+```bash
+git clone https://github.com/PriorLabs/tabpfn-client
+cd tabpfn-client
+git submodule update --init --recursive
+pip install -e .
+cd ..
+```
+
+NOTE: For development, you will need to download some additional dev dependencies.
+Use the below command to get it ready for development and running tests.
+
+```bash
+pip install -e ".[dev]"
+```
+
+### Release
+
+1. First ensure you've bumped the version in pyproject.toml. Use an rc suffix until you're sure it works. Something like x.y.zrc1.
+
+2. Build, upload to the test PyPI, install and run a quick test.
+
+Note: Assumes a working uv install + venv.
+
+```bash
+rm -rf ~/tabpfn-client-test.tmp dist
+uv pip install --upgrade build && python -m build
+uv pip install --upgrade twine && python -m twine upload --repository testpypi dist/*
+# Use a separate directory for testing so we don't accidentally run the local code
+mkdir ~/tabpfn-client-test.tmp && cp tests/quick_test.py ~/tabpfn-client-test.tmp && cp tests/quick_test_reasoning.py ~/tabpfn-client-test.tmp && cd ~/tabpfn-client-test.tmp
+uv venv && source .venv/bin/activate
+# We use --pre for the rc version and --no-deps because TestPyPI dependencies are unreliable.
+pip3 download --pre --index-url https://test.pypi.org/simple/ --no-deps tabpfn-client
+uv pip install *.whl
+python quick_test.py
+```
+
+3. Return to this repo. Correct the version. Ideally this should be what is in main. It shouldn't have an rc suffix unless we're doing broader pre-release testing.
+
+4. Build, upload to the real PyPI, install and run a quick test.
+
+```bash
+rm -rf ~/tabpfn-client-test.tmp dist
+uv pip install --upgrade build && python -m build
+uv pip install --upgrade twine && python -m twine upload --repository pypi dist/*
+# Use a separate directory for testing so we don't accidentally run the local code
+mkdir ~/tabpfn-client-test.tmp && cp tests/quick_test.py ~/tabpfn-client-test.tmp && cp tests/quick_test_reasoning.py ~/tabpfn-client-test.tmp && cd ~/tabpfn-client-test.tmp
+uv venv && source .venv/bin/activate
+# We use --pre in case you intend to push an rc version.
+uv pip install -U --pre tabpfn-client
+python quick_test.py
+```
+
+</details>
+
 ---
 Built with ❤️ by the TabPFN community
