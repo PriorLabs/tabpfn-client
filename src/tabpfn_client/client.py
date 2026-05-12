@@ -161,7 +161,7 @@ def _thinking_aware_dedup_hash(
 ) -> str:
     """Return a dedup hash that partitions by thinking config.
 
-    When thinking is disabled (all params None) the content hash is returned
+    When thinking is disabled the content hash is returned
     unchanged so non-thinking calls keep the existing dedup semantics. When
     thinking is enabled, the thinking config is folded into the hash so that
     `(dataset, thinking_config)` becomes the cache unit — same config hits
@@ -350,11 +350,6 @@ class ServiceClient(Singleton):
                         f"the server limit of {limits.dataset_max_size_bytes} bytes."
                     )
 
-        # Resolve thinking config up-front: it feeds both the dedup hash below
-        # and the FitRequest fields further down. Thinking is enabled when
-        # either `thinking_mode=True` is set or `thinking_effort` is set; when
-        # only `thinking_mode=True` is supplied, the effective effort is
-        # "medium" (matches the server's FitRequest default).
         thinking_enabled = bool(tabpfn_config) and (
             bool(tabpfn_config.get("thinking_mode"))
             or tabpfn_config.get("thinking_effort") is not None
@@ -372,15 +367,6 @@ class ServiceClient(Singleton):
         y_bytes, y_crc32c_hash = _serialize_to_parquet(df_y)
 
         if dedup_datasets_enabled():
-            # When thinking is enabled, mix the thinking config into the dedup
-            # hash so the server treats (dataset, thinking_config) as the
-            # cache unit. Thinking is deterministic, so a second call with the
-            # same dataset *and* same thinking config should hit the existing
-            # fit; but a follow-up call with a different `thinking_effort` (or
-            # timeout / metric) must miss it instead of silently reusing the
-            # earlier fit. The hash is opaque to the server's dedup layer, so
-            # discriminating it by thinking config is enough to partition the
-            # cache keys without any server change.
             x_dedup_hash = _thinking_aware_dedup_hash(
                 x_crc32c_hash,
                 thinking_effort=thinking_effort,
