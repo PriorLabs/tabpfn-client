@@ -612,6 +612,23 @@ class TestThinkingAwareDedupHash(unittest.TestCase):
         self.assertNotEqual(base, different_metric)
         self.assertNotEqual(different_timeout, different_metric)
 
+    def test_int_and_float_timeout_hash_identically(self):
+        # `json.dumps(60)` and `json.dumps(60.0)` differ; the helper normalizes
+        # so callers don't suffer spurious cache misses on equivalent values.
+        h_int = _thinking_aware_dedup_hash(
+            self.CONTENT,
+            thinking_effort="medium",
+            thinking_timeout_s=60,
+            thinking_metric=None,
+        )
+        h_float = _thinking_aware_dedup_hash(
+            self.CONTENT,
+            thinking_effort="medium",
+            thinking_timeout_s=60.0,
+            thinking_metric=None,
+        )
+        self.assertEqual(h_int, h_float)
+
     def test_thinking_hash_differs_from_content_hash(self):
         # Enabling thinking must change the hash, otherwise a prior
         # non-thinking fit on the same dataset would be served.

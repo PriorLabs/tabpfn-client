@@ -176,8 +176,11 @@ def _thinking_aware_dedup_hash(
     discriminator = json.dumps(
         {
             "thinking_effort": thinking_effort,
-            "thinking_timeout_s": thinking_timeout_s,
-            "thinking_metric": thinking_metric,
+            "thinking_timeout_s": (
+                # normalise to float for cache stability (0 vs 0.0)
+                float(thinking_timeout_s) if thinking_timeout_s is not None else None
+            ),
+            "thinking_effort_metric": thinking_metric,
         },
         sort_keys=True,
     )
@@ -356,7 +359,7 @@ class ServiceClient(Singleton):
             bool(tabpfn_config.get("thinking_mode"))
             or tabpfn_config.get("thinking_effort") is not None
         )
-        if thinking_enabled and tabpfn_config:
+        if thinking_enabled:
             thinking_effort = tabpfn_config.get("thinking_effort") or "medium"
             thinking_timeout_s = tabpfn_config.get("thinking_timeout_s")
             thinking_metric = tabpfn_config.get("thinking_metric")
