@@ -153,7 +153,7 @@ In particular, regression with `output_type="full"` has a stricter cap on the nu
 
 These limits will be increased in future releases.
 
-## Access/Delete Personal Information
+## Access/Delete Data
 
 You can use our `UserDataClient` to access and delete personal information.
 
