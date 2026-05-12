@@ -179,6 +179,9 @@ print(UserDataClient.get_data_summary())
 
 ## 📚 Citation
 
+<details>
+<summary><b>BibTeX</b></summary>
+
 ```bibtex
 @article{hollmann2025tabpfn,
  title={Accurate predictions on small data with a tabular foundation model},
@@ -201,3 +204,5 @@ print(UserDataClient.get_data_summary())
   year={2023}
 }
 ```
+
+</details>
