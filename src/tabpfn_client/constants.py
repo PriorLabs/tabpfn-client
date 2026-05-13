@@ -54,7 +54,15 @@ TABPFN_CLIENT_API_URL = os.getenv("TABPFN_CLIENT_API_URL")
 TABPFN_CLIENT_MAX_THREAD_PER_UPLOAD = int(
     os.getenv("TABPFN_CLIENT_MAX_THREAD_PER_UPLOAD", 8)
 )
-TABPFN_CLIENT_TIMEOUT = float(os.getenv("TABPFN_CLIENT_TIMEOUT", 900.0))
+# Default raised from 900s. At the documented v3 row caps (`get_model_limits`
+# returns `test_set_max_rows=200_000` for v3 / 1M-row trains), a single
+# 50k-test predict on a 1M context measures ~950s of GPU time on the server.
+# The prior 900s SDK default raised `httpx.ReadTimeout` before the server
+# could respond on workloads sitting near v3's published caps. 1800s clears
+# the worst-case single-call predict at those caps and mirrors the server's
+# `PRIOR_WORKER_QUEUE_PREDICT_TIMEOUT_SECS` (also 1800s post tabpfn-server
+# #883), so the SDK and server give up on the same wall-clock budget.
+TABPFN_CLIENT_TIMEOUT = float(os.getenv("TABPFN_CLIENT_TIMEOUT", 1800.0))
 TABPFN_CLIENT_UPLOAD_TIMEOUT = float(os.getenv("TABPFN_CLIENT_UPLOAD_TIMEOUT", 7200.0))
 
 
