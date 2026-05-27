@@ -133,7 +133,7 @@ We're building the future of tabular machine learning and would love your involv
 
 ### API Cost Calculation
 
-Each API request consumes usage credits; the cost grows with the number of rows and columns in your dataset. You can check your current usage at [ux.priorlabs.ai/api/usage](https://ux.priorlabs.ai/api/usage).
+Each API request consumes usage credits; the cost grows with the number of rows and columns in your dataset. You can check your current usage at [ux.priorlabs.ai/account/usage](https://ux.priorlabs.ai/account/usage).
 
 ### Monitoring Usage
 
