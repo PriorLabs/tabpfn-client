@@ -137,15 +137,31 @@ class _SagemakerBase(BaseEstimator):
         return cfg
 
     def _runtime_client(self):
+        # Cached on the instance: boto3 service-model load + credential
+        # resolution is non-trivial and we don't want it on every predict.
+        client = getattr(self, "_cached_client", None)
+        if client is not None:
+            return client
         _require_boto3()
         if self.boto_session is not None:
-            return self.boto_session.client("sagemaker-runtime")
-        if self.region_name is not None:
-            return boto3.client("sagemaker-runtime", region_name=self.region_name)
-        return boto3.client("sagemaker-runtime")
+            client = self.boto_session.client("sagemaker-runtime")
+        elif self.region_name is not None:
+            client = boto3.client("sagemaker-runtime", region_name=self.region_name)
+        else:
+            client = boto3.client("sagemaker-runtime")
+        self._cached_client = client
+        return client
+
+    def __getstate__(self) -> Dict[str, Any]:
+        # boto3 clients aren't pickleable. Strip the cache so the estimator
+        # stays compatible with sklearn's pickle-based parallel/grid utilities.
+        state = self.__dict__.copy()
+        state.pop("_cached_client", None)
+        return state
 
     def fit(self, X: Any, y: Any) -> "_SagemakerBase":
-        X_arr = X if isinstance(X, (pd.DataFrame, pd.Series)) else np.asarray(X)
+        # X must be 2D; only DataFrame/array. y can be 1D (Series/array) or 2D.
+        X_arr = X if isinstance(X, pd.DataFrame) else np.asarray(X)
         y_arr = y if isinstance(y, (pd.DataFrame, pd.Series)) else np.asarray(y)
         if X_arr.shape[0] != y_arr.shape[0]:
             raise ValueError(
@@ -155,6 +171,8 @@ class _SagemakerBase(BaseEstimator):
         self.X_train_ = X_arr
         self.y_train_ = y_arr
         self._cached_model_id: Optional[str] = None
+        if self._TASK == "classification":
+            self.classes_ = np.unique(y_arr)
         return self
 
     def _invoke(self, X_test: Any, output_type: str) -> Dict[str, Any]:
