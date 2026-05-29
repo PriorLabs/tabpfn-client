@@ -114,6 +114,42 @@ and login (on another machine) using your access token, skipping the interactive
 tabpfn_client.set_access_token(token)
 ```
 
+## AWS SageMaker (BYOC)
+
+If you've subscribed to the TabPFN AWS Marketplace listing and deployed the container to a SageMaker real-time endpoint, you can invoke it through `tabpfn_client.sagemaker` using a near-identical scikit-learn surface. There is no PriorLabs API token in this path — you authenticate to your own AWS account, and `predict` calls are billed by AWS SageMaker rather than against your TabPFN usage allowance.
+
+Install with the optional `sagemaker` extra to pull in `boto3`:
+
+```bash
+pip install --upgrade 'tabpfn-client[sagemaker]'
+```
+
+Then point the estimator at your endpoint:
+
+```python
+from tabpfn_client.sagemaker import TabPFNClassifier, TabPFNRegressor
+from sklearn.datasets import load_breast_cancer
+from sklearn.model_selection import train_test_split
+
+X, y = load_breast_cancer(return_X_y=True)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.5, random_state=42)
+
+clf = TabPFNClassifier(
+    endpoint_name="your-sagemaker-endpoint-name",
+    region_name="us-east-1",
+)
+clf.fit(X_train, y_train)
+clf.predict(X_test)
+clf.predict_proba(X_test)
+```
+
+Notes:
+
+- AWS credentials are resolved through the standard `boto3` credential chain (env vars, `~/.aws/credentials`, instance profile, SSO, etc.). Pass `boto_session=session` to use an explicit `boto3.Session`.
+- `fit()` is local: TabPFN is in-context, so the estimator just keeps `X_train` / `y_train` and ships them on each `predict*` call. There is no separate training job.
+- Set `use_kv_cache=True` to opt into the v3 KV-cache path on the server: the first round-trip uploads training data and captures a `model_id`; subsequent `predict*` calls reference that id and skip the training upload. This trades a stateful endpoint for lower per-call latency and payload size.
+- Constructor kwargs mirror the public `tabpfn_client.TabPFNClassifier` / `TabPFNRegressor` so the same code is portable between the managed API and a SageMaker endpoint, modulo `endpoint_name` / `region_name`.
+
 ## Join Our Community
 
 We're building the future of tabular machine learning and would love your involvement! Here's how you can participate and get help:
