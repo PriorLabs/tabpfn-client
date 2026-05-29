@@ -150,6 +150,19 @@ Notes:
 - Set `use_kv_cache=True` to opt into the v3 KV-cache path on the server: the first round-trip uploads training data and captures a `model_id`; subsequent `predict*` calls reference that id and skip the training upload. This trades a stateful endpoint for lower per-call latency and payload size.
 - Constructor kwargs mirror the public `tabpfn_client.TabPFNClassifier` / `TabPFNRegressor` so the same code is portable between the managed API and a SageMaker endpoint, modulo `endpoint_name` / `region_name`.
 
+Thinking mode is supported on SageMaker by passing the same `thinking_mode` / `thinking_effort` / `thinking_timeout_s` / `thinking_metric` kwargs:
+
+```python
+clf = TabPFNClassifier(
+    endpoint_name="your-sagemaker-endpoint-name",
+    region_name="us-east-1",
+    thinking_mode=True,
+    thinking_effort="medium",
+)
+```
+
+The first `predict*` call after `fit()` runs the autogluon-wrapped fit on the endpoint and can take from tens of seconds up to several minutes depending on `thinking_effort` and data size; the fitted model is cached on the endpoint and subsequent calls are fast. Caching is **required** when thinking is enabled (the client sets `use_kv_cache=True` automatically) — without it every prediction would redo the fit, which would exceed SageMaker's synchronous invoke window. Only `thinking_effort="medium"` is reliable within the real-time endpoint's ~60 s sync window for the *first* call; `"high"` may exceed it and is currently best-effort.
+
 ## Join Our Community
 
 We're building the future of tabular machine learning and would love your involvement! Here's how you can participate and get help:

@@ -109,6 +109,17 @@ class _SagemakerBase(BaseEstimator):
         self.thinking_metric = thinking_metric
         self.use_kv_cache = use_kv_cache
 
+    @property
+    def _thinking_active(self) -> bool:
+        return self.thinking_mode or self.thinking_effort is not None
+
+    @property
+    def _effective_use_kv_cache(self) -> bool:
+        # Thinking implies caching: without it every predict redoes the
+        # autogluon HPO sweep. The server enforces this too; we mirror it
+        # client-side so the wire body always agrees.
+        return self.use_kv_cache or self._thinking_active
+
     def _build_tabpfn_config(self) -> Dict[str, Any]:
         cfg: Dict[str, Any] = {
             "n_estimators": self.n_estimators,
@@ -118,23 +129,32 @@ class _SagemakerBase(BaseEstimator):
             "inference_precision": self.inference_precision,
             "random_state": self.random_state,
             "inference_config": self.inference_config,
-            "fit_mode": "fit_with_cache" if self.use_kv_cache else "fit_preprocessors",
+            "fit_mode": "fit_with_cache" if self._effective_use_kv_cache else "fit_preprocessors",
         }
         # paper_version is OSS TabPFN-only — server's tagged-union forbids
         # extras. balance_probabilities lives only on ClassifierTabPFNConfig.
+        # thinking_* fields live at the top of the body, not under
+        # tabpfn_config — see `_invoke`.
         if self._TASK == "classification":
             cfg["balance_probabilities"] = self.balance_probabilities
-        if self.thinking_mode or self.thinking_effort is not None:
-            cfg["thinking_mode"] = True
-            if self.thinking_effort is not None:
-                cfg["thinking_effort"] = self.thinking_effort
-            if self.thinking_timeout_s is not None:
-                cfg["thinking_timeout_s"] = self.thinking_timeout_s
-            if self.thinking_metric is not None:
-                cfg["thinking_metric"] = self.thinking_metric
         if self.model_path not in ("auto", "default"):
             cfg["model_path"] = self.model_path
         return cfg
+
+    def _build_thinking_block(self) -> Dict[str, Any]:
+        """Top-level wire fields for thinking-mode. Sibling of
+        `task_config`, mirroring gapi's `FitRequest` shape. Empty when
+        thinking isn't active so callers can splat unconditionally."""
+        if not self._thinking_active:
+            return {}
+        block: Dict[str, Any] = {
+            "thinking_effort": self.thinking_effort if self.thinking_effort is not None else "medium",
+        }
+        if self.thinking_timeout_s is not None:
+            block["thinking_timeout_s"] = self.thinking_timeout_s
+        if self.thinking_metric is not None:
+            block["thinking_metric"] = self.thinking_metric
+        return block
 
     def _runtime_client(self):
         # Cached on the instance: boto3 service-model load + credential
@@ -192,8 +212,9 @@ class _SagemakerBase(BaseEstimator):
                 "predict_params": params,
             },
             "X_test": _to_jsonable(X_test),
+            **self._build_thinking_block(),
         }
-        if self.use_kv_cache and self._cached_model_id is not None:
+        if self._effective_use_kv_cache and self._cached_model_id is not None:
             body["context"] = {"model_id": self._cached_model_id}
         else:
             body["X_train"] = _to_jsonable(self.X_train_)
@@ -213,7 +234,7 @@ class _SagemakerBase(BaseEstimator):
         # StreamingBody is file-like; json.load avoids buffering the full
         # response in memory, which matters for output_type="full".
         payload = json.load(resp["Body"])
-        if self.use_kv_cache:
+        if self._effective_use_kv_cache:
             self._cached_model_id = payload.get("model_id") or self._cached_model_id
         return payload
 
