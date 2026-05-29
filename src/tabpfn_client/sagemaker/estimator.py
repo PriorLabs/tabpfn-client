@@ -175,13 +175,21 @@ class _SagemakerBase(BaseEstimator):
             self.classes_ = np.unique(y_arr)
         return self
 
-    def _invoke(self, X_test: Any, output_type: str) -> Dict[str, Any]:
+    def _invoke(
+        self,
+        X_test: Any,
+        output_type: str,
+        predict_params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         check_is_fitted(self, ["X_train_", "y_train_"])
+        params: Dict[str, Any] = {"output_type": output_type}
+        if predict_params:
+            params.update(predict_params)
         body: Dict[str, Any] = {
             "task_config": {
                 "task": self._TASK,
                 "tabpfn_config": self._build_tabpfn_config(),
-                "predict_params": {"output_type": output_type},
+                "predict_params": params,
             },
             "X_test": _to_jsonable(X_test),
         }
@@ -190,21 +198,21 @@ class _SagemakerBase(BaseEstimator):
         else:
             body["X_train"] = _to_jsonable(self.X_train_)
             # `y_train` on the wire is 2D (n_samples, 1) per PredictRequest.
-            y = self.y_train_
-            if isinstance(y, pd.Series):
-                body["y_train"] = y.to_frame().values.tolist()
-            else:
-                y_arr = np.asarray(y)
-                if y_arr.ndim == 1:
-                    y_arr = y_arr.reshape(-1, 1)
-                body["y_train"] = y_arr.tolist()
+            # np.asarray handles pd.Series too, so the single-path form covers
+            # ndarray / list / DataFrame / Series uniformly.
+            y_arr = np.asarray(self.y_train_)
+            if y_arr.ndim == 1:
+                y_arr = y_arr.reshape(-1, 1)
+            body["y_train"] = y_arr.tolist()
         resp = self._runtime_client().invoke_endpoint(
             EndpointName=self.endpoint_name,
             ContentType="application/json",
             Accept="application/json",
             Body=json.dumps(body).encode("utf-8"),
         )
-        payload = json.loads(resp["Body"].read())
+        # StreamingBody is file-like; json.load avoids buffering the full
+        # response in memory, which matters for output_type="full".
+        payload = json.load(resp["Body"])
         if self.use_kv_cache:
             self._cached_model_id = payload.get("model_id") or self._cached_model_id
         return payload
@@ -238,12 +246,22 @@ class TabPFNClassifier(_SagemakerBase, ClassifierMixin):
 class TabPFNRegressor(_SagemakerBase, RegressorMixin):
     """TabPFN regressor backed by a SageMaker real-time endpoint.
 
-    `output_type` defaults to "mean"; pass "median", "mode", or "full" for
-    the alternative distributional outputs the server exposes.
+    `output_type` defaults to "mean"; pass "median", "mode", "full", or
+    "quantiles" for the alternative distributional outputs the server
+    exposes. When `output_type="quantiles"`, `quantiles` selects the cut
+    points (each in [0, 1]).
     """
 
     _TASK = "regression"
 
-    def predict(self, X: Any, output_type: str = "mean") -> np.ndarray:
-        result = self._invoke(X, output_type=output_type)
+    def predict(
+        self,
+        X: Any,
+        output_type: str = "mean",
+        quantiles: Optional[list] = None,
+    ) -> np.ndarray:
+        predict_params: Dict[str, Any] = {}
+        if quantiles is not None:
+            predict_params["quantiles"] = quantiles
+        result = self._invoke(X, output_type=output_type, predict_params=predict_params)
         return np.asarray(result["prediction"])
