@@ -39,7 +39,7 @@ from tabpfn_client.constants import (
 )
 from tabpfn_common_utils import utils as common_utils
 from tabpfn_common_utils.utils import Singleton
-from tabpfn_client.api_models import (
+from tabpfn_client.sdks.gapi import (
     GetModelLimitsResponse,
     PrepareTrainSetUploadRequest,
     PrepareTrainSetUploadResponse,
@@ -804,9 +804,7 @@ class ServiceClient(Singleton):
         # real message is buried inside `input_value`.
         if isinstance(load, dict) and load.get("_streamed_error"):
             message = (
-                load.get("message")
-                or load.get("detail", "")
-                or response.reason_phrase
+                load.get("message") or load.get("detail", "") or response.reason_phrase
             )
             logger.info(
                 f"Fail to call {method_name}, streamed error on status "

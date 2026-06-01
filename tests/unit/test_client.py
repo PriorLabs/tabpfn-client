@@ -282,7 +282,7 @@ class TestServiceClient(unittest.TestCase):
         # {"_streamed_error": True, "message": "..."} when the fit fails
         # mid-stream. The handler must surface the message, not let the
         # success-schema validation turn it into a misleading pydantic error.
-        from tabpfn_client.api_models import FitResponse
+        from tabpfn_client.sdks.gapi import FitResponse
 
         response = Mock()
         response.status_code = 200
@@ -299,7 +299,7 @@ class TestServiceClient(unittest.TestCase):
         self.assertIn("500 rows", str(cm.exception))
 
     def test_validate_response_streamed_error_falls_back_to_detail(self):
-        from tabpfn_client.api_models import FitResponse
+        from tabpfn_client.sdks.gapi import FitResponse
 
         response = Mock()
         response.status_code = 200
