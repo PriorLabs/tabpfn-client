@@ -1,0 +1,32 @@
+{
+  "include": [
+    "src/tabpfn_client/client.py",
+    "src/tabpfn_client/estimator.py",
+    "src/tabpfn_client/service_wrapper.py",
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "experiments_*",
+    "tmp",
+    ".venv"
+  ],
+  "extraPaths": [
+    "./.venv/lib/*/site-packages"
+  ],
+  "pythonVersion": "3.9",
+  "typeCheckingMode": "strict",
+  "reportPossiblyUnboundVariable": true,
+  "reportUnusedFunction": true,
+  // Disable
+  "reportWildcardImportFromLibrary": false,
+  "reportUnknownVariableType": false,
+  "reportUnknownMemberType": false,
+  "reportUnknownArgumentType": false,
+  "reportUnknownParameterType": false,
+  "reportUnknownLambdaType": false,
+  "reportMissingTypeStubs": false,
+  "reportMissingParameterType": false,
+  "reportMissingTypeArgument": false,
+  "reportPrivateUsage": false,
+  "reportUntypedFunctionDecorator": false
+}

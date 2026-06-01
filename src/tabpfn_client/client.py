@@ -18,7 +18,7 @@ import time
 import traceback
 import warnings
 from pydantic import BaseModel, ValidationError
-from typing import Any, Callable, Dict, Literal, Union, cast
+from typing import Any, Callable, Dict, Union, cast
 
 import google_crc32c
 
@@ -55,6 +55,11 @@ from tabpfn_client.sdks.gapi import (
     PredictResponse,
     TaskConfig,
     ErrorResponse,
+    ClassifierTabPFNConfig,
+    RegressorTabPFNConfig,
+    PredictionTask,
+    ClassifierPredictParams,
+    RegressorPredictParams,
 )
 
 logger = logging.getLogger(__name__)
@@ -265,8 +270,8 @@ class ServiceClient(Singleton):
         cls,
         X: pd.DataFrame | np.ndarray,
         y: pd.Series | np.ndarray,
-        task: Literal["classification", "regression"],
-        tabpfn_config: Union[dict, None] = None,
+        task: PredictionTask,
+        tabpfn_config: Union[ClassifierTabPFNConfig, RegressorTabPFNConfig, None] = None,
         description: str | None = None,
         force_refit: bool = False,
         client_options: ClientOptions | None = None,
@@ -280,7 +285,7 @@ class ServiceClient(Singleton):
             The training input samples.
         y : array-like of shape (n_samples,) or (n_samples, n_outputs)
             The target values.
-        task: str
+        task: PredictionTask
             Task type: "classification" or "regression"
         tabpfn_config : dict, optional
             Configuration for the fit method. Supported keys currently include
@@ -297,9 +302,6 @@ class ServiceClient(Singleton):
         fitted_train_set_id: UUID
             The unique ID of the fitted train set in the server.
         """
-        if task not in {"classification", "regression"}:
-            raise ValueError("task must be either 'classification' or 'regression'.")
-
         client_options = client_options or ClientOptions()
 
         df_X = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
@@ -491,9 +493,9 @@ class ServiceClient(Singleton):
         cls,
         fitted_train_set_id: UUID,
         x_test: pd.DataFrame | np.ndarray,
-        task: Literal["classification", "regression"],
-        tabpfn_config: Union[dict, None] = None,
-        predict_params: Union[dict, None] = None,
+        task: PredictionTask,
+        tabpfn_config: Union[ClassifierTabPFNConfig, RegressorTabPFNConfig, None] = None,
+        predict_params: Union[ClassifierPredictParams, RegressorPredictParams, None] = None,
         client_options: ClientOptions | None = None,
     ) -> PredictionResult:
         """
@@ -505,7 +507,7 @@ class ServiceClient(Singleton):
             The unique ID of the fitted train set in the server.
         x_test : array-like of shape (n_samples, n_features)
             The test input.
-        task: str, optional
+        task: PredictionTask, optional
             Task type: "classification" or "regression"
         tabpfn_config : dict, optional
             Configuration used to initialize the the TabPFN model.

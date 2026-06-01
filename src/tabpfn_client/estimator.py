@@ -31,6 +31,7 @@ from tabpfn_client.constants import (
     ModelVersion,
 )
 from tabpfn_client.service_wrapper import InferenceClient
+from tabpfn_client.sdks.gapi.models_gen import PredictionTask
 
 try:
     from torch import Tensor
@@ -350,7 +351,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 return InferenceClient.fit(
                     X,
                     y,
-                    task="classification",
+                    task=PredictionTask.CLASSIFICATION,
                     tabpfn_config=estimator_param,
                     description=description,
                     force_refit=self.force_refit,
@@ -415,7 +416,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                     return InferenceClient.predict(
                         X,
                         fitted_train_set_id=self.last_fitted_train_set_id,
-                        task="classification",
+                        task=PredictionTask.CLASSIFICATION,
                         tabpfn_config=estimator_param,
                         predict_params={"output_type": output_type},
                         client_options=self.client_options,
@@ -426,7 +427,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                     self.last_fitted_train_set_id = InferenceClient.fit(
                         self.last_train_X,
                         self.last_train_y,
-                        task="classification",
+                        task=PredictionTask.CLASSIFICATION,
                         tabpfn_config=estimator_param,
                         description=self.last_train_set_description,
                         force_refit=True,
@@ -649,7 +650,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                 return InferenceClient.fit(
                     X,
                     y,
-                    task="regression",
+                    task=PredictionTask.REGRESSION,
                     tabpfn_config=estimator_param,
                     description=description,
                     force_refit=self.force_refit,
@@ -725,7 +726,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     return InferenceClient.predict(
                         X,
                         fitted_train_set_id=self.last_fitted_train_set_id,
-                        task="regression",
+                        task=PredictionTask.REGRESSION,
                         tabpfn_config=estimator_param,
                         predict_params=predict_params,
                         client_options=self.client_options,
@@ -736,7 +737,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     self.last_fitted_train_set_id = InferenceClient.fit(
                         self.last_train_X,
                         self.last_train_y,
-                        task="regression",
+                        task=PredictionTask.REGRESSION,
                         tabpfn_config=estimator_param,
                         description=self.last_train_set_description,
                         force_refit=True,

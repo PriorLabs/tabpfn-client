@@ -70,5 +70,6 @@ dev = [
     "pytest==8.4.2",
     "respx==0.22.0",
     "ruff==0.15.11",
-    "licensecheck==2025.1.0"
+    "licensecheck==2025.1.0",
+    "basedpyright~=1.32.1"
 ]

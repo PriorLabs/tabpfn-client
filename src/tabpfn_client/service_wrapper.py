@@ -6,12 +6,14 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Union
 
 from uuid import UUID
 from tabpfn_client.client import ServiceClient, ClientOptions, PredictionResult
 import tabpfn_client.constants as constants
+from tabpfn_client.sdks.gapi.models_gen import PredictionTask
 from tabpfn_common_utils.utils import Singleton
+from tabpfn_client.sdks.gapi import ClassifierTabPFNConfig, RegressorTabPFNConfig, ClassifierPredictParams, RegressorPredictParams
 
 
 logger = logging.getLogger(__name__)
@@ -261,8 +263,8 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         cls,
         X,
         y,
-        task: Literal["classification", "regression"],
-        tabpfn_config=None,
+        task: PredictionTask,
+        tabpfn_config: Union[ClassifierTabPFNConfig, RegressorTabPFNConfig, None] = None,
         description: str | None = None,
         force_refit: bool = False,
         client_options: ClientOptions | None = None,
@@ -282,9 +284,9 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         cls,
         X,
         fitted_train_set_id: UUID,
-        task: Literal["classification", "regression"],
-        tabpfn_config=None,
-        predict_params=None,
+        task: PredictionTask,
+        tabpfn_config: Union[ClassifierTabPFNConfig, RegressorTabPFNConfig, None] = None,
+        predict_params: Union[ClassifierPredictParams, RegressorPredictParams, None] = None,
         client_options: ClientOptions | None = None,
     ) -> PredictionResult:
         return ServiceClient.predict(
