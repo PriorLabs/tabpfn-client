@@ -474,6 +474,8 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             "inference_config",
             "model_path",
             "balance_probabilities",
+            "eval_metric",
+            "tuning_config",
             "paper_version",
             "thinking_mode",
             "thinking_effort",
@@ -869,6 +871,89 @@ class TestTabPFNClassifierInference(unittest.TestCase):
         with self.assertRaises(ValueError) as cm:
             tabpfn.fit(X, y_str)
         self.assertIn("exceeds the maximal number of", str(cm.exception))
+
+
+class TestTabPFNClassifierTuning(unittest.TestCase):
+    """eval_metric / tuning_config forwarding and validation."""
+
+    def test_tuning_params_forwarded_to_config(self):
+        """eval_metric and tuning_config reach the server-bound tabpfn_config."""
+        tuning_config = {
+            "calibrate_temperature": True,
+            "tune_decision_thresholds": True,
+        }
+        classifier = TabPFNClassifier(
+            eval_metric="f1",
+            tuning_config=tuning_config,
+        )
+        classifier.fitted_ = True  # Skip fitting
+        classifier.last_fitted_train_set_id = "dummy_uid"
+
+        test_X = np.random.randn(10, 5)
+        with patch.object(InferenceClient, "predict") as mock_predict:
+            mock_predict.return_value = PredictionResult(
+                y_pred={"probas": np.random.rand(10, 2)}, metadata={}
+            )
+            classifier.predict(test_X)
+
+            config_sent = mock_predict.call_args[1]["tabpfn_config"]
+            self.assertEqual(config_sent["eval_metric"], "f1")
+            self.assertEqual(config_sent["tuning_config"], tuning_config)
+
+    def test_tuning_params_default_to_none(self):
+        classifier = TabPFNClassifier()
+        self.assertIsNone(classifier.eval_metric)
+        self.assertIsNone(classifier.tuning_config)
+
+    def test_invalid_eval_metric_raises(self):
+        from tabpfn_client.estimator import validate_tuning
+
+        with self.assertRaises(ValueError) as cm:
+            validate_tuning(eval_metric="rmse", tuning_config=None)
+        self.assertIn("eval_metric must be one of", str(cm.exception))
+
+    def test_valid_eval_metrics_accepted(self):
+        from tabpfn_client.estimator import validate_tuning
+
+        for metric in ("f1", "accuracy", "balanced_accuracy", "roc_auc", "log_loss"):
+            validate_tuning(eval_metric=metric, tuning_config=None)
+
+    def test_unknown_tuning_config_key_raises(self):
+        from tabpfn_client.estimator import validate_tuning
+
+        with self.assertRaises(ValueError) as cm:
+            validate_tuning(eval_metric=None, tuning_config={"calibate_temp": True})
+        self.assertIn("unknown keys", str(cm.exception))
+
+    def test_non_dict_tuning_config_raises(self):
+        from tabpfn_client.estimator import validate_tuning
+
+        with self.assertRaises(ValueError) as cm:
+            validate_tuning(eval_metric=None, tuning_config=["calibrate_temperature"])
+        self.assertIn("must be a dict", str(cm.exception))
+
+    def test_non_bool_flag_raises(self):
+        from tabpfn_client.estimator import validate_tuning
+
+        with self.assertRaises(ValueError) as cm:
+            validate_tuning(
+                eval_metric=None,
+                tuning_config={"calibrate_temperature": "yes"},
+            )
+        self.assertIn("must be a bool", str(cm.exception))
+
+    def test_valid_tuning_config_accepted(self):
+        from tabpfn_client.estimator import validate_tuning
+
+        validate_tuning(
+            eval_metric="f1",
+            tuning_config={
+                "calibrate_temperature": True,
+                "tune_decision_thresholds": False,
+                "tuning_holdout_frac": "auto",
+                "tuning_n_folds": 5,
+            },
+        )
 
 
 class TestTabPFNModelSelection(unittest.TestCase):

@@ -61,6 +61,22 @@ THINKING_TIMEOUT_MAX_S = 40 * 60
 ThinkingEffort = Literal["medium", "high"]
 _VALID_THINKING_EFFORT_LEVELS = frozenset({"medium", "high"})
 
+# Mirrors tabpfn.inference_tuning.ClassifierEvalMetrics in the OSS package.
+_VALID_EVAL_METRICS = frozenset(
+    {"f1", "accuracy", "balanced_accuracy", "roc_auc", "log_loss"}
+)
+# Mirrors the fields of tabpfn.inference_tuning.ClassifierTuningConfig. The
+# server is the source of truth for tuning; we only reject obviously-malformed
+# configs up front so users get a clear error instead of an opaque 4xx.
+_VALID_TUNING_CONFIG_KEYS = frozenset(
+    {
+        "calibrate_temperature",
+        "tune_decision_thresholds",
+        "tuning_holdout_frac",
+        "tuning_n_folds",
+    }
+)
+
 
 class TabPFNModelSelection:
     """Base class for TabPFN model selection and path handling."""
@@ -183,6 +199,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         softmax_temperature: float = 0.9,
         balance_probabilities: bool = False,
         average_before_softmax: bool = False,
+        eval_metric: Optional[str] = None,
+        tuning_config: Optional[Dict] = None,
         ignore_pretraining_limits: bool = True,
         inference_precision: Literal["autocast", "auto"] = "auto",
         random_state: Optional[
@@ -231,6 +249,29 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
              predictive performance when there are many classes or when calibrating the
              model's confidence. This is only applied when predicting during a
              post-processing.
+        eval_metric: str or None, default=None
+            Metric by which predictions will ultimately be evaluated on test data.
+            Setting it lets the server tune the model's predictions for this metric
+            during the fit (probability calibration and decision-threshold tuning on
+            held-out data), controlled by `tuning_config`. On its own this only
+            records the objective; tuning runs only when `tuning_config` is also set.
+            One of: "f1", "accuracy", "balanced_accuracy", "roc_auc", "log_loss".
+            Defaults to "accuracy" server-side when None.
+        tuning_config: dict or None, default=None
+            Settings used to tune the model's predictions for `eval_metric` during
+            the fit. When None (default) no tuning is performed. Recognised keys:
+
+            - "calibrate_temperature" (bool, default False): calibrate the softmax
+              temperature on held-out data.
+            - "tune_decision_thresholds" (bool, default False): tune per-class
+              decision thresholds to optimize `eval_metric`.
+            - "tuning_holdout_frac" ("auto" or float, default "auto"): fraction of
+              the training data held out per split for tuning.
+            - "tuning_n_folds" ("auto" or int, default "auto"): number of
+              cross-validation folds used for tuning.
+
+            Tuning is recommended only for datasets with more than ~500 samples and
+            adds server-side fit cost roughly proportional to `tuning_n_folds`.
         ignore_pretraining_limits: bool, default=True
             Whether to ignore the pre-training limits of the model. The TabPFN models
             have been pre-trained on a specific range of input data. If the input data
@@ -290,6 +331,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.softmax_temperature = softmax_temperature
         self.balance_probabilities = balance_probabilities
         self.average_before_softmax = average_before_softmax
+        self.eval_metric = eval_metric
+        self.tuning_config = tuning_config
         self.ignore_pretraining_limits = ignore_pretraining_limits
         self.inference_precision = inference_precision
         self.random_state = random_state
@@ -328,6 +371,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             self.thinking_metric,
             self.model_path,
         )
+        validate_tuning(self.eval_metric, self.tuning_config)
         X = _clean_text_features(X)
         self._validate_targets_and_classes(y)
 
@@ -822,6 +866,44 @@ def validate_thinking_mode(
             f"model_path={model_path!r}. Either leave model_path at its "
             f"default ('auto') or set it to a v3 model (e.g. 'v3_default')."
         )
+
+
+def validate_tuning(
+    eval_metric: Optional[str],
+    tuning_config: Optional[Dict],
+) -> None:
+    """Validate the post-hoc tuning knobs before forwarding them to the server.
+
+    Tuning itself runs server-side; this only catches obviously-malformed input
+    so users get an actionable error locally instead of an opaque 4xx.
+    """
+    if eval_metric is not None and eval_metric not in _VALID_EVAL_METRICS:
+        raise ValueError(
+            f"eval_metric must be one of {sorted(_VALID_EVAL_METRICS)}, "
+            f"got {eval_metric!r}."
+        )
+
+    if tuning_config is None:
+        return
+
+    if not isinstance(tuning_config, dict):
+        raise ValueError(
+            f"tuning_config must be a dict or None, got {type(tuning_config).__name__}."
+        )
+
+    unknown_keys = set(tuning_config) - _VALID_TUNING_CONFIG_KEYS
+    if unknown_keys:
+        raise ValueError(
+            f"tuning_config contains unknown keys: {sorted(unknown_keys)}. "
+            f"Valid keys are {sorted(_VALID_TUNING_CONFIG_KEYS)}."
+        )
+
+    for bool_key in ("calibrate_temperature", "tune_decision_thresholds"):
+        if bool_key in tuning_config and not isinstance(tuning_config[bool_key], bool):
+            raise ValueError(
+                f"tuning_config[{bool_key!r}] must be a bool, "
+                f"got {type(tuning_config[bool_key]).__name__}."
+            )
 
 
 def validate_train_set(X: np.ndarray, y: Union[np.ndarray, None] = None):
