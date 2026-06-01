@@ -1,20 +1,10 @@
-#  Copyright (c) Prior Labs GmbH 2025.
+#  Copyright (c) Prior Labs GmbH 2026.
 #  Licensed under the Apache License, Version 2.0
-"""scikit-learn estimators that invoke a TabPFN SageMaker BYOC endpoint.
+"""scikit-learn estimators for the TabPFN SageMaker BYOC endpoint.
 
-The endpoint is the container defined in `dists/marketplaces/aws` in the
-`tabpfn-server` repo. It accepts a single inline JSON body at POST
-/invocations matching `prior.predictor.requests.PredictRequest`, and returns
-`{"prediction": ..., "metadata": ..., "model_id": ...}`. The estimators here
-build that body from the sklearn-style call surface, dispatch via
-`boto3.client("sagemaker-runtime").invoke_endpoint`, and return the
-prediction as a numpy array.
-
-`fit()` is local-only: TabPFN is in-context, so we just keep X/y around and
-ship them with each `predict*` call. The optional `use_kv_cache=True` path
-opts into the server's V3 FIT_WITH_CACHE mode — the first round-trip uploads
-training data and captures a `model_id`; subsequent predicts skip the upload
-and reference that id.
+Mirrors the `tabpfn_client.TabPFNClassifier` / `TabPFNRegressor` surface;
+each `predict*` call dispatches via `boto3.client("sagemaker-runtime")`
+against your SageMaker endpoint. `fit()` is local (TabPFN is in-context).
 """
 
 from __future__ import annotations
@@ -59,15 +49,7 @@ def _to_jsonable(X: Any) -> list:
 
 
 class _SagemakerBase(BaseEstimator):
-    """Shared invoke_endpoint plumbing for SageMaker TabPFN estimators.
-
-    Subclasses set `_TASK`. Constructor kwargs mirror the public
-    `tabpfn_client.TabPFNClassifier` so user code is portable; everything but
-    the SageMaker-specific bits is forwarded into `task_config.tabpfn_config`
-    on the wire. `model_path` is currently dropped server-side (the active
-    checkpoint is whatever was baked into the model artifact); we keep it on
-    the constructor for API parity.
-    """
+    """Shared invoke_endpoint plumbing for the SageMaker TabPFN estimators."""
 
     _TASK: str = ""  # overridden by subclasses
 
@@ -115,10 +97,7 @@ class _SagemakerBase(BaseEstimator):
         self.thinking_timeout_s = thinking_timeout_s
         self.thinking_metric = thinking_metric
         self.use_kv_cache = use_kv_cache
-        # Async Inference path: required for payloads > 6 MB or compute > 60 s.
-        # When True, requests stage input through S3 and poll the output S3
-        # location SageMaker writes back. The endpoint must be configured with
-        # AsyncInferenceConfig.
+        # Async Inference path: needed for payloads > 6 MB or compute > 60 s.
         self.use_async = use_async
         self.s3_bucket = s3_bucket
         self.s3_prefix = s3_prefix
@@ -131,9 +110,7 @@ class _SagemakerBase(BaseEstimator):
 
     @property
     def _effective_use_kv_cache(self) -> bool:
-        # Thinking implies caching: without it every predict redoes the
-        # autogluon HPO sweep. The server enforces this too; we mirror it
-        # client-side so the wire body always agrees.
+        # Thinking implies caching: without it every predict redoes the fit.
         return self.use_kv_cache or self._thinking_active
 
     def _build_tabpfn_config(self) -> Dict[str, Any]:
@@ -147,10 +124,6 @@ class _SagemakerBase(BaseEstimator):
             "inference_config": self.inference_config,
             "fit_mode": "fit_with_cache" if self._effective_use_kv_cache else "fit_preprocessors",
         }
-        # paper_version is OSS TabPFN-only — server's tagged-union forbids
-        # extras. balance_probabilities lives only on ClassifierTabPFNConfig.
-        # thinking_* fields live at the top of the body, not under
-        # tabpfn_config — see `_invoke`.
         if self._TASK == "classification":
             cfg["balance_probabilities"] = self.balance_probabilities
         if self.model_path not in ("auto", "default"):
@@ -158,9 +131,7 @@ class _SagemakerBase(BaseEstimator):
         return cfg
 
     def _build_thinking_block(self) -> Dict[str, Any]:
-        """Top-level wire fields for thinking-mode. Sibling of
-        `task_config`, mirroring gapi's `FitRequest` shape. Empty when
-        thinking isn't active so callers can splat unconditionally."""
+        """Top-level wire fields for thinking-mode. Empty when inactive."""
         if not self._thinking_active:
             return {}
         block: Dict[str, Any] = {
@@ -173,8 +144,7 @@ class _SagemakerBase(BaseEstimator):
         return block
 
     def _runtime_client(self):
-        # Cached on the instance: boto3 service-model load + credential
-        # resolution is non-trivial and we don't want it on every predict.
+        # Cache the client: boto3 client construction is expensive per call.
         client = getattr(self, "_cached_client", None)
         if client is not None:
             return client
@@ -203,15 +173,13 @@ class _SagemakerBase(BaseEstimator):
         return client
 
     def __getstate__(self) -> Dict[str, Any]:
-        # boto3 clients aren't pickleable. Strip the cache so the estimator
-        # stays compatible with sklearn's pickle-based parallel/grid utilities.
+        # boto3 clients aren't pickleable; strip the cache for sklearn pickling.
         state = self.__dict__.copy()
         state.pop("_cached_client", None)
         state.pop("_cached_s3", None)
         return state
 
     def fit(self, X: Any, y: Any) -> "_SagemakerBase":
-        # X must be 2D; only DataFrame/array. y can be 1D (Series/array) or 2D.
         X_arr = X if isinstance(X, pd.DataFrame) else np.asarray(X)
         y_arr = y if isinstance(y, (pd.DataFrame, pd.Series)) else np.asarray(y)
         if X_arr.shape[0] != y_arr.shape[0]:
@@ -249,9 +217,7 @@ class _SagemakerBase(BaseEstimator):
             body["context"] = {"model_id": self._cached_model_id}
         else:
             body["X_train"] = _to_jsonable(self.X_train_)
-            # `y_train` on the wire is 2D (n_samples, 1) per PredictRequest.
-            # np.asarray handles pd.Series too, so the single-path form covers
-            # ndarray / list / DataFrame / Series uniformly.
+            # y_train on the wire is 2D (n_samples, 1).
             y_arr = np.asarray(self.y_train_)
             if y_arr.ndim == 1:
                 y_arr = y_arr.reshape(-1, 1)
@@ -266,8 +232,6 @@ class _SagemakerBase(BaseEstimator):
                 Accept="application/json",
                 Body=body_bytes,
             )
-            # StreamingBody is file-like; json.load avoids buffering the full
-            # response in memory, which matters for output_type="full".
             payload = json.load(resp["Body"])
         if self._effective_use_kv_cache:
             self._cached_model_id = payload.get("model_id") or self._cached_model_id

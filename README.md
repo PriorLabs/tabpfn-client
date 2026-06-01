@@ -161,7 +161,7 @@ clf = TabPFNClassifier(
 )
 ```
 
-The first `predict*` call after `fit()` runs the autogluon-wrapped fit on the endpoint and can take from tens of seconds up to several minutes depending on `thinking_effort` and data size; the fitted model is cached on the endpoint and subsequent calls are fast. Caching is **required** when thinking is enabled (the client sets `use_kv_cache=True` automatically) — without it every prediction would redo the fit, which would exceed SageMaker's synchronous invoke window. Only `thinking_effort="medium"` is reliable within the real-time endpoint's ~60 s sync window for the *first* call; `"high"` may exceed it and is currently best-effort.
+The first `predict*` call after `fit()` runs the fit on the endpoint and can take from tens of seconds up to several minutes depending on `thinking_effort` and data size; the fitted model is cached on the endpoint and subsequent calls are fast. Caching is **required** when thinking is enabled (the client sets `use_kv_cache=True` automatically) — without it every prediction would redo the fit, which would exceed SageMaker's synchronous invoke window. Only `thinking_effort="medium"` is reliable within the real-time endpoint's ~60 s sync window for the *first* call; `"high"` may exceed it and is currently best-effort.
 
 ## Join Our Community
 
