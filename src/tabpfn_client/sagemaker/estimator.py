@@ -20,6 +20,8 @@ and reference that id.
 from __future__ import annotations
 
 import json
+import time
+import uuid
 from typing import Any, Dict, Literal, Optional
 
 import numpy as np
@@ -89,6 +91,11 @@ class _SagemakerBase(BaseEstimator):
         thinking_timeout_s: Optional[float] = None,
         thinking_metric: Optional[str] = None,
         use_kv_cache: bool = False,
+        use_async: bool = False,
+        s3_bucket: Optional[str] = None,
+        s3_prefix: str = "async-io",
+        async_poll_interval_s: float = 2.0,
+        async_timeout_s: float = 60 * 60,
     ):
         self.endpoint_name = endpoint_name
         self.region_name = region_name
@@ -108,6 +115,15 @@ class _SagemakerBase(BaseEstimator):
         self.thinking_timeout_s = thinking_timeout_s
         self.thinking_metric = thinking_metric
         self.use_kv_cache = use_kv_cache
+        # Async Inference path: required for payloads > 6 MB or compute > 60 s.
+        # When True, requests stage input through S3 and poll the output S3
+        # location SageMaker writes back. The endpoint must be configured with
+        # AsyncInferenceConfig.
+        self.use_async = use_async
+        self.s3_bucket = s3_bucket
+        self.s3_prefix = s3_prefix
+        self.async_poll_interval_s = async_poll_interval_s
+        self.async_timeout_s = async_timeout_s
 
     @property
     def _thinking_active(self) -> bool:
@@ -172,11 +188,26 @@ class _SagemakerBase(BaseEstimator):
         self._cached_client = client
         return client
 
+    def _s3_client(self):
+        client = getattr(self, "_cached_s3", None)
+        if client is not None:
+            return client
+        _require_boto3()
+        if self.boto_session is not None:
+            client = self.boto_session.client("s3")
+        elif self.region_name is not None:
+            client = boto3.client("s3", region_name=self.region_name)
+        else:
+            client = boto3.client("s3")
+        self._cached_s3 = client
+        return client
+
     def __getstate__(self) -> Dict[str, Any]:
         # boto3 clients aren't pickleable. Strip the cache so the estimator
         # stays compatible with sklearn's pickle-based parallel/grid utilities.
         state = self.__dict__.copy()
         state.pop("_cached_client", None)
+        state.pop("_cached_s3", None)
         return state
 
     def fit(self, X: Any, y: Any) -> "_SagemakerBase":
@@ -225,18 +256,77 @@ class _SagemakerBase(BaseEstimator):
             if y_arr.ndim == 1:
                 y_arr = y_arr.reshape(-1, 1)
             body["y_train"] = y_arr.tolist()
-        resp = self._runtime_client().invoke_endpoint(
-            EndpointName=self.endpoint_name,
-            ContentType="application/json",
-            Accept="application/json",
-            Body=json.dumps(body).encode("utf-8"),
-        )
-        # StreamingBody is file-like; json.load avoids buffering the full
-        # response in memory, which matters for output_type="full".
-        payload = json.load(resp["Body"])
+        body_bytes = json.dumps(body).encode("utf-8")
+        if self.use_async:
+            payload = self._invoke_async(body_bytes)
+        else:
+            resp = self._runtime_client().invoke_endpoint(
+                EndpointName=self.endpoint_name,
+                ContentType="application/json",
+                Accept="application/json",
+                Body=body_bytes,
+            )
+            # StreamingBody is file-like; json.load avoids buffering the full
+            # response in memory, which matters for output_type="full".
+            payload = json.load(resp["Body"])
         if self._effective_use_kv_cache:
             self._cached_model_id = payload.get("model_id") or self._cached_model_id
         return payload
+
+    def _invoke_async(self, body_bytes: bytes) -> Dict[str, Any]:
+        """Async Inference path: stage input through S3, invoke_endpoint_async,
+        poll the OutputLocation S3 object. Required for payloads > 6 MB or
+        compute > 60 s; the endpoint must be created with AsyncInferenceConfig.
+        """
+        if not self.s3_bucket:
+            raise RuntimeError(
+                "use_async=True requires `s3_bucket` (writable bucket the "
+                "endpoint's execution role can read from).",
+            )
+        s3 = self._s3_client()
+        inference_id = uuid.uuid4().hex
+        input_key = f"{self.s3_prefix}/inputs/{inference_id}.json"
+        s3.put_object(
+            Bucket=self.s3_bucket,
+            Key=input_key,
+            Body=body_bytes,
+            ContentType="application/json",
+        )
+        resp = self._runtime_client().invoke_endpoint_async(
+            EndpointName=self.endpoint_name,
+            InputLocation=f"s3://{self.s3_bucket}/{input_key}",
+            ContentType="application/json",
+            Accept="application/json",
+            InferenceId=inference_id,
+        )
+        out_bucket, out_key = resp["OutputLocation"].removeprefix("s3://").split("/", 1)
+        fail_location = resp.get("FailureLocation")
+        fail_bucket, fail_key = (None, None)
+        if fail_location:
+            fail_bucket, fail_key = fail_location.removeprefix("s3://").split("/", 1)
+
+        deadline = time.time() + self.async_timeout_s
+        not_found = s3.exceptions.NoSuchKey
+        while time.time() < deadline:
+            try:
+                obj = s3.get_object(Bucket=out_bucket, Key=out_key)
+                return json.load(obj["Body"])
+            except not_found:
+                pass
+            if fail_bucket is not None:
+                try:
+                    f_obj = s3.get_object(Bucket=fail_bucket, Key=fail_key)
+                    detail = f_obj["Body"].read().decode("utf-8", errors="replace")
+                    raise RuntimeError(
+                        f"SageMaker async inference failed for id={inference_id}: {detail}",
+                    )
+                except not_found:
+                    pass
+            time.sleep(self.async_poll_interval_s)
+        raise TimeoutError(
+            f"SageMaker async inference timed out after {self.async_timeout_s}s "
+            f"for id={inference_id}; output never appeared at {resp['OutputLocation']}",
+        )
 
 
 class TabPFNClassifier(_SagemakerBase, ClassifierMixin):
