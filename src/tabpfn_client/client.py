@@ -271,7 +271,7 @@ class ServiceClient(Singleton):
         X: pd.DataFrame | np.ndarray,
         y: pd.Series | np.ndarray,
         task: PredictionTask,
-        tabpfn_config: Union[ClassifierTabPFNConfig, RegressorTabPFNConfig, None] = None,
+        tabpfn_config: ClassifierTabPFNConfig | RegressorTabPFNConfig | None = None,
         description: str | None = None,
         force_refit: bool = False,
         client_options: ClientOptions | None = None,
@@ -494,8 +494,8 @@ class ServiceClient(Singleton):
         fitted_train_set_id: UUID,
         x_test: pd.DataFrame | np.ndarray,
         task: PredictionTask,
-        tabpfn_config: Union[ClassifierTabPFNConfig, RegressorTabPFNConfig, None] = None,
-        predict_params: Union[ClassifierPredictParams, RegressorPredictParams, None] = None,
+        tabpfn_config: ClassifierTabPFNConfig | RegressorTabPFNConfig | None = None,
+        predict_params: ClassifierPredictParams | RegressorPredictParams | None = None,
         client_options: ClientOptions | None = None,
     ) -> PredictionResult:
         """

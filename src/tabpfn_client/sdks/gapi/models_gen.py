@@ -10,7 +10,7 @@
 # default smart mode would land known values in the wider branch.
 # Discriminator `const` fields are intentionally left non-forward-compatible.
 
-from enum import StrEnum
+from enum import Enum
 from typing import Annotated, Any, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
@@ -30,7 +30,7 @@ class Unknown(str):
         return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
-class PredictionTask(StrEnum):
+class PredictionTask(str, Enum):
     CLASSIFICATION = "classification"
     REGRESSION = "regression"
 
@@ -44,19 +44,19 @@ class ModelLimit(BaseModel):
     test_set_max_rows_w_full_regression_output: int = 400
 
 
-class ModelVersion(StrEnum):
+class ModelVersion(str, Enum):
     V2 = "v2"
     V2_5 = "v2.5"
     V2_6 = "v2.6"
     V3 = "v3"
 
 
-class ClassifierOutputType(StrEnum):
+class ClassifierOutputType(str, Enum):
     PROBAS = "probas"
     PREDS = "preds"
 
 
-class RegressorOutputType(StrEnum):
+class RegressorOutputType(str, Enum):
     MEAN = "mean"
     MEDIAN = "median"
     MODE = "mode"

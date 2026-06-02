@@ -28,5 +28,5 @@
   "reportMissingParameterType": false,
   "reportMissingTypeArgument": false,
   "reportPrivateUsage": false,
-  "reportUntypedFunctionDecorator": false
+  "reportUntypedFunctionDecorator": false,
 }

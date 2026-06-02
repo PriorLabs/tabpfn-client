@@ -352,7 +352,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                     X,
                     y,
                     task=PredictionTask.CLASSIFICATION,
-                    tabpfn_config=estimator_param,
+                    tabpfn_config=estimator_param,  # XXX
                     description=description,
                     force_refit=self.force_refit,
                     client_options=self.client_options,
@@ -417,8 +417,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                         X,
                         fitted_train_set_id=self.last_fitted_train_set_id,
                         task=PredictionTask.CLASSIFICATION,
-                        tabpfn_config=estimator_param,
-                        predict_params={"output_type": output_type},
+                        tabpfn_config=estimator_param,  # XXX
+                        predict_params={"output_type": output_type},  # XXX
                         client_options=self.client_options,
                     )
                 except NeedsRefittingError as exc:
@@ -428,7 +428,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                         self.last_train_X,
                         self.last_train_y,
                         task=PredictionTask.CLASSIFICATION,
-                        tabpfn_config=estimator_param,
+                        tabpfn_config=estimator_param,  # XXX
                         description=self.last_train_set_description,
                         force_refit=True,
                         client_options=self.client_options,
@@ -651,7 +651,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     X,
                     y,
                     task=PredictionTask.REGRESSION,
-                    tabpfn_config=estimator_param,
+                    tabpfn_config=estimator_param,  # XXX
                     description=description,
                     force_refit=self.force_refit,
                     client_options=self.client_options,
@@ -725,10 +725,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                 try:
                     return InferenceClient.predict(
                         X,
-                        fitted_train_set_id=self.last_fitted_train_set_id,
+                        fitted_train_set_id=self.last_fitted_train_set_id,  # XXX
                         task=PredictionTask.REGRESSION,
-                        tabpfn_config=estimator_param,
-                        predict_params=predict_params,
+                        tabpfn_config=estimator_param,  # XXX
+                        predict_params=predict_params,  # XXX
                         client_options=self.client_options,
                     )
                 except NeedsRefittingError as exc:
@@ -738,7 +738,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                         self.last_train_X,
                         self.last_train_y,
                         task=PredictionTask.REGRESSION,
-                        tabpfn_config=estimator_param,
+                        tabpfn_config=estimator_param,  # XXX
                         description=self.last_train_set_description,
                         force_refit=True,
                         client_options=self.client_options,
@@ -825,7 +825,7 @@ def validate_thinking_mode(
         )
 
 
-def validate_train_set(X: np.ndarray, y: Union[np.ndarray, None] = None):
+def validate_train_set(y: Union[np.ndarray, None] = None):
     """Check the integrity of the training data."""
 
     # check if the number of samples is consistent (ValueError)
