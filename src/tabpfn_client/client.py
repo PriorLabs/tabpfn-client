@@ -2,6 +2,7 @@
 #  Licensed under the Apache License, Version 2.0
 
 from __future__ import annotations
+
 from uuid import UUID
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -18,7 +19,7 @@ import time
 import traceback
 import warnings
 from pydantic import BaseModel, ValidationError
-from typing import Any, Callable, Dict, Union, cast
+from typing import Any, Callable, cast
 
 import google_crc32c
 
@@ -69,7 +70,7 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
 
 
-def _on_backoff(details: Dict[str, Any]):
+def _on_backoff(details: dict[str, Any]):
     """Callback function for retry attempts."""
     function_name = details["target"].__name__
     message = (
@@ -79,7 +80,7 @@ def _on_backoff(details: Dict[str, Any]):
     logger.warning(message)
 
 
-def _on_giveup(details: Dict[str, Any]):
+def _on_giveup(details: dict[str, Any]):
     """Callback function when retries are exhausted."""
     function_name: str = details["target"].__name__.title()
     message = (
@@ -187,7 +188,7 @@ class ClientOptions:
 
 @dataclass(frozen=True)
 class PredictionResult:
-    y_pred: Union[np.ndarray, list[np.ndarray], dict[str, np.ndarray]]
+    y_pred: np.ndarray | list[np.ndarray] | dict[str, np.ndarray]
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -343,10 +344,7 @@ class ServiceClient(Singleton):
             headers=client_options.headers,
         )
         prepare_resp = cast(
-            Union[
-                PrepareTrainSetUploadResponse,
-                DuplicateTrainSetErrorResponse,
-            ],
+            PrepareTrainSetUploadResponse | DuplicateTrainSetErrorResponse,
             cls._validate_response(
                 res,
                 "prepare_train_set_upload",
@@ -556,10 +554,7 @@ class ServiceClient(Singleton):
             headers=client_options.headers,
         )
         prepare_resp = cast(
-            Union[
-                PrepareTestSetUploadResponse,
-                DuplicateTestSetErrorResponse,
-            ],
+            PrepareTestSetUploadResponse | DuplicateTestSetErrorResponse,
             cls._validate_response(
                 res,
                 "prepare_test_set_upload",
@@ -945,7 +940,7 @@ class ServiceClient(Singleton):
         return found_valid_connection
 
     @classmethod
-    def is_auth_token_outdated(cls, access_token) -> Union[bool, None]:
+    def is_auth_token_outdated(cls, access_token) -> bool | None:
         """
         Check if the provided access token is valid and return True if successful.
         """
@@ -1216,7 +1211,7 @@ class ServiceClient(Singleton):
         return response.json()
 
     @classmethod
-    def download_all_data(cls, save_dir: Path) -> Union[Path, None]:
+    def download_all_data(cls, save_dir: Path) -> Path | None:
         """
         Download all data uploaded by the user from the server.
 

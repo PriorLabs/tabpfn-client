@@ -6,7 +6,7 @@ import logging
 import os
 import sys
 from contextlib import contextmanager
-from typing import Iterator, List
+from typing import Iterator
 
 from rich.console import Console
 from rich.logging import RichHandler
@@ -20,8 +20,8 @@ from rich.progress import (
 )
 
 
-def _collect_suppressed_modules() -> List[object]:
-    suppressed: List[object] = []
+def _collect_suppressed_modules() -> list[object]:
+    suppressed: list[object] = []
     for name in ("typer", "click", "rich"):
         try:
             module = __import__(name)

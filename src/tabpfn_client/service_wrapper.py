@@ -6,7 +6,6 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Union
 
 from uuid import UUID
 from tabpfn_client.client import ServiceClient, ClientOptions, PredictionResult

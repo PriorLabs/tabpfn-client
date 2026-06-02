@@ -8,7 +8,7 @@ import sys
 import time
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Dict, Literal, Optional, Union
+from typing import Any, Callable, Literal
 from typing_extensions import Self
 from uuid import UUID
 
@@ -87,7 +87,7 @@ class TabPFNModelSelection:
     @classmethod
     def _model_name_to_path(
         cls, task: Literal["classification", "regression"], model_name: str
-    ) -> Optional[str]:
+    ) -> str | None:
         cls._validate_model_name(model_name)
         model_name_task = "classifier" if task == "classification" else "regressor"
         # Let the server pick the default model when the caller defers to us.
@@ -131,7 +131,7 @@ class TabPFNModelSelection:
 
     def _get_estimator_params_with_model_path(
         self, task: Literal["classification", "regression"]
-    ) -> Dict:
+    ) -> dict[str, Any]:
         """Get estimator parameters with the model_path resolved to full path.
 
         Parameters
@@ -141,7 +141,7 @@ class TabPFNModelSelection:
 
         Returns
         -------
-        Dict
+        dict[str, Any]
             Dictionary of estimator parameters with model_path updated to full path.
         """
         estimator_param = self.get_params()
@@ -186,15 +186,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         average_before_softmax: bool = False,
         ignore_pretraining_limits: bool = True,
         inference_precision: Literal["autocast", "auto"] = "auto",
-        random_state: Optional[
-            Union[int, np.random.RandomState, np.random.Generator]
-        ] = 0,
-        inference_config: Optional[Dict] = None,
+        random_state: int | np.random.RandomState | np.random.Generator | None = 0,
+        inference_config: dict[str, Any] | None = None,
         paper_version: bool = False,
         thinking_mode: bool = False,
-        thinking_effort: Optional[ThinkingEffort] = None,
-        thinking_timeout_s: Optional[float] = None,
-        thinking_metric: Optional[str] = None,
+        thinking_effort: ThinkingEffort | None = None,
+        thinking_timeout_s: float | None = None,
+        thinking_metric: str | None = None,
         force_refit: bool = False,
         client_options: ClientOptions | None = None,
     ):
@@ -497,15 +495,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         average_before_softmax: bool = False,
         ignore_pretraining_limits: bool = False,
         inference_precision: Literal["autocast", "auto"] = "auto",
-        random_state: Optional[
-            Union[int, np.random.RandomState, np.random.Generator]
-        ] = 0,
-        inference_config: Optional[Dict] = None,
+        random_state: int | np.random.RandomState | np.random.Generator | None = 0,
+        inference_config: dict[str, Any] | None = None,
         paper_version: bool = False,
         thinking_mode: bool = False,
-        thinking_effort: Optional[ThinkingEffort] = None,
-        thinking_timeout_s: Optional[float] = None,
-        thinking_metric: Optional[str] = None,
+        thinking_effort: ThinkingEffort | None = None,
+        thinking_timeout_s: float | None = None,
+        thinking_metric: str | None = None,
         force_refit: bool = False,
         client_options: ClientOptions | None = None,
     ):
@@ -675,8 +671,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         output_type: Literal[
             "mean", "median", "mode", "quantiles", "full", "main"
         ] = "mean",
-        quantiles: Optional[list[float]] = None,
-    ) -> Union[np.ndarray, list[np.ndarray], dict[str, np.ndarray]]:
+        quantiles: list[float] | None = None,
+    ) -> np.ndarray | list[np.ndarray] | dict[str, np.ndarray]:
         """Predict regression target for X.
 
         Parameters
@@ -781,9 +777,9 @@ def _is_thinking_supported_model_path(model_path: str) -> bool:
 
 def validate_thinking_mode(
     thinking_mode: bool,
-    thinking_effort: Optional[str],
-    thinking_timeout_s: Optional[float],
-    thinking_metric: Optional[str],
+    thinking_effort: str | None,
+    thinking_timeout_s: float | None,
+    thinking_metric: str | None,
     model_path: str,
 ) -> None:
     if (
@@ -825,7 +821,7 @@ def validate_thinking_mode(
         )
 
 
-def validate_train_set(y: Union[np.ndarray, None] = None):
+def validate_train_set(y: np.ndarray | None = None):
     """Check the integrity of the training data."""
 
     # check if the number of samples is consistent (ValueError)
