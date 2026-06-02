@@ -146,8 +146,8 @@ clf.predict_proba(X_test)
 Notes:
 
 - AWS credentials are resolved through the standard `boto3` credential chain (env vars, `~/.aws/credentials`, instance profile, SSO, etc.). Pass `boto_session=session` to use an explicit `boto3.Session`.
-- `fit()` is local: TabPFN is in-context, so the estimator just keeps `X_train` / `y_train` and ships them on each `predict*` call. There is no separate training job.
-- Set `use_kv_cache=True` to opt into the v3 KV-cache path on the server: the first round-trip uploads training data and captures a `model_id`; subsequent `predict*` calls reference that id and skip the training upload. This trades a stateful endpoint for lower per-call latency and payload size.
+- `fit()` does not call the endpoint — it stores `X_train` / `y_train` on the estimator. Training data is shipped with the next `predict*` call, which is where the actual fit runs on the endpoint. There is no separate training job.
+- `use_kv_cache=True` opts into the v3 KV-cache path on the server: the first `predict*` round-trip uploads training data and captures a `model_id`, and subsequent calls send only `X_test` and the id. Default to `True` when you'll call `predict*` more than once on the same training data; leave it off if every call uses a different training set (no reuse), since the cache becomes dead weight on the endpoint.
 - Constructor kwargs mirror the public `tabpfn_client.TabPFNClassifier` / `TabPFNRegressor` so the same code is portable between the managed API and a SageMaker endpoint, modulo `endpoint_name` / `region_name`.
 
 Thinking mode is supported on SageMaker by passing the same `thinking_mode` / `thinking_effort` / `thinking_timeout_s` / `thinking_metric` kwargs:

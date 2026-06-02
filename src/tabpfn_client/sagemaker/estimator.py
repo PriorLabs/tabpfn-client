@@ -4,7 +4,9 @@
 
 Mirrors the `tabpfn_client.TabPFNClassifier` / `TabPFNRegressor` surface;
 each `predict*` call dispatches via `boto3.client("sagemaker-runtime")`
-against your SageMaker endpoint. `fit()` is local (TabPFN is in-context).
+against your SageMaker endpoint. `fit()` does not call the endpoint —
+it just stores `X` / `y` on the estimator. The training data is shipped
+to the endpoint on the next `predict*` call, where the actual fit runs.
 """
 
 from __future__ import annotations
@@ -319,13 +321,7 @@ class TabPFNClassifier(_SagemakerBase, ClassifierMixin):
 
 
 class TabPFNRegressor(_SagemakerBase, RegressorMixin):
-    """TabPFN regressor backed by a SageMaker real-time endpoint.
-
-    `output_type` defaults to "mean"; pass "median", "mode", "full", or
-    "quantiles" for the alternative distributional outputs the server
-    exposes. When `output_type="quantiles"`, `quantiles` selects the cut
-    points (each in [0, 1]).
-    """
+    """TabPFN regressor backed by a SageMaker endpoint."""
 
     _TASK = "regression"
 
