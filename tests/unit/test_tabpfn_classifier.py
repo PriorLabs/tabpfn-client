@@ -22,6 +22,7 @@ from tabpfn_client.client import (
     PredictionResult,
     ServiceClient,
 )
+from tabpfn_client.sdks.gapi import ClassifierTabPFNConfig
 
 
 def _model_limits_payload(
@@ -123,7 +124,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
                 "metadata": {
                     "task": "classification",
                     "package_version": "0.3.0rc1",
-                    "tabpfn_config": None,
+                    "tabpfn_config": {},
                     "test_set_num_rows": len(self.X_test),
                     "test_set_num_cols": self.X_test.shape[1],
                 },
@@ -296,7 +297,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
                 "metadata": {
                     "task": "classification",
                     "package_version": "0.3.0rc1",
-                    "tabpfn_config": None,
+                    "tabpfn_config": {},
                     "test_set_num_rows": 5,
                     "test_set_num_cols": 5,
                 },
@@ -462,28 +463,17 @@ class TestTabPFNClassifierInference(unittest.TestCase):
 
     def test_only_allowed_parameters_passed_to_config(self):
         """Test that only allowed parameters are passed to the config."""
-        ALLOWED_PARAMS = {
-            "n_estimators",
-            # TODO: put it back
-            # "categorical_features_indices",
-            "softmax_temperature",
-            "average_before_softmax",
-            "ignore_pretraining_limits",
-            "inference_precision",
-            "random_state",
-            "inference_config",
-            "model_path",
-            "balance_probabilities",
+        # The server-side tabpfn_config is a typed ClassifierTabPFNConfig, so the
+        # set of allowed parameters is exactly its model fields. Client-only knobs
+        # such as paper_version and the thinking_* params are forwarded as separate
+        # top-level fit arguments and must not leak into tabpfn_config.
+        ALLOWED_PARAMS = set(ClassifierTabPFNConfig.model_fields)
+        LEAKED_PARAMS = {
             "paper_version",
             "thinking_mode",
             "thinking_effort",
             "thinking_timeout_s",
             "thinking_metric",
-        }
-        OPTIONAL_PARAMS = {
-            # These may be emitted by newer model versions, but are not required.
-            "thinking_params",
-            "thinking",
         }
 
         # Create classifier with various parameters
@@ -509,11 +499,12 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             classifier.predict(test_X)
 
             # Get the config that was passed to predict
-            actual_config = mock_predict.call_args[1]["tabpfn_config"]
+            task_config = mock_predict.call_args[1]["task_config"]
+            actual_config = task_config.tabpfn_config.model_dump()
 
-            # Check that only allowed parameters are present
+            # Check that exactly the allowed parameters are present
             config_params = set(actual_config.keys())
-            unexpected_params = config_params - (ALLOWED_PARAMS | OPTIONAL_PARAMS)
+            unexpected_params = config_params - ALLOWED_PARAMS
             missing_required_params = ALLOWED_PARAMS - config_params
 
             self.assertEqual(
@@ -525,6 +516,11 @@ class TestTabPFNClassifierInference(unittest.TestCase):
                 missing_required_params,
                 set(),
                 f"Missing required parameters in config: {missing_required_params}",
+            )
+            self.assertEqual(
+                config_params & LEAKED_PARAMS,
+                set(),
+                "Client-only params leaked into the server-side tabpfn_config",
             )
 
     def test_predict_params_output_type(self):
@@ -540,8 +536,8 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             )
             classifier.predict(test_X)
 
-            predict_params = mock_predict.call_args[1]["predict_params"]
-            self.assertEqual(predict_params, {"output_type": "preds"})
+            task_config = mock_predict.call_args[1]["task_config"]
+            self.assertEqual(task_config.predict_params.output_type, "preds")
 
         # Test predict_proba() sets output_type to "probas"
         with patch.object(InferenceClient, "predict") as mock_predict:
@@ -550,8 +546,8 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             )
             classifier.predict_proba(test_X)
 
-            predict_params = mock_predict.call_args[1]["predict_params"]
-            self.assertEqual(predict_params, {"output_type": "probas"})
+            task_config = mock_predict.call_args[1]["task_config"]
+            self.assertEqual(task_config.predict_params.output_type, "probas")
 
     def test_string_label_predictions(self):
         """Test that string labels in y are preserved in predictions."""
@@ -983,7 +979,8 @@ class TestTabPFNModelSelection(unittest.TestCase):
                 expected_model_path = "tabpfn-v2-classifier-gn2p4bpt.ckpt"
 
                 self.assertEqual(
-                    predict_kwargs["tabpfn_config"]["model_path"], expected_model_path
+                    predict_kwargs["task_config"].tabpfn_config.model_path,
+                    expected_model_path,
                 )
 
     @patch.object(InferenceClient, "fit", return_value="dummy_uid")

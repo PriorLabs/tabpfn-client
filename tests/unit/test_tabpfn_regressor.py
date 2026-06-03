@@ -23,6 +23,7 @@ from tabpfn_client.client import (
     PredictionResult,
     ServiceClient,
 )
+from tabpfn_client.sdks.gapi import RegressorTabPFNConfig
 
 
 def _model_limits_payload(
@@ -124,7 +125,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
                 "metadata": {
                     "task": "regression",
                     "package_version": "0.3.0rc1",
-                    "tabpfn_config": None,
+                    "tabpfn_config": {},
                     "test_set_num_rows": len(self.X_test),
                     "test_set_num_cols": self.X_test.shape[1],
                 },
@@ -296,7 +297,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
                 "metadata": {
                     "task": "regression",
                     "package_version": "0.3.0rc1",
-                    "tabpfn_config": None,
+                    "tabpfn_config": {},
                     "test_set_num_rows": 5,
                     "test_set_num_cols": 5,
                 },
@@ -457,26 +458,17 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
     def test_only_allowed_parameters_passed_to_config(self):
         """Test that only allowed parameters are passed to the config."""
-        ALLOWED_PARAMS = {
-            "n_estimators",
-            # TODO: put it back
-            # "categorical_features_indices",
-            "softmax_temperature",
-            "average_before_softmax",
-            "ignore_pretraining_limits",
-            "inference_precision",
-            "random_state",
-            "inference_config",
-            "model_path",
+        # The server-side tabpfn_config is a typed RegressorTabPFNConfig, so the
+        # set of allowed parameters is exactly its model fields. Client-only knobs
+        # such as paper_version and the thinking_* params are forwarded as separate
+        # top-level fit arguments and must not leak into tabpfn_config.
+        ALLOWED_PARAMS = set(RegressorTabPFNConfig.model_fields)
+        LEAKED_PARAMS = {
             "paper_version",
             "thinking_mode",
             "thinking_effort",
             "thinking_timeout_s",
             "thinking_metric",
-        }
-        OPTIONAL_PARAMS = {
-            "thinking",
-            "thinking_params",
         }
 
         # Create regressor with various parameters
@@ -501,11 +493,12 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             regressor.predict(test_X)
 
             # Get the config that was passed to predict
-            actual_config = mock_predict.call_args[1]["tabpfn_config"]
+            task_config = mock_predict.call_args[1]["task_config"]
+            actual_config = task_config.tabpfn_config.model_dump()
 
-            # Check that only allowed parameters are present
+            # Check that exactly the allowed parameters are present
             config_params = set(actual_config.keys())
-            unexpected_params = config_params - (ALLOWED_PARAMS | OPTIONAL_PARAMS)
+            unexpected_params = config_params - ALLOWED_PARAMS
             missing_required_params = ALLOWED_PARAMS - config_params
 
             self.assertEqual(
@@ -517,6 +510,11 @@ class TestTabPFNRegressorInference(unittest.TestCase):
                 missing_required_params,
                 set(),
                 f"Missing required parameters in config: {missing_required_params}",
+            )
+            self.assertEqual(
+                config_params & LEAKED_PARAMS,
+                set(),
+                "Client-only params leaked into the server-side tabpfn_config",
             )
 
     def test_predict_params_output_type(self):
@@ -532,8 +530,9 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             )
             regressor.predict(test_X)
 
-            predict_params = mock_predict.call_args[1]["predict_params"]
-            self.assertEqual(predict_params, {"output_type": "mean", "quantiles": None})
+            predict_params = mock_predict.call_args[1]["task_config"].predict_params
+            self.assertEqual(predict_params.output_type, "mean")
+            self.assertIsNone(predict_params.quantiles)
 
         # Test predict() with quantiles
         with patch.object(InferenceClient, "predict") as mock_predict:
@@ -543,10 +542,9 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             quantiles = [0.1, 0.5, 0.9]
             regressor.predict(test_X, output_type="quantiles", quantiles=quantiles)
 
-            predict_params = mock_predict.call_args[1]["predict_params"]
-            self.assertEqual(
-                predict_params, {"output_type": "quantiles", "quantiles": quantiles}
-            )
+            predict_params = mock_predict.call_args[1]["task_config"].predict_params
+            self.assertEqual(predict_params.output_type, "quantiles")
+            self.assertEqual(predict_params.quantiles, quantiles)
 
     def test_predict_full_adds_criterion_with_optional_dependencies(self):
         regressor = TabPFNRegressor()
@@ -939,7 +937,8 @@ class TestTabPFNModelSelection(unittest.TestCase):
                 expected_model_path = "tabpfn-v2-regressor-2noar4o2.ckpt"
 
                 self.assertEqual(
-                    predict_kwargs["tabpfn_config"]["model_path"], expected_model_path
+                    predict_kwargs["task_config"].tabpfn_config.model_path,
+                    expected_model_path,
                 )
 
     @patch.object(InferenceClient, "fit", return_value="dummy_uid")

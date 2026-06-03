@@ -69,7 +69,7 @@ class TestTabPFNClassifier(unittest.TestCase):
                 "metadata": {
                     "task": "classification",
                     "package_version": "0.3.0rc1",
-                    "tabpfn_config": None,
+                    "tabpfn_config": {},
                     "test_set_num_rows": len(self.X_test),
                     "test_set_num_cols": self.X_test.shape[1],
                 },

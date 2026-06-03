@@ -12,6 +12,11 @@ from tabpfn_client.client import (
     NeedsRefittingError,
     ServiceClient,
 )
+from tabpfn_client.sdks.gapi import (
+    ClassifierConfig,
+    RegressorConfig,
+    RegressorPredictParams,
+)
 from tests.mock_tabpfn_server import with_mock_server
 
 
@@ -87,7 +92,7 @@ class TestServiceClient(unittest.TestCase):
             "metadata": {
                 "task": "classification",
                 "package_version": "0.3.0rc1",
-                "tabpfn_config": None,
+                "tabpfn_config": {},
                 "test_set_num_rows": len(self.X_test),
                 "test_set_num_cols": self.X_test.shape[1],
             },
@@ -241,12 +246,12 @@ class TestServiceClient(unittest.TestCase):
             fitted_train_set_id = ServiceClient.fit(
                 self.X_train,
                 self.y_train,
-                task="classification",
+                task_config=ClassifierConfig(),
             )
             pred = ServiceClient.predict(
                 fitted_train_set_id=fitted_train_set_id,
                 x_test=self.X_test,
-                task="classification",
+                task_config=ClassifierConfig(),
             )
 
         self.assertEqual(
@@ -348,12 +353,12 @@ class TestServiceClient(unittest.TestCase):
             fitted_train_set_id_1 = ServiceClient.fit(
                 self.X_train,
                 self.y_train,
-                task="classification",
+                task_config=ClassifierConfig(),
             )
             fitted_train_set_id_2 = ServiceClient.fit(
                 self.X_train,
                 self.y_train,
-                task="classification",
+                task_config=ClassifierConfig(),
             )
 
         self.assertEqual(fitted_train_set_id_1, fitted_train_set_id_2)
@@ -383,12 +388,12 @@ class TestServiceClient(unittest.TestCase):
             pred_1 = ServiceClient.predict(
                 fitted_train_set_id=fitted_train_set_id,
                 x_test=self.X_test,
-                task="classification",
+                task_config=ClassifierConfig(),
             )
             pred_2 = ServiceClient.predict(
                 fitted_train_set_id=fitted_train_set_id,
                 x_test=self.X_test,
-                task="classification",
+                task_config=ClassifierConfig(),
             )
 
         self.assertTrue(np.array_equal(pred_1.y_pred, pred_2.y_pred))
@@ -404,7 +409,7 @@ class TestServiceClient(unittest.TestCase):
             json={
                 "message": "fitted train set missing",
                 "error_code": "NOT_FOUND",
-                "trace_id": "trace-123",
+                "trace_id": "00000000-0000-0000-0000-0000000000aa",
             },
         )
 
@@ -412,7 +417,7 @@ class TestServiceClient(unittest.TestCase):
             ServiceClient.predict(
                 fitted_train_set_id=UUID("00000000-0000-0000-0000-000000000002"),
                 x_test=self.X_test,
-                task="classification",
+                task_config=ClassifierConfig(),
             )
 
     def test_get_model_limits_uses_cache(self):
@@ -485,7 +490,7 @@ class TestServiceClientPredictionNormalization(unittest.TestCase):
             "metadata": {
                 "task": "regression",
                 "package_version": "0.3.0rc1",
-                "tabpfn_config": None,
+                "tabpfn_config": {},
                 "test_set_num_rows": 2,
                 "test_set_num_cols": 1,
             },
@@ -514,8 +519,9 @@ class TestServiceClientPredictionNormalization(unittest.TestCase):
                 pred = ServiceClient.predict(
                     fitted_train_set_id=UUID("00000000-0000-0000-0000-000000000002"),
                     x_test=np.array([[1.0], [2.0]]),
-                    task="regression",
-                    predict_params={"output_type": "full"},
+                    task_config=RegressorConfig(
+                        predict_params=RegressorPredictParams(output_type="full")
+                    ),
                 )
 
         self.assertTrue(np.issubdtype(pred.y_pred["borders"].dtype, np.floating))
