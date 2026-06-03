@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tabpfn-client"
-version = "0.3.0"
+version = "0.3.1"
 requires-python = ">=3.9"
 
 description = "API access for TabPFN: Foundation model for tabular data"
@@ -43,6 +43,9 @@ dependencies = [
     "google-crc32c>=1.5.0,<=1.8.0",
     "pyarrow>=14.0.0,<=23.0.1",
 ]
+
+[project.optional-dependencies]
+sagemaker = ["boto3>=1.34"]
 
 [project.urls]
 documentation = "https://priorlabs.ai/docs"
