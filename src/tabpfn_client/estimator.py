@@ -34,9 +34,9 @@ from tabpfn_client.service_wrapper import InferenceClient
 from tabpfn_client.sdks.gapi import (
     PredictionTask,
     RegressorTabPFNConfig,
-    RegressorTabPFNConfigDict,
-    ClassifierTabPFNConfigDict,
     ClassifierTabPFNConfig,
+    RegressorPredictParams,
+    ClassifierPredictParams,
 )
 
 try:
@@ -137,10 +137,6 @@ class TabPFNModelSelection:
 
 
 class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
-    _TABPFN_CONFIG_PARAMS = frozenset(
-        ClassifierTabPFNConfigDict.__required_keys__
-        | ClassifierTabPFNConfigDict.__optional_keys__
-    )
     _AVAILABLE_MODELS = [
         DEFAULT_V3_MODEL_PATH,
         DEFAULT_V2_6_MODEL_PATH,
@@ -344,7 +340,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                     client_options=self.client_options,
                 )
 
-            self.last_fitted_train_set_id = run_task(fit_task, "Fitting")
+            self.last_fitted_train_set_id = cast(UUID, run_task(fit_task, "Fitting"))
             self.last_train_X = X
             self.last_train_y = y
             self.fitted_ = True
@@ -382,8 +378,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         X,
         output_type,
     ) -> dict[str, np.ndarray]:
+        kwargs = locals()
         check_is_fitted(self)
+
         tabpfn_config = self._get_tabpfn_config()
+        predict_params = self._get_predict_params(kwargs)
+
         validate_test_set(X, output_type, tabpfn_config.model_path)
         X = _clean_text_features(X)
 
@@ -404,7 +404,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                         fitted_train_set_id=self.last_fitted_train_set_id,
                         task=PredictionTask.CLASSIFICATION,
                         tabpfn_config=tabpfn_config,
-                        predict_params={"output_type": output_type},  # XXX
+                        predict_params=predict_params,
                         client_options=self.client_options,
                     )
                 except NeedsRefittingError as exc:
@@ -427,10 +427,20 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         return result.y_pred
 
     def _get_tabpfn_config(self) -> ClassifierTabPFNConfig:
-        params = self.get_params()
-        cfg = {k: v for k, v in params.items() if k in self._TABPFN_CONFIG_PARAMS}
+        init_params = self.get_params()
+        cfg = {
+            k: v
+            for k, v in init_params.items()
+            if k in ClassifierTabPFNConfig.model_fields
+        }
         cfg["model_path"] = self._model_name_to_path("classification", self.model_path)
         return ClassifierTabPFNConfig.model_validate(cfg)
+
+    def _get_predict_params(self, kwargs: dict[str, Any]) -> ClassifierPredictParams:
+        params = {
+            k: v for k, v in kwargs.items() if k in ClassifierPredictParams.model_fields
+        }
+        return ClassifierPredictParams.model_validate(params)
 
     def _validate_targets_and_classes(self, y) -> np.ndarray:
         y_ = column_or_1d(y, warn=True)
@@ -460,10 +470,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
 
 class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
-    _TABPFN_CONFIG_PARAMS = frozenset(
-        RegressorTabPFNConfigDict.__required_keys__
-        | RegressorTabPFNConfigDict.__optional_keys__
-    )
     _AVAILABLE_MODELS = [
         DEFAULT_V3_MODEL_PATH,
         DEFAULT_V2_6_MODEL_PATH,
@@ -651,7 +657,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     client_options=self.client_options,
                 )
 
-            self.last_fitted_train_set_id = run_task(fit_task, "Fitting")
+            self.last_fitted_train_set_id = cast(UUID, run_task(fit_task, "Fitting"))
             self.last_train_X = X
             self.last_train_y = y
             self.fitted_ = True
@@ -694,16 +700,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         array-like or dict
             The predicted values.
         """
+        kwargs = locals()
         check_is_fitted(self)
+
         tabpfn_config = self._get_tabpfn_config()
+        predict_params = self._get_predict_params(kwargs)
+
         validate_test_set(X, output_type, tabpfn_config.model_path)
         X = _clean_text_features(X)
-
-        # Add new parameters
-        predict_params = {
-            "output_type": output_type,
-            "quantiles": quantiles,
-        }
 
         if "sentry-trace" not in self.client_options.headers:
             self.client_options.headers["sentry-trace"] = self.last_trace_id
@@ -719,10 +723,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                 try:
                     return InferenceClient.predict(
                         X,
-                        fitted_train_set_id=self.last_fitted_train_set_id,  # XXX
+                        fitted_train_set_id=self.last_fitted_train_set_id,
                         task=PredictionTask.REGRESSION,
                         tabpfn_config=tabpfn_config,
-                        predict_params=predict_params,  # XXX
+                        predict_params=predict_params,
                         client_options=self.client_options,
                     )
                 except NeedsRefittingError as exc:
@@ -760,10 +764,20 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         return output
 
     def _get_tabpfn_config(self) -> RegressorTabPFNConfig:
-        params = self.get_params()
-        cfg = {k: v for k, v in params.items() if k in self._TABPFN_CONFIG_PARAMS}
+        init_params = self.get_params()
+        cfg = {
+            k: v
+            for k, v in init_params.items()
+            if k in RegressorTabPFNConfig.model_fields
+        }
         cfg["model_path"] = self._model_name_to_path("regression", self.model_path)
         return RegressorTabPFNConfig.model_validate(cfg)
+
+    def _get_predict_params(self, kwargs: dict[str, Any]) -> RegressorPredictParams:
+        params = {
+            k: v for k, v in kwargs.items() if k in RegressorPredictParams.model_fields
+        }
+        return RegressorPredictParams.model_validate(params)
 
     def _validate_targets(self, y) -> np.ndarray:
         y_ = column_or_1d(y, warn=True)
@@ -806,10 +820,7 @@ def validate_thinking_mode(
             "consulted when thinking is enabled; pass `thinking_mode=True` "
             "or `thinking_effort=...` to use them."
         )
-    if (
-        thinking_timeout_s is not None
-        and thinking_timeout_s > THINKING_TIMEOUT_MAX_S
-    ):
+    if thinking_timeout_s is not None and thinking_timeout_s > THINKING_TIMEOUT_MAX_S:
         raise ValueError(
             f"thinking_timeout_s ({thinking_timeout_s}) exceeds the "
             f"maximum allowed of {THINKING_TIMEOUT_MAX_S} seconds "

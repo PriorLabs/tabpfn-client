@@ -11,7 +11,13 @@ from uuid import UUID
 from tabpfn_client.client import ServiceClient, ClientOptions, PredictionResult
 import tabpfn_client.constants as constants
 from tabpfn_common_utils.utils import Singleton
-from tabpfn_client.sdks.gapi import PredictionTask, ClassifierTabPFNConfig, RegressorTabPFNConfig, ClassifierPredictParams, RegressorPredictParams
+from tabpfn_client.sdks.gapi import (
+    PredictionTask,
+    ClassifierTabPFNConfig,
+    RegressorTabPFNConfig,
+    ClassifierPredictParams,
+    RegressorPredictParams,
+)
 
 
 logger = logging.getLogger(__name__)
