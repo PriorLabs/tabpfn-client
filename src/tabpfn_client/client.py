@@ -54,13 +54,10 @@ from tabpfn_client.sdks.gapi import (
     FitResponse,
     PredictRequest,
     PredictResponse,
-    TaskConfig,
+    ClassifierConfig,
+    RegressorConfig,
     ErrorResponse,
-    ClassifierTabPFNConfig,
-    RegressorTabPFNConfig,
     PredictionTask,
-    ClassifierPredictParams,
-    RegressorPredictParams,
 )
 
 logger = logging.getLogger(__name__)
@@ -274,8 +271,7 @@ class ServiceClient(Singleton):
         cls,
         X: pd.DataFrame | np.ndarray,
         y: pd.Series | np.ndarray,
-        task: PredictionTask,
-        tabpfn_config: ClassifierTabPFNConfig | RegressorTabPFNConfig | None = None,
+        task_config: ClassifierConfig | RegressorConfig,
         paper_version: bool = False,
         thinking_mode: bool = False,
         thinking_effort: ThinkingEffort | None = None,
@@ -312,12 +308,7 @@ class ServiceClient(Singleton):
             The unique ID of the fitted train set in the server.
         """
         tabpfn_systems = ["preprocessing", "text"]
-
-        # Thinking is enabled when either flag is set: explicit `thinking_mode=True`,
-        # or any non-None `thinking_effort`. Setting `thinking_effort` alone is
-        # enough — the server-side validator on FitRequest also normalises this,
-        # but doing it here means the request body itself is consistent.
-        thinking_enabled = thinking_mode is True and thinking_effort is not None and tabpfn_config is not None
+        thinking_enabled = thinking_mode is True or thinking_effort is not None
 
         # The client-side `thinking_*` knobs forward 1:1 to the server's
         # top-level FitRequest fields. When the user enabled thinking via
@@ -414,10 +405,14 @@ class ServiceClient(Singleton):
         res = cls._fit(
             req=FitRequest(
                 train_set_upload_id=prepare_resp.train_set_upload_id,
-                task=task,
+                task=PredictionTask(task_config.task),
                 tabpfn_systems=tabpfn_systems,
                 force_refit=force_refit or force_refit_enabled(),
-                tabpfn_config=tabpfn_config,  # XXX
+                # NOTE: Since the current shape of the fit request makes it difficult to
+                # discriminate `tabpfn_config` it is set to a generic dict.
+                # TODO: Refactor FitRequest, use tabpfn-system specific config objects
+                # and discriminate based on task (see TaskConfig).
+                tabpfn_config=task_config.tabpfn_config.model_dump(),
                 thinking_effort=thinking_effort,
                 thinking_timeout_s=thinking_timeout_s,
                 thinking_effort_metric=thinking_metric,
@@ -471,9 +466,7 @@ class ServiceClient(Singleton):
         cls,
         fitted_train_set_id: UUID,
         x_test: pd.DataFrame | np.ndarray,
-        task: PredictionTask,
-        tabpfn_config: ClassifierTabPFNConfig | RegressorTabPFNConfig | None = None,
-        predict_params: ClassifierPredictParams | RegressorPredictParams | None = None,
+        task_config: ClassifierConfig | RegressorConfig,
         client_options: ClientOptions | None = None,
     ) -> PredictionResult:
         """
@@ -560,11 +553,7 @@ class ServiceClient(Singleton):
             req=PredictRequest(
                 test_set_upload_id=prepare_resp.test_set_upload_id,
                 fitted_train_set_id=fitted_train_set_id,
-                task_config=TaskConfig(  # XXX
-                    task=task,
-                    tabpfn_config=tabpfn_config,  # XXX
-                    predict_params=predict_params,  # XXX
-                ),
+                task_config=task_config,
                 force_refit=force_refit_enabled(),
             ),
             timeout=client_options.timeout,

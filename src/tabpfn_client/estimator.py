@@ -33,11 +33,12 @@ from tabpfn_client.constants import (
 )
 from tabpfn_client.service_wrapper import InferenceClient
 from tabpfn_client.sdks.gapi import (
-    PredictionTask,
     RegressorTabPFNConfig,
     ClassifierTabPFNConfig,
     RegressorPredictParams,
     ClassifierPredictParams,
+    ClassifierConfig,
+    RegressorConfig,
 )
 
 try:
@@ -279,7 +280,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.inference_config = inference_config
         self.paper_version = paper_version
         self.thinking_mode = thinking_mode
-        self.thinking_effort = thinking_effort
+        self.thinking_effort: ThinkingEffort | None = thinking_effort
         self.thinking_timeout_s = thinking_timeout_s
         self.thinking_metric = thinking_metric
         self.force_refit = force_refit
@@ -303,6 +304,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         init()
 
         tabpfn_config = self._get_tabpfn_config()
+
+        task_config = ClassifierConfig(tabpfn_config=tabpfn_config)
+
         validate_train_set(X, y)
         validate_thinking_mode(
             self.thinking_mode,
@@ -333,8 +337,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 return InferenceClient.fit(
                     X,
                     y,
-                    task=PredictionTask.CLASSIFICATION,
-                    tabpfn_config=tabpfn_config,
+                    task_config=task_config,
                     paper_version=self.paper_version,
                     thinking_mode=self.thinking_mode,
                     thinking_effort=self.thinking_effort,
@@ -389,6 +392,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         tabpfn_config = self._get_tabpfn_config()
         predict_params = self._get_predict_params(kwargs)
 
+        task_config = ClassifierConfig(
+            tabpfn_config=tabpfn_config,
+            predict_params=predict_params,
+        )
+
         validate_test_set(X, output_type, tabpfn_config.model_path)
         X = _clean_text_features(X)
 
@@ -407,9 +415,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                     return InferenceClient.predict(
                         X,
                         fitted_train_set_id=self.last_fitted_train_set_id,
-                        task=PredictionTask.CLASSIFICATION,
-                        tabpfn_config=tabpfn_config,
-                        predict_params=predict_params,
+                        task_config=task_config,
                         client_options=self.client_options,
                     )
                 except NeedsRefittingError as exc:
@@ -418,8 +424,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                     self.last_fitted_train_set_id = InferenceClient.fit(
                         self.last_train_X,
                         self.last_train_y,
-                        task=PredictionTask.CLASSIFICATION,
-                        tabpfn_config=tabpfn_config,
+                        task_config=task_config,
                         paper_version=self.paper_version,
                         thinking_mode=self.thinking_mode,
                         thinking_effort=self.thinking_effort,
@@ -605,7 +610,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.inference_config = inference_config
         self.paper_version = paper_version
         self.thinking_mode = thinking_mode
-        self.thinking_effort = thinking_effort
+        self.thinking_effort: ThinkingEffort | None = thinking_effort
         self.thinking_timeout_s = thinking_timeout_s
         self.thinking_metric = thinking_metric
         self.force_refit = force_refit
@@ -629,6 +634,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         init()
 
         tabpfn_config = self._get_tabpfn_config()
+
+        task_config = RegressorConfig(tabpfn_config=tabpfn_config)
+
         validate_train_set(X, y)
         validate_thinking_mode(
             self.thinking_mode,
@@ -660,8 +668,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                 return InferenceClient.fit(
                     X,
                     y,
-                    task=PredictionTask.REGRESSION,
-                    tabpfn_config=tabpfn_config,
+                    task_config=task_config,
                     paper_version=self.paper_version,
                     thinking_mode=self.thinking_mode,
                     thinking_effort=self.thinking_effort,
@@ -721,6 +728,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         tabpfn_config = self._get_tabpfn_config()
         predict_params = self._get_predict_params(kwargs)
 
+        task_config = RegressorConfig(
+            tabpfn_config=tabpfn_config,
+            predict_params=predict_params,
+        )
+
         validate_test_set(X, output_type, tabpfn_config.model_path)
         X = _clean_text_features(X)
 
@@ -739,9 +751,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     return InferenceClient.predict(
                         X,
                         fitted_train_set_id=self.last_fitted_train_set_id,
-                        task=PredictionTask.REGRESSION,
-                        tabpfn_config=tabpfn_config,
-                        predict_params=predict_params,
+                        task_config=task_config,
                         client_options=self.client_options,
                     )
                 except NeedsRefittingError as exc:
@@ -750,8 +760,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     self.last_fitted_train_set_id = InferenceClient.fit(
                         self.last_train_X,
                         self.last_train_y,
-                        task=PredictionTask.REGRESSION,
-                        tabpfn_config=tabpfn_config,
+                        task_config=task_config,
                         paper_version=self.paper_version,
                         thinking_mode=self.thinking_mode,
                         thinking_effort=self.thinking_effort,
@@ -815,7 +824,7 @@ def _is_thinking_supported_model_path(model_path: str) -> bool:
 
 def validate_thinking_mode(
     thinking_mode: bool,
-    thinking_effort: str | None,
+    thinking_effort: ThinkingEffort | None,
     thinking_timeout_s: float | None,
     thinking_metric: str | None,
     model_path: str,

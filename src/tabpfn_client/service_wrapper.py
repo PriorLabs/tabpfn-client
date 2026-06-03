@@ -8,15 +8,17 @@ import os
 from pathlib import Path
 
 from uuid import UUID
-from tabpfn_client.client import ServiceClient, ClientOptions, PredictionResult, ThinkingEffort
+from tabpfn_client.client import (
+    ServiceClient,
+    ClientOptions,
+    PredictionResult,
+    ThinkingEffort,
+)
 import tabpfn_client.constants as constants
 from tabpfn_common_utils.utils import Singleton
 from tabpfn_client.sdks.gapi import (
-    PredictionTask,
-    ClassifierTabPFNConfig,
-    RegressorTabPFNConfig,
-    ClassifierPredictParams,
-    RegressorPredictParams,
+    ClassifierConfig,
+    RegressorConfig,
 )
 
 
@@ -267,8 +269,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         cls,
         X,
         y,
-        task: PredictionTask,
-        tabpfn_config: ClassifierTabPFNConfig | RegressorTabPFNConfig | None = None,
+        task_config: ClassifierConfig | RegressorConfig,
         paper_version: bool = False,
         thinking_mode: bool = False,
         thinking_effort: ThinkingEffort | None = None,
@@ -281,8 +282,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         return ServiceClient.fit(
             X,
             y,
-            task=task,
-            tabpfn_config=tabpfn_config,
+            task_config=task_config,
             paper_version=paper_version,
             thinking_mode=thinking_mode,
             thinking_effort=thinking_effort,
@@ -298,16 +298,12 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         cls,
         X,
         fitted_train_set_id: UUID,
-        task: PredictionTask,
-        tabpfn_config: ClassifierTabPFNConfig | RegressorTabPFNConfig | None = None,
-        predict_params: ClassifierPredictParams | RegressorPredictParams | None = None,
+        task_config: ClassifierConfig | RegressorConfig,
         client_options: ClientOptions | None = None,
     ) -> PredictionResult:
         return ServiceClient.predict(
             x_test=X,
             fitted_train_set_id=fitted_train_set_id,
-            task=task,
-            tabpfn_config=tabpfn_config,
-            predict_params=predict_params,
+            task_config=task_config,
             client_options=client_options,
         )
