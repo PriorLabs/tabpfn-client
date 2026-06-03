@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 
 from uuid import UUID
-from tabpfn_client.client import ServiceClient, ClientOptions, PredictionResult
+from tabpfn_client.client import ServiceClient, ClientOptions, PredictionResult, ThinkingEffort
 import tabpfn_client.constants as constants
 from tabpfn_common_utils.utils import Singleton
 from tabpfn_client.sdks.gapi import (
@@ -269,18 +269,28 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         y,
         task: PredictionTask,
         tabpfn_config: ClassifierTabPFNConfig | RegressorTabPFNConfig | None = None,
-        description: str | None = None,
+        paper_version: bool = False,
+        thinking_mode: bool = False,
+        thinking_effort: ThinkingEffort | None = None,
+        thinking_timeout_s: float | None = None,
+        thinking_metric: str | None = None,
         force_refit: bool = False,
         client_options: ClientOptions | None = None,
+        description: str | None = None,
     ) -> UUID:
         return ServiceClient.fit(
             X,
             y,
             task=task,
             tabpfn_config=tabpfn_config,
-            description=description,
+            paper_version=paper_version,
+            thinking_mode=thinking_mode,
+            thinking_effort=thinking_effort,
+            thinking_timeout_s=thinking_timeout_s,
+            thinking_metric=thinking_metric,
             force_refit=force_refit,
             client_options=client_options,
+            description=description,
         )
 
     @classmethod

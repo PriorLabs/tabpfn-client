@@ -23,6 +23,7 @@ from tabpfn_client.client import (
     ClientOptions,
     PredictionResult,
     NeedsRefittingError,
+    ThinkingEffort,
 )
 from tabpfn_client.config import Config, init
 from tabpfn_client.constants import (
@@ -65,7 +66,6 @@ _AUTO_MODEL_PATH_ALIASES = frozenset({"auto", "default"})
 
 THINKING_TIMEOUT_MAX_S = 40 * 60
 
-ThinkingEffort = Literal["medium", "high"]
 _VALID_THINKING_EFFORT_LEVELS = frozenset({"medium", "high"})
 
 
@@ -335,9 +335,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                     y,
                     task=PredictionTask.CLASSIFICATION,
                     tabpfn_config=tabpfn_config,
-                    description=description,
+                    paper_version=self.paper_version,
+                    thinking_mode=self.thinking_mode,
+                    thinking_effort=self.thinking_effort,
+                    thinking_timeout_s=self.thinking_timeout_s,
+                    thinking_metric=self.thinking_metric,
                     force_refit=self.force_refit,
                     client_options=self.client_options,
+                    description=description,
                 )
 
             self.last_fitted_train_set_id = cast(UUID, run_task(fit_task, "Fitting"))
@@ -415,9 +420,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                         self.last_train_y,
                         task=PredictionTask.CLASSIFICATION,
                         tabpfn_config=tabpfn_config,
-                        description=self.last_train_set_description,
+                        paper_version=self.paper_version,
+                        thinking_mode=self.thinking_mode,
+                        thinking_effort=self.thinking_effort,
+                        thinking_timeout_s=self.thinking_timeout_s,
+                        thinking_metric=self.thinking_metric,
                         force_refit=True,
                         client_options=self.client_options,
+                        description=self.last_train_set_description,
                     )
 
         result = run_task(predict_task, "Predicting")
@@ -652,9 +662,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     y,
                     task=PredictionTask.REGRESSION,
                     tabpfn_config=tabpfn_config,
-                    description=description,
+                    paper_version=self.paper_version,
+                    thinking_mode=self.thinking_mode,
+                    thinking_effort=self.thinking_effort,
+                    thinking_timeout_s=self.thinking_timeout_s,
+                    thinking_metric=self.thinking_metric,
                     force_refit=self.force_refit,
                     client_options=self.client_options,
+                    description=description,
                 )
 
             self.last_fitted_train_set_id = cast(UUID, run_task(fit_task, "Fitting"))
@@ -737,9 +752,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                         self.last_train_y,
                         task=PredictionTask.REGRESSION,
                         tabpfn_config=tabpfn_config,
-                        description=self.last_train_set_description,
+                        paper_version=self.paper_version,
+                        thinking_mode=self.thinking_mode,
+                        thinking_effort=self.thinking_effort,
+                        thinking_timeout_s=self.thinking_timeout_s,
+                        thinking_metric=self.thinking_metric,
                         force_refit=True,
                         client_options=self.client_options,
+                        description=self.last_train_set_description,
                     )
 
         result = run_task(predict_task, "Predicting")

@@ -19,7 +19,7 @@ import time
 import traceback
 import warnings
 from pydantic import BaseModel, ValidationError
-from typing import Any, Callable, cast
+from typing import Any, Callable, cast, Literal
 
 import google_crc32c
 
@@ -166,6 +166,9 @@ class NeedsRefittingError(Exception):
     pass
 
 
+ThinkingEffort = Literal["medium", "high"]
+
+
 @dataclass
 class ClientOptions:
     """
@@ -273,9 +276,14 @@ class ServiceClient(Singleton):
         y: pd.Series | np.ndarray,
         task: PredictionTask,
         tabpfn_config: ClassifierTabPFNConfig | RegressorTabPFNConfig | None = None,
-        description: str | None = None,
+        paper_version: bool = False,
+        thinking_mode: bool = False,
+        thinking_effort: ThinkingEffort | None = None,
+        thinking_timeout_s: float | None = None,
+        thinking_metric: str | None = None,
         force_refit: bool = False,
         client_options: ClientOptions | None = None,
+        description: str | None = None,
     ) -> UUID:
         """
         Upload a train set to server and return the train set UID if successful.
@@ -303,6 +311,28 @@ class ServiceClient(Singleton):
         fitted_train_set_id: UUID
             The unique ID of the fitted train set in the server.
         """
+        tabpfn_systems = ["preprocessing", "text"]
+
+        # Thinking is enabled when either flag is set: explicit `thinking_mode=True`,
+        # or any non-None `thinking_effort`. Setting `thinking_effort` alone is
+        # enough — the server-side validator on FitRequest also normalises this,
+        # but doing it here means the request body itself is consistent.
+        thinking_enabled = thinking_mode is True and thinking_effort is not None and tabpfn_config is not None
+
+        # The client-side `thinking_*` knobs forward 1:1 to the server's
+        # top-level FitRequest fields. When the user enabled thinking via
+        # `thinking_mode=True` without picking a level, default to "medium".
+        # The user-facing kwarg is `thinking_metric`; on the wire it is sent
+        # as `thinking_effort_metric` (matching the server's FitRequest schema).
+        if thinking_enabled:
+            thinking_effort = thinking_effort or "medium"
+            # Thinking runs on top of the base systems rather than
+            # replacing them — keep preprocessing + text alongside it.
+            tabpfn_systems = ["preprocessing", "text", "thinking"]
+
+        if paper_version:
+            tabpfn_systems = []
+
         client_options = client_options or ClientOptions()
 
         df_X = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
@@ -381,63 +411,13 @@ class ServiceClient(Singleton):
                         f.cancel()
                     raise
 
-        tabpfn_systems = ["preprocessing", "text"]
-        # Thinking is enabled when either flag is set: explicit `thinking_mode=True`,
-        # or any non-None `thinking_effort`. Setting `thinking_effort` alone is
-        # enough — the server-side validator on FitRequest also normalises this,
-        # but doing it here means the request body itself is consistent.
-        thinking_enabled = bool(tabpfn_config) and (
-            bool(tabpfn_config.get("thinking_mode"))
-            or tabpfn_config.get("thinking_effort") is not None
-        )
-        if tabpfn_config:
-            if tabpfn_config.get("paper_version") is True:
-                tabpfn_systems = []
-            elif thinking_enabled:
-                # Thinking runs on top of the base systems rather than
-                # replacing them — keep preprocessing + text alongside it.
-                tabpfn_systems = ["preprocessing", "text", "thinking"]
-
-        # The client-side `thinking_*` knobs forward 1:1 to the server's
-        # top-level FitRequest fields. When the user enabled thinking via
-        # `thinking_mode=True` without picking a level, default to "medium".
-        # The user-facing kwarg is `thinking_metric`; on the wire it is sent
-        # as `thinking_effort_metric` (matching the server's FitRequest schema).
-        if thinking_enabled and tabpfn_config:
-            thinking_effort = tabpfn_config.get("thinking_effort") or "medium"
-            thinking_timeout_s = tabpfn_config.get("thinking_timeout_s")
-            thinking_metric = tabpfn_config.get("thinking_metric")
-        else:
-            thinking_effort = None
-            thinking_timeout_s = None
-            thinking_metric = None
-
-        # Strip client-only keys that the server does not expect (mirrors
-        # the predict path's filter below).
-        server_tabpfn_config = (
-            {
-                k: v
-                for k, v in tabpfn_config.items()
-                if k
-                not in {
-                    "paper_version",
-                    "thinking_mode",
-                    "thinking_effort",
-                    "thinking_timeout_s",
-                    "thinking_metric",
-                }
-            }
-            if tabpfn_config is not None
-            else None
-        )
-
         res = cls._fit(
             req=FitRequest(
                 train_set_upload_id=prepare_resp.train_set_upload_id,
                 task=task,
                 tabpfn_systems=tabpfn_systems,
                 force_refit=force_refit or force_refit_enabled(),
-                tabpfn_config=server_tabpfn_config,
+                tabpfn_config=tabpfn_config,  # XXX
                 thinking_effort=thinking_effort,
                 thinking_timeout_s=thinking_timeout_s,
                 thinking_effort_metric=thinking_metric,
@@ -576,29 +556,14 @@ class ServiceClient(Singleton):
                 prepare_resp.x_test_info,
             )
 
-        # Strip client-only keys that the server does not expect.
-        if tabpfn_config is not None:
-            tabpfn_config = {
-                k: v
-                for k, v in tabpfn_config.items()
-                if k
-                not in {
-                    "paper_version",
-                    "thinking_mode",
-                    "thinking_effort",
-                    "thinking_timeout_s",
-                    "thinking_metric",
-                }
-            }
-
         res = cls._predict(
             req=PredictRequest(
                 test_set_upload_id=prepare_resp.test_set_upload_id,
                 fitted_train_set_id=fitted_train_set_id,
-                task_config=TaskConfig(
+                task_config=TaskConfig(  # XXX
                     task=task,
-                    tabpfn_config=tabpfn_config,
-                    predict_params=predict_params,
+                    tabpfn_config=tabpfn_config,  # XXX
+                    predict_params=predict_params,  # XXX
                 ),
                 force_refit=force_refit_enabled(),
             ),
