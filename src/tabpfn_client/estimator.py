@@ -8,7 +8,7 @@ import sys
 import time
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, cast
 from typing_extensions import Self
 from uuid import UUID
 
@@ -31,7 +31,13 @@ from tabpfn_client.constants import (
     ModelVersion,
 )
 from tabpfn_client.service_wrapper import InferenceClient
-from tabpfn_client.sdks.gapi.models_gen import PredictionTask
+from tabpfn_client.sdks.gapi import (
+    PredictionTask,
+    RegressorTabPFNConfig,
+    RegressorTabPFNConfigDict,
+    ClassifierTabPFNConfigDict,
+    ClassifierTabPFNConfig,
+)
 
 try:
     from torch import Tensor
@@ -129,30 +135,12 @@ class TabPFNModelSelection:
 
         return cls(**options)
 
-    def _get_estimator_params_with_model_path(
-        self, task: Literal["classification", "regression"]
-    ) -> dict[str, Any]:
-        """Get estimator parameters with the model_path resolved to full path.
-
-        Parameters
-        ----------
-        task : {"classification", "regression"}
-            The task type to determine the correct model path.
-
-        Returns
-        -------
-        dict[str, Any]
-            Dictionary of estimator parameters with model_path updated to full path.
-        """
-        estimator_param = self.get_params()
-        estimator_param["model_path"] = self._model_name_to_path(task, self.model_path)
-        # Client-side concerns — passed separately to InferenceClient, not part of server config.
-        estimator_param.pop("client_options", None)
-        estimator_param.pop("force_refit", None)
-        return estimator_param
-
 
 class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
+    _TABPFN_CONFIG_PARAMS = frozenset(
+        ClassifierTabPFNConfigDict.__required_keys__
+        | ClassifierTabPFNConfigDict.__optional_keys__
+    )
     _AVAILABLE_MODELS = [
         DEFAULT_V3_MODEL_PATH,
         DEFAULT_V2_6_MODEL_PATH,
@@ -318,7 +306,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         # assert init() is called
         init()
 
-        estimator_param = self._get_estimator_params_with_model_path("classification")
+        tabpfn_config = self._get_tabpfn_config()
         validate_train_set(X, y)
         validate_thinking_mode(
             self.thinking_mode,
@@ -350,7 +338,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                     X,
                     y,
                     task=PredictionTask.CLASSIFICATION,
-                    tabpfn_config=estimator_param,  # XXX
+                    tabpfn_config=tabpfn_config,
                     description=description,
                     force_refit=self.force_refit,
                     client_options=self.client_options,
@@ -395,8 +383,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         output_type,
     ) -> dict[str, np.ndarray]:
         check_is_fitted(self)
-        estimator_param = self._get_estimator_params_with_model_path("classification")
-        validate_test_set(X, output_type, estimator_param["model_path"])
+        tabpfn_config = self._get_tabpfn_config()
+        validate_test_set(X, output_type, tabpfn_config.model_path)
         X = _clean_text_features(X)
 
         if "sentry-trace" not in self.client_options.headers:
@@ -415,7 +403,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                         X,
                         fitted_train_set_id=self.last_fitted_train_set_id,
                         task=PredictionTask.CLASSIFICATION,
-                        tabpfn_config=estimator_param,  # XXX
+                        tabpfn_config=tabpfn_config,
                         predict_params={"output_type": output_type},  # XXX
                         client_options=self.client_options,
                     )
@@ -426,7 +414,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                         self.last_train_X,
                         self.last_train_y,
                         task=PredictionTask.CLASSIFICATION,
-                        tabpfn_config=estimator_param,  # XXX
+                        tabpfn_config=tabpfn_config,
                         description=self.last_train_set_description,
                         force_refit=True,
                         client_options=self.client_options,
@@ -437,6 +425,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.last_meta = result.metadata
 
         return result.y_pred
+
+    def _get_tabpfn_config(self) -> ClassifierTabPFNConfig:
+        params = self.get_params()
+        cfg = {k: v for k, v in params.items() if k in self._TABPFN_CONFIG_PARAMS}
+        cfg["model_path"] = self._model_name_to_path("classification", self.model_path)
+        return ClassifierTabPFNConfig.model_validate(cfg)
 
     def _validate_targets_and_classes(self, y) -> np.ndarray:
         y_ = column_or_1d(y, warn=True)
@@ -466,6 +460,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
 
 class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
+    _TABPFN_CONFIG_PARAMS = frozenset(
+        RegressorTabPFNConfigDict.__required_keys__
+        | RegressorTabPFNConfigDict.__optional_keys__
+    )
     _AVAILABLE_MODELS = [
         DEFAULT_V3_MODEL_PATH,
         DEFAULT_V2_6_MODEL_PATH,
@@ -614,7 +612,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         # assert init() is called
         init()
 
-        estimator_param = self._get_estimator_params_with_model_path("regression")
+        tabpfn_config = self._get_tabpfn_config()
         validate_train_set(X, y)
         validate_thinking_mode(
             self.thinking_mode,
@@ -647,7 +645,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     X,
                     y,
                     task=PredictionTask.REGRESSION,
-                    tabpfn_config=estimator_param,  # XXX
+                    tabpfn_config=tabpfn_config,
                     description=description,
                     force_refit=self.force_refit,
                     client_options=self.client_options,
@@ -697,8 +695,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             The predicted values.
         """
         check_is_fitted(self)
-        estimator_param = self._get_estimator_params_with_model_path("regression")
-        validate_test_set(X, output_type, estimator_param["model_path"])
+        tabpfn_config = self._get_tabpfn_config()
+        validate_test_set(X, output_type, tabpfn_config.model_path)
         X = _clean_text_features(X)
 
         # Add new parameters
@@ -723,7 +721,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                         X,
                         fitted_train_set_id=self.last_fitted_train_set_id,  # XXX
                         task=PredictionTask.REGRESSION,
-                        tabpfn_config=estimator_param,  # XXX
+                        tabpfn_config=tabpfn_config,
                         predict_params=predict_params,  # XXX
                         client_options=self.client_options,
                     )
@@ -734,7 +732,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                         self.last_train_X,
                         self.last_train_y,
                         task=PredictionTask.REGRESSION,
-                        tabpfn_config=estimator_param,  # XXX
+                        tabpfn_config=tabpfn_config,
                         description=self.last_train_set_description,
                         force_refit=True,
                         client_options=self.client_options,
@@ -760,6 +758,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                 )
 
         return output
+
+    def _get_tabpfn_config(self) -> RegressorTabPFNConfig:
+        params = self.get_params()
+        cfg = {k: v for k, v in params.items() if k in self._TABPFN_CONFIG_PARAMS}
+        cfg["model_path"] = self._model_name_to_path("regression", self.model_path)
+        return RegressorTabPFNConfig.model_validate(cfg)
 
     def _validate_targets(self, y) -> np.ndarray:
         y_ = column_or_1d(y, warn=True)
@@ -821,7 +825,7 @@ def validate_thinking_mode(
         )
 
 
-def validate_train_set(y: np.ndarray | None = None):
+def validate_train_set(X: np.ndarray, y: np.ndarray | None = None):
     """Check the integrity of the training data."""
 
     # check if the number of samples is consistent (ValueError)

@@ -33,6 +33,7 @@ if __name__ == "__main__":
         tabpfn = TabPFNClassifier.create_default_for_version(
             ModelVersion.V2_5, n_estimators=3
         )
+        estimator = TabPFNClassifier()
         # print("checking estimator", check_estimator(tabpfn))
         tabpfn.fit(X_train[:99], y_train[:99])
         print("predicting")

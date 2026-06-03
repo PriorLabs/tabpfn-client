@@ -1,23 +1,29 @@
 # Generated code. Do not edit by hand.
 #
-# Forward-compat note: enum-typed fields are widened to `Union[EnumName, Unknown]`
-# (and `Union[Literal[...], Unknown]` for inline literals) so the SDK does not
+# Requires the `eval-type-backport` package on Python < 3.10: pydantic uses it
+# to evaluate the `X | Y` annotations under `from __future__ import annotations`.
+#
+# Forward-compat note: enum-typed fields are widened to `EnumName | UnknownEnum`
+# (and `Literal[...] | str` for inline literals) so the SDK does not
 # reject response payloads when the server adds a new enum value. Known
 # values still deserialize to the enum member; unrecognized values flow
-# through as `Unknown` (a `str` subclass) instead of raising a
+# through as `UnknownEnum` (a `str` subclass) instead of raising a
 # ValidationError. Widened fields are wrapped in
 # `Annotated[..., Field(union_mode="left_to_right")]` because pydantic's
 # default smart mode would land known values in the wider branch.
 # Discriminator `const` fields are intentionally left non-forward-compatible.
 
+from __future__ import annotations
+
 from enum import Enum
-from typing import Annotated, Any, Literal, Optional, Union
+from typing import Annotated, Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 
-class Unknown(str):
-    """Sentinel for enum/literal values not known to this SDK — see header."""
+class UnknownEnum(str):
+    """Sentinel for enum values not known to this SDK — see header."""
 
     @property
     def value(self) -> str:
@@ -66,26 +72,26 @@ class RegressorOutputType(str, Enum):
 
 
 class ClassifierPredictParams(BaseModel):
-    output_type: Annotated[Union[ClassifierOutputType, Unknown], Field(union_mode="left_to_right")] = (
+    output_type: Annotated[ClassifierOutputType | UnknownEnum, Field(union_mode="left_to_right")] = (
         ClassifierOutputType.PROBAS
     )
 
 
 class ClassifierTabPFNConfig(BaseModel):
-    n_estimators: Optional[int] = None
-    categorical_features_indices: Optional[list[int]] = None
-    softmax_temperature: Optional[float] = None
-    average_before_softmax: Optional[bool] = None
-    random_state: Optional[int] = None
-    inference_config: Optional[dict[str, Any]] = Field(
+    n_estimators: int | None = None
+    categorical_features_indices: list[int] | None = None
+    softmax_temperature: float | None = None
+    average_before_softmax: bool | None = None
+    random_state: int | None = None
+    inference_config: dict[str, Any] | None = Field(
         default=None, description="Refer to tabpfn.inference_config.InferenceConfig for more details."
     )
-    inference_precision: Optional[
-        Annotated[Union[Literal["autocast", "auto"], Unknown], Field(union_mode="left_to_right")]
-    ] = None
+    inference_precision: (
+        Annotated[Literal["autocast", "auto"] | str, Field(union_mode="left_to_right")] | None
+    ) = None
     ignore_pretraining_limits: bool = True
-    model_path: Optional[str] = None
-    balance_probabilities: Optional[bool] = None
+    model_path: str | None = None
+    balance_probabilities: bool | None = None
 
 
 class ClassifierConfig(BaseModel):
@@ -95,27 +101,27 @@ class ClassifierConfig(BaseModel):
 
 
 class RegressorPredictParams(BaseModel):
-    output_type: Annotated[Union[RegressorOutputType, Unknown], Field(union_mode="left_to_right")] = (
+    output_type: Annotated[RegressorOutputType | UnknownEnum, Field(union_mode="left_to_right")] = (
         RegressorOutputType.MEAN
     )
-    quantiles: Optional[list[float]] = None
-    model_id: Optional[str] = None
+    quantiles: list[float] | None = None
+    model_id: UUID | None = None
 
 
 class RegressorTabPFNConfig(BaseModel):
-    n_estimators: Optional[int] = None
-    categorical_features_indices: Optional[list[int]] = None
-    softmax_temperature: Optional[float] = None
-    average_before_softmax: Optional[bool] = None
-    random_state: Optional[int] = None
-    inference_config: Optional[dict[str, Any]] = Field(
+    n_estimators: int | None = None
+    categorical_features_indices: list[int] | None = None
+    softmax_temperature: float | None = None
+    average_before_softmax: bool | None = None
+    random_state: int | None = None
+    inference_config: dict[str, Any] | None = Field(
         default=None, description="Refer to tabpfn.inference_config.InferenceConfig for more details."
     )
-    inference_precision: Optional[
-        Annotated[Union[Literal["autocast", "auto"], Unknown], Field(union_mode="left_to_right")]
-    ] = None
+    inference_precision: (
+        Annotated[Literal["autocast", "auto"] | str, Field(union_mode="left_to_right")] | None
+    ) = None
     ignore_pretraining_limits: bool = True
-    model_path: Optional[str] = None
+    model_path: str | None = None
 
 
 class RegressorConfig(BaseModel):
@@ -141,11 +147,11 @@ class RegressorMetadata(BaseModel):
 
 
 class FileInfo(BaseModel):
-    format: Annotated[Union[Literal["csv", "parquet"], Unknown], Field(union_mode="left_to_right")]
-    hash: Optional[str] = Field(
+    format: Annotated[Literal["csv", "parquet"] | str, Field(union_mode="left_to_right")]
+    hash: str | None = Field(
         default=None, description="The crc32c hash of the file, used to deduplicate the file."
     )
-    size_bytes: Optional[int] = Field(
+    size_bytes: int | None = Field(
         default=None,
         description="The size of the file in bytes, used to compute the optimal number of chunks when chunking is enabled.",
     )
@@ -161,13 +167,13 @@ class FileUploadInfo(BaseModel):
     required_headers: dict[str, str]
 
 
-Prediction = Union[list[Any], list[list[Any]], dict[str, Union[list[Any], list[list[Any]]]]]
+Prediction = list[Any] | list[list[Any]] | dict[str, list[Any] | list[list[Any]]]
 
 
-TaskConfig = Annotated[Union[ClassifierConfig, RegressorConfig], Field(discriminator="task")]
+TaskConfig = Annotated[ClassifierConfig | RegressorConfig, Field(discriminator="task")]
 
 
-Metadata = Annotated[Union[ClassifierMetadata, RegressorMetadata], Field(discriminator="task")]
+Metadata = Annotated[ClassifierMetadata | RegressorMetadata, Field(discriminator="task")]
 
 
 class TransformTrainSetRequest(BaseModel):
@@ -175,37 +181,28 @@ class TransformTrainSetRequest(BaseModel):
     x_train_key: str
     y_train_key: str
     fitted_train_set_prefix: str
-    task: Union[Annotated[Union[PredictionTask, Unknown], Field(union_mode="left_to_right")], str]
+    task: Annotated[PredictionTask | UnknownEnum, Field(union_mode="left_to_right")]
     tabpfn_systems: list[
-        Union[
-            Annotated[
-                Union[Literal["preprocessing", "text", "thinking"], Unknown],
-                Field(union_mode="left_to_right"),
-            ],
-            str,
-        ]
+        Annotated[Literal["preprocessing", "text", "thinking"] | str, Field(union_mode="left_to_right")]
     ]
-    task_config: Optional[dict[str, Any]] = None
+    task_config: dict[str, Any] | None = None
     ag_time_limit_s: float = 1200.0
-    thinking_effort_metric: Optional[str] = None
-    max_tabprep_configs: Optional[int] = None
+    thinking_effort_metric: str | None = None
+    max_tabprep_configs: int | None = None
 
 
 class FitRequest(BaseModel):
-    train_set_upload_id: str
-    task: Annotated[Union[PredictionTask, Unknown], Field(union_mode="left_to_right")]
+    train_set_upload_id: UUID
+    task: Annotated[PredictionTask | UnknownEnum, Field(union_mode="left_to_right")]
     tabpfn_systems: list[
-        Annotated[
-            Union[Literal["preprocessing", "text", "thinking"], Unknown],
-            Field(union_mode="left_to_right"),
-        ]
+        Annotated[Literal["preprocessing", "text", "thinking"] | str, Field(union_mode="left_to_right")]
     ] = ["preprocessing", "text"]
-    tabpfn_config: Optional[dict[str, Any]] = None
-    thinking_effort: Optional[
-        Annotated[Union[Literal["medium", "high"], Unknown], Field(union_mode="left_to_right")]
-    ] = None
-    thinking_timeout_s: Optional[float] = None
-    thinking_effort_metric: Optional[str] = None
+    tabpfn_config: dict[str, Any] | None = None
+    thinking_effort: (
+        Annotated[Literal["medium", "high"] | str, Field(union_mode="left_to_right")] | None
+    ) = None
+    thinking_timeout_s: float | None = None
+    thinking_effort_metric: str | None = None
     force_refit: bool = Field(
         default=False,
         description="Whether to force the fitting of the train set even if a fittedtrain set and transform states already exist.",
@@ -213,13 +210,15 @@ class FitRequest(BaseModel):
 
 
 class FitResponse(BaseModel):
-    fitted_train_set_id: str
+    fitted_train_set_id: UUID
 
 
 class GetModelLimitsResponse(BaseModel):
-    default_model_version: Annotated[Union[ModelVersion, Unknown], Field(union_mode="left_to_right")]
+    default_model_version: Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")]
     max_model_limit: ModelLimit
-    model_limits: dict[str, ModelLimit]
+    model_limits: dict[
+        Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")], ModelLimit
+    ]
     dataset_max_size_bytes: int
 
 
@@ -229,32 +228,25 @@ class TransformTestSetRequest(BaseModel):
     fitted_train_set_prefix: str
     fitted_test_set_prefix: str
     x_train_cols: int
-    output_type: Union[
-        Annotated[Union[ClassifierOutputType, Unknown], Field(union_mode="left_to_right")],
-        str,
-        Annotated[Union[RegressorOutputType, Unknown], Field(union_mode="left_to_right")],
-    ]
+    output_type: (
+        Annotated[ClassifierOutputType | UnknownEnum, Field(union_mode="left_to_right")]
+        | Annotated[RegressorOutputType | UnknownEnum, Field(union_mode="left_to_right")]
+    )
     tabpfn_systems: list[
-        Union[
-            Annotated[
-                Union[Literal["preprocessing", "text", "thinking"], Unknown],
-                Field(union_mode="left_to_right"),
-            ],
-            str,
-        ]
+        Annotated[Literal["preprocessing", "text", "thinking"] | str, Field(union_mode="left_to_right")]
     ]
 
 
 class NotFoundErrorResponse(BaseModel):
     message: str
     error_code: str = "NOT_FOUND"
-    trace_id: Optional[str] = None
-    detail: Optional[str] = None
+    trace_id: UUID | None = None
+    detail: str | None = None
 
 
 class PredictRequest(BaseModel):
-    test_set_upload_id: str
-    fitted_train_set_id: str
+    test_set_upload_id: UUID
+    fitted_train_set_id: UUID
     task_config: TaskConfig
     force_refit: bool = Field(
         default=False,
@@ -270,12 +262,12 @@ class PredictResponse(BaseModel):
 class ErrorResponse(BaseModel):
     message: str
     error_code: str = "GENERAL_ERROR"
-    trace_id: Optional[str] = None
-    detail: Optional[str] = None
+    trace_id: UUID | None = None
+    detail: str | None = None
 
 
 class PrepareTestSetUploadRequest(BaseModel):
-    fitted_train_set_id: str
+    fitted_train_set_id: UUID
     x_test_info: FileInfo
     force_reupload: bool = Field(
         default=False,
@@ -284,22 +276,22 @@ class PrepareTestSetUploadRequest(BaseModel):
 
 
 class PrepareTestSetUploadResponse(BaseModel):
-    test_set_upload_id: str
+    test_set_upload_id: UUID
     x_test_info: FileUploadInfo
 
 
 class DuplicateTestSetErrorResponse(BaseModel):
     message: str
     error_code: str = "DUPLICATE_TEST_SET_UPLOAD"
-    trace_id: Optional[str] = None
-    detail: Optional[str] = None
-    test_set_upload_id: str
+    trace_id: UUID | None = None
+    detail: str | None = None
+    test_set_upload_id: UUID
 
 
 class PrepareTrainSetUploadRequest(BaseModel):
     x_train_info: FileInfo
     y_train_info: FileInfo
-    description: Optional[str] = None
+    description: str | None = None
     force_reupload: bool = Field(
         default=False,
         description="Whether to force the upload of the file even if a file with the same hash already exists.",
@@ -307,7 +299,7 @@ class PrepareTrainSetUploadRequest(BaseModel):
 
 
 class PrepareTrainSetUploadResponse(BaseModel):
-    train_set_upload_id: str
+    train_set_upload_id: UUID
     x_train_info: FileUploadInfo
     y_train_info: FileUploadInfo
 
@@ -315,6 +307,6 @@ class PrepareTrainSetUploadResponse(BaseModel):
 class DuplicateTrainSetErrorResponse(BaseModel):
     message: str
     error_code: str = "DUPLICATE_TRAIN_SET_UPLOAD"
-    trace_id: Optional[str] = None
-    detail: Optional[str] = None
-    train_set_upload_id: str
+    trace_id: UUID | None = None
+    detail: str | None = None
+    train_set_upload_id: UUID

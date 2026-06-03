@@ -1,9 +1,5 @@
 {
-  "include": [
-    "src/tabpfn_client/client.py",
-    "src/tabpfn_client/estimator.py",
-    "src/tabpfn_client/service_wrapper.py",
-  ],
+  "include": ["src"],
   "exclude": [
     "**/__pycache__",
     "experiments_*",

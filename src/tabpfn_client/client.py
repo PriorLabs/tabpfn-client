@@ -1270,13 +1270,13 @@ class ServiceClient(Singleton):
         return response.json()["deleted_dataset_uids"]
 
     @classmethod
-    def delete_all_datasets(cls) -> [str]:
+    def delete_all_datasets(cls) -> list[str]:
         """
         Delete all datasets uploaded by the user from the server.
 
         Returns
         -------
-        deleted_dataset_uids : [str]
+        deleted_dataset_uids : list[str]
             The list of deleted dataset UIDs.
         """
         response = cls.httpx_client.delete(
