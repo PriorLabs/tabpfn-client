@@ -34,6 +34,7 @@ def test_client_config_includes_server_config(
             f"Field `{param}` is absent from {estimator.__name__}.__init__()."
         )
 
+
 @pytest.mark.parametrize(
     "predict_fn, predict_params_model",
     [
