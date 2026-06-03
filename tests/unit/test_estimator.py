@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import inspect
 import types
+from enum import Enum
 from typing import (
     Annotated,
     Callable,
+    Literal,
     Type,
     Union,
     get_args,
@@ -22,6 +24,7 @@ from tabpfn_client.sdks.gapi import (
     RegressorTabPFNConfig,
     ClassifierPredictParams,
     RegressorPredictParams,
+    UnknownEnum,
 )
 
 # ``types.UnionType`` (the ``X | Y`` form) only exists on Python 3.10+; fall back
@@ -36,8 +39,19 @@ def _normalize_type(tp: object) -> object:
     if get_origin(tp) is Annotated:
         tp = get_args(tp)[0]
     if get_origin(tp) is Union or isinstance(tp, _UNION_TYPE):
-        parts = tuple(_normalize_type(a) for a in get_args(tp) if a is not type(None))
+        args = [a for a in get_args(tp) if a is not type(None)]
+        # Special case: a two-element ``Leading | Fallback`` union where the
+        # trailing member is only a permissive fallback (used on the server with
+        # ``union_mode="left_to_right"``) is compared against the leading member
+        # alone. This covers ``Literal[...] | str`` and ``SomeEnum | UnknownEnum``.
+        if len(args) == 2 and args[1] in (str, UnknownEnum):
+            return _normalize_type(args[0])
+        parts = tuple(_normalize_type(a) for a in args)
         return parts[0] if len(parts) == 1 else frozenset(parts)
+    # A str-backed ``Enum`` compares equal to the ``Literal`` of its values, so
+    # the server's enum fields line up with the estimator's ``Literal[...]`` ones.
+    if isinstance(tp, type) and issubclass(tp, Enum):
+        return Literal[tuple(member.value for member in tp)]
     return tp
 
 

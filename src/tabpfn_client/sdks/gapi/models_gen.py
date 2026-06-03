@@ -106,7 +106,7 @@ class RegressorPredictParams(BaseModel):
         RegressorOutputType.MEAN
     )
     quantiles: list[float] | None = None
-    model_id: UUID | None = None
+    # model_id: UUID | None = None
 
 
 class RegressorTabPFNConfig(BaseModel):

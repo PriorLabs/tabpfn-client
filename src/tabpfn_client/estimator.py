@@ -81,9 +81,12 @@ class TabPFNModelSelection:
         return cls._AVAILABLE_MODELS
 
     @classmethod
-    def _validate_model_name(cls, model_name: str) -> None:
+    def _validate_model_name(cls, model_name: str | None) -> None:
+        # `None` means the caller didn't pick a model and defers to the server,
+        # so it is a valid "auto" alias rather than an unknown model name.
         if (
-            model_name not in _AUTO_MODEL_PATH_ALIASES
+            model_name is not None
+            and model_name not in _AUTO_MODEL_PATH_ALIASES
             and model_name not in cls._AVAILABLE_MODELS
         ):
             raise ValueError(
@@ -93,12 +96,12 @@ class TabPFNModelSelection:
 
     @classmethod
     def _model_name_to_path(
-        cls, task: Literal["classification", "regression"], model_name: str
+        cls, task: Literal["classification", "regression"], model_name: str | None
     ) -> str | None:
         cls._validate_model_name(model_name)
         model_name_task = "classifier" if task == "classification" else "regressor"
         # Let the server pick the default model when the caller defers to us.
-        if model_name in _AUTO_MODEL_PATH_ALIASES:
+        if model_name is None or model_name in _AUTO_MODEL_PATH_ALIASES:
             return None
         if V_3_IDENTIFIER in model_name:
             return f"tabpfn-{V_3_IDENTIFIER}-{model_name_task}-{model_name}.ckpt"
@@ -164,15 +167,18 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
     def __init__(
         self,
-        model_path: str = "auto",
-        n_estimators: int = 8,
-        softmax_temperature: float = 0.9,
-        balance_probabilities: bool = False,
-        average_before_softmax: bool = False,
-        ignore_pretraining_limits: bool = True,
-        inference_precision: Literal["autocast", "auto"] = "auto",
-        random_state: int | np.random.RandomState | np.random.Generator | None = 0,
+        # start: tabpfn_config
+        model_path: str | None = None,
+        categorical_features_indices: list[int] | None = None,
+        n_estimators: int | None = None,
+        softmax_temperature: float | None = None,
+        balance_probabilities: bool | None = None,
+        average_before_softmax: bool | None = None,
+        ignore_pretraining_limits: bool | None = None,
+        inference_precision: Literal["autocast", "auto"] | None = None,
+        random_state: int | None = None,
         inference_config: dict[str, Any] | None = None,
+        # end: tabpfn_config
         paper_version: bool = False,
         thinking_mode: bool = False,
         thinking_effort: ThinkingEffort | None = None,
@@ -270,6 +276,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             Aliases "acc", "nll", "pac_score" are also accepted.
         """
         self.model_path = model_path
+        self.categorical_features_indices = categorical_features_indices
         self.n_estimators = n_estimators
         self.softmax_temperature = softmax_temperature
         self.balance_probabilities = balance_probabilities
@@ -384,7 +391,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     def _predict(
         self,
         X,
-        output_type,
+        output_type: Literal["probas", "preds"],
     ) -> dict[str, np.ndarray]:
         kwargs = locals()
         check_is_fitted(self)
@@ -443,10 +450,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
     def _get_tabpfn_config(self) -> ClassifierTabPFNConfig:
         init_params = self.get_params()
+        # Drop params left at their `None` default so the config model applies its
+        # own field defaults (e.g. ignore_pretraining_limits) rather than failing
+        # validation on a `None` for a non-optional field.
         cfg = {
             k: v
             for k, v in init_params.items()
-            if k in ClassifierTabPFNConfig.model_fields
+            if k in ClassifierTabPFNConfig.model_fields and v is not None
         }
         cfg["model_path"] = self._model_name_to_path("classification", self.model_path)
         return ClassifierTabPFNConfig.model_validate(cfg)
@@ -508,14 +518,17 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
     def __init__(
         self,
-        model_path: str = "auto",
-        n_estimators: int = 8,
-        softmax_temperature: float = 0.9,
-        average_before_softmax: bool = False,
-        ignore_pretraining_limits: bool = False,
-        inference_precision: Literal["autocast", "auto"] = "auto",
-        random_state: int | np.random.RandomState | np.random.Generator | None = 0,
+        # start: tabpfn_config
+        model_path: str | None = None,
+        categorical_features_indices: list[int] | None = None,
+        n_estimators: int | None = None,
+        softmax_temperature: float | None = None,
+        average_before_softmax: bool | None = None,
+        ignore_pretraining_limits: bool | None = None,
+        inference_precision: Literal["autocast", "auto"] | None = None,
+        random_state: int | None = None,
         inference_config: dict[str, Any] | None = None,
+        # end: tabpfn_config
         paper_version: bool = False,
         thinking_mode: bool = False,
         thinking_effort: ThinkingEffort | None = None,
@@ -601,6 +614,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             Client specific options (e.g. timeout, headers).
         """
         self.model_path = model_path
+        self.categorical_features_indices = categorical_features_indices
         self.n_estimators = n_estimators
         self.softmax_temperature = softmax_temperature
         self.average_before_softmax = average_before_softmax
@@ -696,7 +710,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         X: pd.DataFrame | np.ndarray,
         output_type: Literal[
             "mean", "median", "mode", "quantiles", "full", "main"
-        ] = "mean",
+        ] | None = None,
         quantiles: list[float] | None = None,
     ) -> np.ndarray | list[np.ndarray] | dict[str, np.ndarray]:
         """Predict regression target for X.
@@ -794,10 +808,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
     def _get_tabpfn_config(self) -> RegressorTabPFNConfig:
         init_params = self.get_params()
+        # Drop params left at their `None` default so the config model applies its
+        # own field defaults (e.g. ignore_pretraining_limits) rather than failing
+        # validation on a `None` for a non-optional field.
         cfg = {
             k: v
             for k, v in init_params.items()
-            if k in RegressorTabPFNConfig.model_fields
+            if k in RegressorTabPFNConfig.model_fields and v is not None
         }
         cfg["model_path"] = self._model_name_to_path("regression", self.model_path)
         return RegressorTabPFNConfig.model_validate(cfg)
