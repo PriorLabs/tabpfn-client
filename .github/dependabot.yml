@@ -9,7 +9,6 @@ updates:
     groups:
       dev-dependencies:
         patterns:
-          - "pre-commit"
           - "ruff"
       test-dependencies:
         patterns:
