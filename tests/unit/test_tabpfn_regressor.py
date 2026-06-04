@@ -484,7 +484,9 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
         # Skip fitting
         regressor.fitted_ = True
-        regressor.last_fitted_train_set_id = cast(UUID, "dummy_uid")
+        regressor.last_fitted_train_set_id = UUID(
+            "00000000-0000-0000-0000-000000000000"
+        )
 
         test_X = np.random.randn(10, 5)
 
@@ -552,7 +554,9 @@ class TestTabPFNRegressorInference(unittest.TestCase):
     def test_predict_full_adds_criterion_with_optional_dependencies(self):
         regressor = TabPFNRegressor()
         regressor.fitted_ = True
-        regressor.last_fitted_train_set_id = cast(UUID, "dummy_uid")
+        regressor.last_fitted_train_set_id = UUID(
+            "00000000-0000-0000-0000-000000000000"
+        )
         regressor.last_train_X = np.random.randn(5, 2)
         regressor.last_train_y = np.random.randn(5)
 
@@ -599,7 +603,9 @@ class TestTabPFNRegressorInference(unittest.TestCase):
     def test_predict_full_missing_optional_dependencies_logs_warning(self):
         regressor = TabPFNRegressor()
         regressor.fitted_ = True
-        regressor.last_fitted_train_set_id = cast(UUID, "dummy_uid")
+        regressor.last_fitted_train_set_id = UUID(
+            "00000000-0000-0000-0000-000000000000"
+        )
         regressor.last_train_X = np.random.randn(5, 2)
         regressor.last_train_y = np.random.randn(5)
 

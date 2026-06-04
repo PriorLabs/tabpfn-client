@@ -43,10 +43,14 @@ from tabpfn_client.api_models import (
 
 try:
     from torch import Tensor  # type: ignore
-except ImportError:
-    Tensor = None
 
-TORCH_AVAILABLE = Tensor is not None
+    TORCH_AVAILABLE = True
+except ImportError:
+
+    class Tensor:  # type: ignore
+        pass
+
+    TORCH_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -979,7 +983,7 @@ def _clean_text_features(X):
     # Convert numpy array to pandas DataFrame if necessary
     # not necessary if numpy array of numbers
     data = X
-    if Tensor is not None and isinstance(data, Tensor):
+    if isinstance(data, Tensor):
         if data.requires_grad:
             data = data.detach()
         if data.is_cuda:
