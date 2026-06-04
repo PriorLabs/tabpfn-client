@@ -9,22 +9,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check_python_linting:
-    name: Ruff Linting & Formatting
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/ruff-action@0ce1b0bf8b818ef400413f810f8a11cdbda0034b  # v4.0.0
-        with:
-          src: "./"
-          version: 0.3.3
-          args: "format --force-exclude"
-      - uses: astral-sh/ruff-action@0ce1b0bf8b818ef400413f810f8a11cdbda0034b  # v4.0.0
-        with:
-          src: "./"
-          version: 0.3.3
-          args: "format --check --force-exclude"
-
   test_compatibility:
     name: Test Package Compatibility
     strategy:

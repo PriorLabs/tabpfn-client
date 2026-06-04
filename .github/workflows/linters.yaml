@@ -1,0 +1,25 @@
+name: linters
+
+on:
+  pull_request:
+
+concurrency:
+  group: linters-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  linters:
+    name: Trunk
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.9.9"
+          cache-python: true
+      - name: Install deps
+        run: uv sync --frozen --all-groups
+      - name: Trunk check
+        uses: trunk-io/trunk-action@v1
+        with:
+          arguments: --all --no-progress --show-existing
