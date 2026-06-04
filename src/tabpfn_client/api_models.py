@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Union
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -182,14 +182,18 @@ class FileUploadInfo(BaseModel):
     required_headers: dict[str, str]
 
 
-Prediction = list[Any] | list[list[Any]] | dict[str, list[Any] | list[list[Any]]]
+Prediction = Union[
+    list[Any], list[list[Any]], dict[str, Union[list[Any], list[list[Any]]]]
+]
 
 
-TaskConfig = Annotated[ClassifierConfig | RegressorConfig, Field(discriminator="task")]
+TaskConfig = Annotated[
+    Union[ClassifierConfig, RegressorConfig], Field(discriminator="task")
+]
 
 
 Metadata = Annotated[
-    ClassifierMetadata | RegressorMetadata, Field(discriminator="task")
+    Union[ClassifierMetadata, RegressorMetadata], Field(discriminator="task")
 ]
 
 
