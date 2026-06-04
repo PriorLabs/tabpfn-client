@@ -1789,7 +1789,7 @@ dev = [
 requires-dist = [
     { name = "backoff", specifier = ">=2.2.0,<=2.2.1" },
     { name = "boto3", marker = "extra == 'sagemaker'", specifier = ">=1.34" },
-    { name = "eval-type-backport", specifier = "==0.3.1" },
+    { name = "eval-type-backport", specifier = ">=0.3.1,<=0.4.0" },
     { name = "google-crc32c", specifier = ">=1.5.0,<=1.8.0" },
     { name = "httpx", specifier = ">=0.25.0,<=0.28.1" },
     { name = "omegaconf", specifier = ">=2.1.2,<=2.3.0" },
