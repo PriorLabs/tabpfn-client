@@ -1,5 +1,8 @@
 line-length = 88
 indent-width = 4
 target-version = "py310"
-extend-exclude = ["src/tabpfn_client/api_models.py"]
+extend-exclude = [
+    "src/tabpfn_client/api_models.py",
+    "examples/*"
+]
 force-exclude = true
