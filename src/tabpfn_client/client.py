@@ -19,7 +19,7 @@ import time
 import traceback
 import warnings
 from pydantic import BaseModel, ValidationError
-from typing import Any, Callable, cast, Literal
+from typing import Any, Callable, cast, Literal, Union
 
 import google_crc32c
 
@@ -365,7 +365,7 @@ class ServiceClient(Singleton):
             headers=client_options.headers,
         )
         prepare_resp = cast(
-            PrepareTrainSetUploadResponse | DuplicateTrainSetErrorResponse,
+            Union[PrepareTrainSetUploadResponse, DuplicateTrainSetErrorResponse],
             cls._validate_response(
                 res,
                 "prepare_train_set_upload",
@@ -527,7 +527,7 @@ class ServiceClient(Singleton):
             headers=client_options.headers,
         )
         prepare_resp = cast(
-            PrepareTestSetUploadResponse | DuplicateTestSetErrorResponse,
+            Union[PrepareTestSetUploadResponse, DuplicateTestSetErrorResponse],
             cls._validate_response(
                 res,
                 "prepare_test_set_upload",

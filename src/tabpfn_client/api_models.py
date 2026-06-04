@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Union
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -33,9 +33,7 @@ class UnknownEnum(str):
     def __get_pydantic_core_schema__(cls, _source, _handler):
         from pydantic_core import core_schema
 
-        return core_schema.no_info_after_validator_function(
-            cls, core_schema.str_schema()
-        )
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
 class PredictionTask(str, Enum):
@@ -75,9 +73,9 @@ class RegressorOutputType(str, Enum):
 
 
 class ClassifierPredictParams(BaseModel):
-    output_type: Annotated[
-        ClassifierOutputType | UnknownEnum, Field(union_mode="left_to_right")
-    ] = ClassifierOutputType.PROBAS
+    output_type: Annotated[ClassifierOutputType | UnknownEnum, Field(union_mode="left_to_right")] = (
+        ClassifierOutputType.PROBAS
+    )
 
 
 class ClassifierTabPFNConfig(BaseModel):
@@ -87,12 +85,10 @@ class ClassifierTabPFNConfig(BaseModel):
     average_before_softmax: bool | None = None
     random_state: int | None = None
     inference_config: dict[str, Any] | None = Field(
-        default=None,
-        description="Refer to tabpfn.inference_config.InferenceConfig for more details.",
+        default=None, description="Refer to tabpfn.inference_config.InferenceConfig for more details."
     )
     inference_precision: (
-        Annotated[Literal["autocast", "auto"] | str, Field(union_mode="left_to_right")]
-        | None
+        Annotated[Literal["autocast", "auto"] | str, Field(union_mode="left_to_right")] | None
     ) = None
     ignore_pretraining_limits: bool = True
     model_path: str | None = None
@@ -101,18 +97,14 @@ class ClassifierTabPFNConfig(BaseModel):
 
 class ClassifierConfig(BaseModel):
     task: Literal["classification"] = "classification"
-    tabpfn_config: ClassifierTabPFNConfig = Field(
-        default_factory=ClassifierTabPFNConfig
-    )
-    predict_params: ClassifierPredictParams = Field(
-        default_factory=ClassifierPredictParams
-    )
+    tabpfn_config: ClassifierTabPFNConfig = Field(default_factory=ClassifierTabPFNConfig)
+    predict_params: ClassifierPredictParams = Field(default_factory=ClassifierPredictParams)
 
 
 class RegressorPredictParams(BaseModel):
-    output_type: Annotated[
-        RegressorOutputType | UnknownEnum, Field(union_mode="left_to_right")
-    ] = RegressorOutputType.MEAN
+    output_type: Annotated[RegressorOutputType | UnknownEnum, Field(union_mode="left_to_right")] = (
+        RegressorOutputType.MEAN
+    )
     quantiles: list[float] | None = None
 
 
@@ -123,12 +115,10 @@ class RegressorTabPFNConfig(BaseModel):
     average_before_softmax: bool | None = None
     random_state: int | None = None
     inference_config: dict[str, Any] | None = Field(
-        default=None,
-        description="Refer to tabpfn.inference_config.InferenceConfig for more details.",
+        default=None, description="Refer to tabpfn.inference_config.InferenceConfig for more details."
     )
     inference_precision: (
-        Annotated[Literal["autocast", "auto"] | str, Field(union_mode="left_to_right")]
-        | None
+        Annotated[Literal["autocast", "auto"] | str, Field(union_mode="left_to_right")] | None
     ) = None
     ignore_pretraining_limits: bool = True
     model_path: str | None = None
@@ -137,9 +127,7 @@ class RegressorTabPFNConfig(BaseModel):
 class RegressorConfig(BaseModel):
     task: Literal["regression"] = "regression"
     tabpfn_config: RegressorTabPFNConfig = Field(default_factory=RegressorTabPFNConfig)
-    predict_params: RegressorPredictParams = Field(
-        default_factory=RegressorPredictParams
-    )
+    predict_params: RegressorPredictParams = Field(default_factory=RegressorPredictParams)
 
 
 class ClassifierMetadata(BaseModel):
@@ -159,12 +147,9 @@ class RegressorMetadata(BaseModel):
 
 
 class FileInfo(BaseModel):
-    format: Annotated[
-        Literal["csv", "parquet"] | str, Field(union_mode="left_to_right")
-    ]
+    format: Annotated[Literal["csv", "parquet"] | str, Field(union_mode="left_to_right")]
     hash: str | None = Field(
-        default=None,
-        description="The crc32c hash of the file, used to deduplicate the file.",
+        default=None, description="The crc32c hash of the file, used to deduplicate the file."
     )
     size_bytes: int | None = Field(
         default=None,
@@ -182,14 +167,22 @@ class FileUploadInfo(BaseModel):
     required_headers: dict[str, str]
 
 
-Prediction = list[Any] | list[list[Any]] | dict[str, list[Any] | list[list[Any]]]
+# NOTE: these module-level type aliases are evaluated at runtime (unlike the
+# annotations inside classes, which `from __future__ import annotations` defers),
+# so they must use `typing.Union` rather than the `X | Y` operator, which raises
+# `TypeError` between generic aliases/classes on Python < 3.10.
+Prediction = Union[
+    list[Any], list[list[Any]], dict[str, Union[list[Any], list[list[Any]]]]
+]
 
 
-TaskConfig = Annotated[ClassifierConfig | RegressorConfig, Field(discriminator="task")]
+TaskConfig = Annotated[
+    Union[ClassifierConfig, RegressorConfig], Field(discriminator="task")
+]
 
 
 Metadata = Annotated[
-    ClassifierMetadata | RegressorMetadata, Field(discriminator="task")
+    Union[ClassifierMetadata, RegressorMetadata], Field(discriminator="task")
 ]
 
 
@@ -200,10 +193,7 @@ class TransformTrainSetRequest(BaseModel):
     fitted_train_set_prefix: str
     task: Annotated[PredictionTask | UnknownEnum, Field(union_mode="left_to_right")]
     tabpfn_systems: list[
-        Annotated[
-            Literal["preprocessing", "text", "thinking"] | str,
-            Field(union_mode="left_to_right"),
-        ]
+        Annotated[Literal["preprocessing", "text", "thinking"] | str, Field(union_mode="left_to_right")]
     ]
     task_config: dict[str, Any] | None = None
     ag_time_limit_s: float = 1200.0
@@ -215,15 +205,11 @@ class FitRequest(BaseModel):
     train_set_upload_id: UUID
     task: Annotated[PredictionTask | UnknownEnum, Field(union_mode="left_to_right")]
     tabpfn_systems: list[
-        Annotated[
-            Literal["preprocessing", "text", "thinking"] | str,
-            Field(union_mode="left_to_right"),
-        ]
+        Annotated[Literal["preprocessing", "text", "thinking"] | str, Field(union_mode="left_to_right")]
     ] = ["preprocessing", "text"]
     tabpfn_config: dict[str, Any] | None = None
     thinking_effort: (
-        Annotated[Literal["medium", "high"] | str, Field(union_mode="left_to_right")]
-        | None
+        Annotated[Literal["medium", "high"] | str, Field(union_mode="left_to_right")] | None
     ) = None
     thinking_timeout_s: float | None = None
     thinking_effort_metric: str | None = None
@@ -238,13 +224,10 @@ class FitResponse(BaseModel):
 
 
 class GetModelLimitsResponse(BaseModel):
-    default_model_version: Annotated[
-        ModelVersion | UnknownEnum, Field(union_mode="left_to_right")
-    ]
+    default_model_version: Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")]
     max_model_limit: ModelLimit
     model_limits: dict[
-        Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")],
-        ModelLimit,
+        Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")], ModelLimit
     ]
     dataset_max_size_bytes: int
 
@@ -257,15 +240,10 @@ class TransformTestSetRequest(BaseModel):
     x_train_cols: int
     output_type: (
         Annotated[ClassifierOutputType | UnknownEnum, Field(union_mode="left_to_right")]
-        | Annotated[
-            RegressorOutputType | UnknownEnum, Field(union_mode="left_to_right")
-        ]
+        | Annotated[RegressorOutputType | UnknownEnum, Field(union_mode="left_to_right")]
     )
     tabpfn_systems: list[
-        Annotated[
-            Literal["preprocessing", "text", "thinking"] | str,
-            Field(union_mode="left_to_right"),
-        ]
+        Annotated[Literal["preprocessing", "text", "thinking"] | str, Field(union_mode="left_to_right")]
     ]
 
 
