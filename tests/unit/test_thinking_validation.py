@@ -4,6 +4,8 @@ Pins the rule that thinking is enabled when either `thinking_mode=True` OR
 `thinking_effort` is set, so callers can pass either or both without surprise.
 """
 
+from typing import Any
+
 import pytest
 
 from tabpfn_client.estimator import (
@@ -13,7 +15,7 @@ from tabpfn_client.estimator import (
 
 
 def _v(**overrides):
-    args = dict(
+    args: dict[str, Any] = dict(
         thinking_mode=False,
         thinking_effort=None,
         thinking_timeout_s=None,

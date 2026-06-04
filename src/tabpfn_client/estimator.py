@@ -8,7 +8,7 @@ import sys
 import time
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Literal, cast
+from typing import Any, Callable, Literal, cast, overload
 from typing_extensions import Self
 from uuid import UUID
 
@@ -392,7 +392,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self,
         X,
         output_type: Literal["probas", "preds"],
-    ) -> dict[str, np.ndarray]:
+    ) -> np.ndarray:
         kwargs = locals()
         check_is_fitted(self)
 
@@ -966,6 +966,10 @@ def validate_test_set(
             )
 
 
+@overload
+def _clean_text_features(X: pd.DataFrame) -> pd.DataFrame: ...
+@overload
+def _clean_text_features(X: np.ndarray) -> np.ndarray: ...
 def _clean_text_features(X):
     """
     Clean text features in the input data. This is used to avoid

@@ -1,6 +1,8 @@
 import time
 import unittest
+from typing import Any, cast
 from unittest.mock import patch
+from uuid import UUID
 import sys
 import types
 import builtins
@@ -33,7 +35,7 @@ def _model_limits_payload(
     max_classes=10,
     max_rows=None,
     test_max_cells=None,
-):
+) -> dict[str, Any]:
     max_rows = max_cells if max_rows is None else max_rows
     test_max_cells = max_cells if test_max_cells is None else test_max_cells
     model_limit = {
@@ -62,8 +64,9 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         ServiceClient.reset_authorization()
         ServiceClient._model_limits = None
         X, y = load_diabetes(return_X_y=True)
-        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
-            X, y, test_size=0.33
+        self.X_train, self.X_test, self.y_train, self.y_test = cast(
+            "tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]",
+            train_test_split(X, y, test_size=0.33),
         )
 
     def tearDown(self):
@@ -481,7 +484,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
         # Skip fitting
         regressor.fitted_ = True
-        regressor.last_fitted_train_set_id = "dummy_uid"
+        regressor.last_fitted_train_set_id = cast(UUID, "dummy_uid")
 
         test_X = np.random.randn(10, 5)
 
@@ -549,7 +552,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
     def test_predict_full_adds_criterion_with_optional_dependencies(self):
         regressor = TabPFNRegressor()
         regressor.fitted_ = True
-        regressor.last_fitted_train_set_id = "dummy_uid"
+        regressor.last_fitted_train_set_id = cast(UUID, "dummy_uid")
         regressor.last_train_X = np.random.randn(5, 2)
         regressor.last_train_y = np.random.randn(5)
 
@@ -562,11 +565,15 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
         module_tabpfn = types.ModuleType("tabpfn")
         module_regressor = types.ModuleType("tabpfn.regressor")
-        module_regressor.FullSupportBarDistribution = DummyFullSupportBarDistribution
-        module_tabpfn.regressor = module_regressor
+        setattr(
+            module_regressor,
+            "FullSupportBarDistribution",
+            DummyFullSupportBarDistribution,
+        )
+        setattr(module_tabpfn, "regressor", module_regressor)
 
         module_torch = types.ModuleType("torch")
-        module_torch.tensor = lambda borders: borders
+        setattr(module_torch, "tensor", lambda borders: borders)
 
         with patch.dict(
             sys.modules,
@@ -578,9 +585,12 @@ class TestTabPFNRegressorInference(unittest.TestCase):
         ):
             with patch.object(InferenceClient, "predict") as mock_predict:
                 mock_predict.return_value = PredictionResult(
-                    y_pred=dummy_output.copy(), metadata={}
+                    y_pred=cast(Any, dummy_output.copy()), metadata={}
                 )
-                output = regressor.predict(test_X, output_type="full")
+                output = cast(
+                    "dict[str, Any]",
+                    regressor.predict(test_X, output_type="full"),
+                )
 
         self.assertIn("criterion", output)
         self.assertIsInstance(output["criterion"], DummyFullSupportBarDistribution)
@@ -589,7 +599,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
     def test_predict_full_missing_optional_dependencies_logs_warning(self):
         regressor = TabPFNRegressor()
         regressor.fitted_ = True
-        regressor.last_fitted_train_set_id = "dummy_uid"
+        regressor.last_fitted_train_set_id = cast(UUID, "dummy_uid")
         regressor.last_train_X = np.random.randn(5, 2)
         regressor.last_train_y = np.random.randn(5)
 
@@ -598,7 +608,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
         with patch.object(InferenceClient, "predict") as mock_predict:
             mock_predict.return_value = PredictionResult(
-                y_pred=dummy_output.copy(), metadata={}
+                y_pred=cast(Any, dummy_output.copy()), metadata={}
             )
 
             original_import = builtins.__import__
@@ -741,7 +751,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
             # Verify DataFrame wasn't modified
             pd.testing.assert_frame_equal(
-                df, df_copy, "Input DataFrame was modified during prediction"
+                df, df_copy, obj="Input DataFrame was modified during prediction"
             )
 
             # Verify predictions are returned as expected
@@ -750,7 +760,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             # Test that column order doesn't matter
             shuffled_columns = list(df.columns)
             np.random.shuffle(shuffled_columns)
-            df_shuffled = df[shuffled_columns]
+            df_shuffled = cast(pd.DataFrame, df[shuffled_columns])
             df_shuffled_copy = df_shuffled.copy()
 
             # Test predict with shuffled columns
@@ -763,7 +773,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             pd.testing.assert_frame_equal(
                 df_shuffled,
                 df_shuffled_copy,
-                "Shuffled DataFrame was modified during prediction",
+                obj="Shuffled DataFrame was modified during prediction",
             )
 
             # Verify predictions match regardless of column order

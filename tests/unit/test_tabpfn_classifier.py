@@ -1,6 +1,8 @@
 import time
 import unittest
+from typing import Any, cast
 from unittest.mock import patch
+from uuid import UUID
 import shutil
 import json
 
@@ -32,7 +34,7 @@ def _model_limits_payload(
     max_classes=10,
     max_rows=None,
     test_max_cells=None,
-):
+) -> dict[str, Any]:
     max_rows = max_cells if max_rows is None else max_rows
     test_max_cells = max_cells if test_max_cells is None else test_max_cells
     model_limit = {
@@ -61,8 +63,9 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         ServiceClient.reset_authorization()
         ServiceClient._model_limits = None
         X, y = load_breast_cancer(return_X_y=True)
-        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
-            X, y, test_size=0.33
+        self.X_train, self.X_test, self.y_train, self.y_test = cast(
+            "tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]",
+            train_test_split(X, y, test_size=0.33),
         )
 
     def tearDown(self):
@@ -487,7 +490,7 @@ class TestTabPFNClassifierInference(unittest.TestCase):
 
         # Skip fitting
         classifier.fitted_ = True
-        classifier.last_fitted_train_set_id = "dummy_uid"
+        classifier.last_fitted_train_set_id = cast(UUID, "dummy_uid")
 
         test_X = np.random.randn(10, 5)
 
@@ -770,7 +773,7 @@ class TestTabPFNClassifierInference(unittest.TestCase):
 
             # Verify DataFrame wasn't modified
             pd.testing.assert_frame_equal(
-                df, df_copy, "Input DataFrame was modified during prediction"
+                df, df_copy, obj="Input DataFrame was modified during prediction"
             )
 
             # Verify predictions are returned as expected
@@ -786,7 +789,7 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             pd.testing.assert_frame_equal(
                 df,
                 df_copy,
-                "Input DataFrame was modified during probability prediction",
+                obj="Input DataFrame was modified during probability prediction",
             )
 
             # Verify probability predictions are returned as expected
@@ -811,7 +814,7 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             pd.testing.assert_frame_equal(
                 df_shuffled,
                 df_shuffled_copy,
-                "Shuffled DataFrame was modified during prediction",
+                obj="Shuffled DataFrame was modified during prediction",
             )
 
             # Verify predictions match regardless of column order
