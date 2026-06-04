@@ -127,7 +127,10 @@ def get_access_token() -> str:
     :return: The access token string used for API requests.
     """
     init()
-    return ServiceClient.get_access_token()
+    access_token = ServiceClient.get_access_token()
+    if access_token is None:
+        raise CONNECTION_ERROR
+    return access_token
 
 
 def set_access_token(access_token: str):

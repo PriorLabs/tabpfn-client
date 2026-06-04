@@ -42,11 +42,11 @@ from tabpfn_client.api_models import (
 )
 
 try:
-    from torch import Tensor
-
-    TORCH_AVAILABLE = True
+    from torch import Tensor  # type: ignore
 except ImportError:
-    TORCH_AVAILABLE = False
+    Tensor = None
+
+TORCH_AVAILABLE = Tensor is not None
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +120,7 @@ class TabPFNModelSelection:
 
         Any kwargs will override the default settings.
         """
-        options = {
+        options: dict[str, Any] = {
             "n_estimators": 8,
             "softmax_temperature": 0.9,
         }
@@ -322,7 +322,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             self.thinking_metric,
             self.model_path,
         )
-        X = _clean_text_features(X)
+        X_clean = _clean_text_features(X)
         self._validate_targets_and_classes(y)
 
         if Config.use_server:
@@ -342,7 +342,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
             def fit_task() -> UUID:
                 return InferenceClient.fit(
-                    X,
+                    X_clean,
                     y,
                     task_config=task_config,
                     paper_version=self.paper_version,
@@ -356,7 +356,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 )
 
             self.last_fitted_train_set_id = cast(UUID, run_task(fit_task, "Fitting"))
-            self.last_train_X = X
+            self.last_train_X = X_clean
             self.last_train_y = y
             self.fitted_ = True
             self.fit_count += 1
@@ -405,9 +405,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         )
 
         validate_test_set(X, output_type, tabpfn_config.model_path)
-        X = _clean_text_features(X)
+        X_clean = _clean_text_features(X)
 
-        if "sentry-trace" not in self.client_options.headers:
+        if (
+            "sentry-trace" not in self.client_options.headers
+            and self.last_trace_id is not None
+        ):
             self.client_options.headers["sentry-trace"] = self.last_trace_id
 
         def predict_task() -> PredictionResult:
@@ -420,8 +423,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                     ) from last_exc
                 try:
                     return InferenceClient.predict(
-                        X,
-                        fitted_train_set_id=self.last_fitted_train_set_id,
+                        X_clean,
+                        fitted_train_set_id=cast(UUID, self.last_fitted_train_set_id),
                         task_config=task_config,
                         client_options=self.client_options,
                     )
@@ -467,7 +470,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         }
         return ClassifierPredictParams.model_validate(params)
 
-    def _validate_targets_and_classes(self, y) -> np.ndarray:
+    def _validate_targets_and_classes(self, y) -> None:
         y_ = column_or_1d(y, warn=True)
         if sum(pd.isnull(y_)) > 0:
             raise ValueError("Input y contains NaN.")
@@ -660,7 +663,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             self.model_path,
         )
         self._validate_targets(y)
-        X = _clean_text_features(X)
+        X_clean = _clean_text_features(X)
 
         if Config.use_server:
             # Create a new sentry trace at every fit, provided that:
@@ -680,7 +683,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
             def fit_task() -> UUID:
                 return InferenceClient.fit(
-                    X,
+                    X_clean,
                     y,
                     task_config=task_config,
                     paper_version=self.paper_version,
@@ -694,7 +697,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                 )
 
             self.last_fitted_train_set_id = cast(UUID, run_task(fit_task, "Fitting"))
-            self.last_train_X = X
+            self.last_train_X = X_clean
             self.last_train_y = y
             self.fitted_ = True
             self.fit_count += 1
@@ -747,9 +750,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         )
 
         validate_test_set(X, output_type, tabpfn_config.model_path)
-        X = _clean_text_features(X)
+        X_clean = _clean_text_features(X)
 
-        if "sentry-trace" not in self.client_options.headers:
+        if (
+            "sentry-trace" not in self.client_options.headers
+            and self.last_trace_id is not None
+        ):
             self.client_options.headers["sentry-trace"] = self.last_trace_id
 
         def predict_task() -> PredictionResult:
@@ -762,8 +768,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     ) from last_exc
                 try:
                     return InferenceClient.predict(
-                        X,
-                        fitted_train_set_id=self.last_fitted_train_set_id,
+                        X_clean,
+                        fitted_train_set_id=cast(UUID, self.last_fitted_train_set_id),
                         task_config=task_config,
                         client_options=self.client_options,
                     )
@@ -791,8 +797,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         output = result.y_pred
         if output_type == "full":
             try:
-                from tabpfn.regressor import FullSupportBarDistribution
-                import torch
+                from tabpfn.regressor import FullSupportBarDistribution  # type: ignore
+                import torch  # type: ignore
 
                 output["criterion"] = FullSupportBarDistribution(
                     borders=torch.tensor(output["borders"])
@@ -829,16 +835,17 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         }
         return RegressorPredictParams.model_validate(params)
 
-    def _validate_targets(self, y) -> np.ndarray:
+    def _validate_targets(self, y) -> None:
         y_ = column_or_1d(y, warn=True)
         if sum(pd.isnull(y_)) > 0:
             raise ValueError("Input y contains NaN.")
 
 
-def _is_thinking_supported_model_path(model_path: str) -> bool:
+def _is_thinking_supported_model_path(model_path: str | None) -> bool:
     """Thinking is server-side supported only for v3 models (or the auto sentinel,
     which lets the server pick — currently a v3 model)."""
-    if model_path in _AUTO_MODEL_PATH_ALIASES:
+    # `None` defers model selection to the server (currently a v3 model).
+    if model_path is None or model_path in _AUTO_MODEL_PATH_ALIASES:
         return True
     return V_3_IDENTIFIER in model_path
 
@@ -848,7 +855,7 @@ def validate_thinking_mode(
     thinking_effort: ThinkingEffort | None,
     thinking_timeout_s: float | None,
     thinking_metric: str | None,
-    model_path: str,
+    model_path: str | None,
 ) -> None:
     if (
         thinking_effort is not None
@@ -886,7 +893,9 @@ def validate_thinking_mode(
         )
 
 
-def validate_train_set(X: np.ndarray, y: np.ndarray | None = None):
+def validate_train_set(
+    X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray | None = None
+):
     """Check the integrity of the training data."""
 
     # check if the number of samples is consistent (ValueError)
@@ -917,7 +926,11 @@ def validate_train_set(X: np.ndarray, y: np.ndarray | None = None):
         )
 
 
-def validate_test_set(X: np.ndarray, output_type: str, model_path: str | None = None):
+def validate_test_set(
+    X: pd.DataFrame | np.ndarray,
+    output_type: str | None,
+    model_path: str | None = None,
+):
     """Check the integrity of the test data."""
 
     limits = ServiceClient.get_model_limits()
@@ -961,31 +974,32 @@ def _clean_text_features(X):
     """
     # Convert numpy array to pandas DataFrame if necessary
     # not necessary if numpy array of numbers
-    if TORCH_AVAILABLE and isinstance(X, Tensor):
-        if X.requires_grad:
-            X = X.detach()
-        if X.is_cuda:
-            X = X.cpu()
+    data = X
+    if Tensor is not None and isinstance(data, Tensor):
+        if data.requires_grad:
+            data = data.detach()
+        if data.is_cuda:
+            data = data.cpu()
 
-        X = X.numpy()
+        data = data.numpy()
 
-    if isinstance(X, np.ndarray):
-        if np.issubdtype(X.dtype, np.number):
-            return X
+    if isinstance(data, np.ndarray):
+        if np.issubdtype(data.dtype, np.number):
+            return data
         else:
-            X_ = pd.DataFrame(X.copy())
+            df = pd.DataFrame(data.copy())
     else:
-        X_ = X.copy()
+        df = data.copy()
 
     # limit to 2500 chars and remove commas for text features
-    for col in X_.columns:
+    for col in df.columns:
         # check if we can't convert to float
         try:
-            pd.to_numeric(X_[col])
+            pd.to_numeric(df[col])
         except ValueError:
-            if X_[col].dtype == object:  # only process string/object columns
-                X_[col] = (
-                    X_[col]
+            if df[col].dtype == object:  # only process string/object columns
+                df[col] = (
+                    df[col]
                     .str.replace(",", "")
                     .str.replace(r"\s+", " ", regex=True)
                     .str.strip()
@@ -993,9 +1007,9 @@ def _clean_text_features(X):
                 )
 
     # Convert back to numpy if input was numpy (or tensor that was converted to numpy)
-    if isinstance(X, np.ndarray):
-        return X_.to_numpy()
-    return X_
+    if isinstance(data, np.ndarray):
+        return df.to_numpy()
+    return df
 
 
 def run_task(task: Callable, message: str, with_spinner: bool = True) -> Any:

@@ -41,7 +41,7 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
 
     CACHED_TOKEN_FILE = constants.CACHE_DIR / "config"
 
-    def __new__(self):
+    def __new__(cls):
         raise TypeError(
             "This class should not be instantiated. Use classmethods instead."
         )
@@ -79,7 +79,7 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
         password_confirm: str,
         validation_link: str,
         additional_info: dict,
-    ) -> tuple[bool, str]:
+    ) -> tuple[bool, str, str | None]:
         is_created, message, access_token = ServiceClient.register(
             email, password, password_confirm, validation_link, additional_info
         )
@@ -88,17 +88,19 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
         return is_created, message, access_token
 
     @classmethod
-    def set_token_by_login(cls, email: str, password: str) -> tuple[bool, str]:
+    def set_token_by_login(
+        cls, email: str, password: str
+    ) -> tuple[str | None, str, int]:
         access_token, message, status_code, _ = ServiceClient.login(email, password)
 
         if access_token is None:
-            return False, message, status_code
+            return None, message, status_code
 
         cls.set_token(access_token)
         return access_token, message, status_code
 
     @classmethod
-    def try_reuse_existing_token(cls) -> tuple[bool, str or None]:
+    def try_reuse_existing_token(cls) -> tuple[bool, str | None]:
         if ServiceClient.get_access_token() is None:
             if constants.TABPFN_TOKEN:
                 access_token = constants.TABPFN_TOKEN
@@ -117,6 +119,8 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
             return False, access_token
 
         logger.debug(f"Reusing existing access token? {is_valid}")
+        if access_token is None:
+            return False, None
         cls.set_token(access_token)
 
         return True, access_token
@@ -165,8 +169,8 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
         # Allow disabling browser login via environment variables
         # - TABPFN_NO_BROWSER=1/true/yes/on
         # - TABPFN_CLIENT_NO_BROWSER=1/true/yes/on (backward-compatible alias)
-        def _truthy(val: str) -> bool:
-            return bool(val) and val.strip().lower() in {"1", "true", "yes", "on"}
+        def _truthy(val: str | None) -> bool:
+            return val is not None and val.strip().lower() in {"1", "true", "yes", "on"}
 
         if _truthy(os.environ.get("TABPFN_NO_BROWSER")) or _truthy(
             os.environ.get("TABPFN_CLIENT_NO_BROWSER")
@@ -187,7 +191,7 @@ class UserDataClient(ServiceClientWrapper, Singleton):
     """
 
     @classmethod
-    def get_data_summary(cls) -> {}:
+    def get_data_summary(cls) -> dict:
         try:
             summary = ServiceClient.get_data_summary()
         except RuntimeError as e:
@@ -259,7 +263,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
     - prediction
     """
 
-    def __new__(self):
+    def __new__(cls):
         raise TypeError(
             "This class should not be instantiated. Use classmethods instead."
         )

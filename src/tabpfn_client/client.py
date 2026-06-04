@@ -19,7 +19,7 @@ import time
 import traceback
 import warnings
 from pydantic import BaseModel, ValidationError
-from typing import Any, Callable, cast, Literal, Union
+from typing import Any, Callable, cast, Literal, Mapping, Union
 
 import google_crc32c
 
@@ -27,7 +27,7 @@ import pandas as pd
 
 import backoff
 import httpx
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 from tabpfn_client.browser_auth import BrowserAuthHandler
 from tabpfn_client.constants import (
     dedup_datasets_enabled,
@@ -67,7 +67,7 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
 
 
-def _on_backoff(details: dict[str, Any]):
+def _on_backoff(details: Mapping[str, Any]):
     """Callback function for retry attempts."""
     function_name = details["target"].__name__
     message = (
@@ -77,7 +77,7 @@ def _on_backoff(details: dict[str, Any]):
     logger.warning(message)
 
 
-def _on_giveup(details: dict[str, Any]):
+def _on_giveup(details: Mapping[str, Any]):
     """Callback function when retries are exhausted."""
     function_name: str = details["target"].__name__.title()
     message = (
@@ -113,13 +113,18 @@ class RetryableServerError(Exception):
 
 
 class SensitiveDataFilter(logging.Filter):
-    def filter(self, record):
-        if "password" in record.getMessage():
-            original_query = str(record.args[1])
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if (
+            "password" in record.getMessage()
+            and isinstance(args, tuple)
+            and len(args) >= 2
+        ):
+            original_query = str(args[1])
             filtered_query = re.sub(
                 r"(password|password_confirm)=[^&]*", r"\1=[FILTERED]", original_query
             )
-            record.args = (record.args[0], filtered_query, *record.args[2:])
+            record.args = (args[0], filtered_query, *args[2:])
         return True
 
 
@@ -129,7 +134,7 @@ httpx_logger.setLevel(logging.WARNING)
 httpx_logger.addFilter(SensitiveDataFilter())
 
 SERVER_CONFIG_FILE = Path(__file__).parent.resolve() / "server_config.yaml"
-SERVER_CONFIG = OmegaConf.load(SERVER_CONFIG_FILE)
+SERVER_CONFIG = cast(DictConfig, OmegaConf.load(SERVER_CONFIG_FILE))
 
 
 def get_client_version() -> str:
@@ -224,7 +229,7 @@ class ServiceClient(Singleton):
         headers={"Prior-Client-Version": get_client_version()},
         follow_redirects=True,
     )
-    _access_token = None
+    _access_token: str | None = None
     _model_limits: GetModelLimitsResponse | None = None
     _model_limits_ts: float = 0.0
 
@@ -327,7 +332,7 @@ class ServiceClient(Singleton):
         client_options = client_options or ClientOptions()
 
         df_X = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
-        df_y = y if isinstance(y, pd.DataFrame) else pd.DataFrame(y)
+        df_y = cast(pd.DataFrame, y if isinstance(y, pd.DataFrame) else pd.DataFrame(y))
 
         limits = cls.get_model_limits()
         if limits is not None:
@@ -574,13 +579,8 @@ class ServiceClient(Singleton):
         if isinstance(prediction, dict):
             result = {}
             for k, v in prediction.items():
-                if isinstance(v, list):
-                    dtype = float if _contains_none(v) else None
-                    result[k] = np.array(v, dtype=dtype)
-                else:
-                    # The value should always be a list or list-of-lists,
-                    # leaving this here as an extra precaution and future proofing.
-                    result[k] = v
+                dtype = float if _contains_none(v) else None
+                result[k] = np.array(v, dtype=dtype)
         else:
             result = np.array(prediction)
 
@@ -729,7 +729,7 @@ class ServiceClient(Singleton):
         method_name: str,
         only_version_check: bool = False,
         response_models: dict[int, type[BaseModel]] | None = None,
-        handlers: dict[int, Callable[[BaseModel], Any]] | None = None,
+        handlers: dict[int, Callable[[Any], Any]] | None = None,
     ) -> BaseModel | None:
         ServiceClient._warn_if_deprecated(response)
 
@@ -1078,7 +1078,7 @@ class ServiceClient(Singleton):
         return access_token, message, response.status_code, session_id
 
     @classmethod
-    def get_password_policy(cls) -> dict:
+    def get_password_policy(cls) -> list[str]:
         """
         Get the password policy from the server.
 

@@ -20,18 +20,6 @@ from rich.progress import (
 )
 
 
-def _collect_suppressed_modules() -> list[object]:
-    suppressed: list[object] = []
-    for name in ("typer", "click", "rich"):
-        try:
-            module = __import__(name)
-        except ModuleNotFoundError:
-            continue
-        else:
-            suppressed.append(module)
-    return suppressed
-
-
 def _should_use_color() -> bool:
     """Determine whether color output should be used."""
 
@@ -63,7 +51,7 @@ def setup_logging(verbosity: int = 0) -> None:
     )
 
 
-def header(title: str, subtitle: str = None) -> None:
+def header(title: str, subtitle: str | None = None) -> None:
     """Render a section header."""
 
     console.print(

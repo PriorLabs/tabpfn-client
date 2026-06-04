@@ -23,11 +23,10 @@ from sklearn.utils.validation import check_is_fitted
 
 try:
     import boto3  # type: ignore[import-untyped]
-
-    _BOTO3_AVAILABLE = True
 except ImportError:  # pragma: no cover
     boto3 = None  # type: ignore[assignment]
-    _BOTO3_AVAILABLE = False
+
+_BOTO3_AVAILABLE = boto3 is not None
 
 
 ThinkingEffort = Literal["medium", "high"]
@@ -155,6 +154,7 @@ class _SagemakerBase(BaseEstimator):
         if client is not None:
             return client
         _require_boto3()
+        assert boto3 is not None
         if self.boto_session is not None:
             client = self.boto_session.client("sagemaker-runtime")
         elif self.region_name is not None:
@@ -169,6 +169,7 @@ class _SagemakerBase(BaseEstimator):
         if client is not None:
             return client
         _require_boto3()
+        assert boto3 is not None
         if self.boto_session is not None:
             client = self.boto_session.client("s3")
         elif self.region_name is not None:
