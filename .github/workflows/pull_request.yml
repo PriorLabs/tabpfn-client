@@ -1,8 +1,7 @@
 name: In pull request
+
 on:
   pull_request:
-    branches:
-      - main
 
 concurrency:
   group: pr-${{ github.ref }}
