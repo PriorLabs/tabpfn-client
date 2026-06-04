@@ -579,8 +579,13 @@ class ServiceClient(Singleton):
         if isinstance(prediction, dict):
             result = {}
             for k, v in prediction.items():
-                dtype = float if _contains_none(v) else None
-                result[k] = np.array(v, dtype=dtype)
+                if isinstance(v, list):  # type: ignore
+                    dtype = float if _contains_none(v) else None
+                    result[k] = np.array(v, dtype=dtype)
+                else:
+                    # The value should always be a list or list-of-lists,
+                    # leaving this here as an extra precaution and future proofing.
+                    result[k] = v
         else:
             result = np.array(prediction)
 
