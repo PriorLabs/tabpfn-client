@@ -711,6 +711,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         output_type: Literal["mean", "median", "mode", "quantiles", "full", "main"]
         | None = None,
         quantiles: list[float] | None = None,
+        model_id: UUID | None = None,
     ) -> np.ndarray | list[np.ndarray] | dict[str, np.ndarray]:
         """Predict regression target for X.
 
@@ -729,6 +730,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         quantiles : list[float] or None, default=None
             Quantiles to compute when output_type="quantiles".
             Default is [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+        model_id : UUID or None, default=None
+            Identifier of a specific model to use for prediction. When None,
+            the server selects the model.
 
         Returns
         -------
@@ -819,8 +823,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         return RegressorTabPFNConfig.model_validate(cfg)
 
     def _get_predict_params(self, kwargs: dict[str, Any]) -> RegressorPredictParams:
+        # Drop params left at their `None` default so the model applies its own
+        # field defaults (e.g. output_type) rather than failing validation on a
+        # `None` for a non-optional field.
         params = {
-            k: v for k, v in kwargs.items() if k in RegressorPredictParams.model_fields
+            k: v
+            for k, v in kwargs.items()
+            if k in RegressorPredictParams.model_fields and v is not None
         }
         return RegressorPredictParams.model_validate(params)
 
