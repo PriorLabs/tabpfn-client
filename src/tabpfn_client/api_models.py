@@ -114,7 +114,6 @@ class RegressorPredictParams(BaseModel):
         RegressorOutputType | UnknownEnum, Field(union_mode="left_to_right")
     ] = RegressorOutputType.MEAN
     quantiles: list[float] | None = None
-    model_id: UUID | None = None
 
 
 class RegressorTabPFNConfig(BaseModel):
