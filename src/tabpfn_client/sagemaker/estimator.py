@@ -124,7 +124,9 @@ class _SagemakerBase(BaseEstimator):
             "inference_precision": self.inference_precision,
             "random_state": self.random_state,
             "inference_config": self.inference_config,
-            "fit_mode": "fit_with_cache" if self._effective_use_kv_cache else "fit_preprocessors",
+            "fit_mode": "fit_with_cache"
+            if self._effective_use_kv_cache
+            else "fit_preprocessors",
         }
         if self._TASK == "classification":
             cfg["balance_probabilities"] = self.balance_probabilities
@@ -137,7 +139,9 @@ class _SagemakerBase(BaseEstimator):
         if not self._thinking_active:
             return {}
         block: Dict[str, Any] = {
-            "thinking_effort": self.thinking_effort if self.thinking_effort is not None else "medium",
+            "thinking_effort": self.thinking_effort
+            if self.thinking_effort is not None
+            else "medium",
         }
         if self.thinking_timeout_s is not None:
             block["thinking_timeout_s"] = self.thinking_timeout_s

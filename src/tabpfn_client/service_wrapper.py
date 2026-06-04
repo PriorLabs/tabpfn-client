@@ -16,7 +16,7 @@ from tabpfn_client.client import (
 )
 import tabpfn_client.constants as constants
 from tabpfn_common_utils.utils import Singleton
-from tabpfn_client.sdks.gapi import (
+from tabpfn_client.api_models import (
     ClassifierConfig,
     RegressorConfig,
 )

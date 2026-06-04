@@ -32,7 +32,7 @@ from tabpfn_client.constants import (
     ModelVersion,
 )
 from tabpfn_client.service_wrapper import InferenceClient
-from tabpfn_client.sdks.gapi import (
+from tabpfn_client.api_models import (
     RegressorTabPFNConfig,
     ClassifierTabPFNConfig,
     RegressorPredictParams,
@@ -708,9 +708,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
     def predict(
         self,
         X: pd.DataFrame | np.ndarray,
-        output_type: Literal[
-            "mean", "median", "mode", "quantiles", "full", "main"
-        ] | None = None,
+        output_type: Literal["mean", "median", "mode", "quantiles", "full", "main"]
+        | None = None,
         quantiles: list[float] | None = None,
     ) -> np.ndarray | list[np.ndarray] | dict[str, np.ndarray]:
         """Predict regression target for X.

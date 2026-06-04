@@ -40,7 +40,7 @@ from tabpfn_client.constants import (
 )
 from tabpfn_common_utils import utils as common_utils
 from tabpfn_common_utils.utils import Singleton
-from tabpfn_client.sdks.gapi import (
+from tabpfn_client.api_models import (
     GetModelLimitsResponse,
     PrepareTrainSetUploadRequest,
     PrepareTrainSetUploadResponse,

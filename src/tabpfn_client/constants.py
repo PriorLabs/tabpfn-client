@@ -7,7 +7,7 @@ import logging
 from enum import Enum
 from functools import cache
 from pathlib import Path
-from tabpfn_client.sdks.gapi import ModelLimit
+from tabpfn_client.api_models import ModelLimit
 
 logger = logging.getLogger(__name__)
 

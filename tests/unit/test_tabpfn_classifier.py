@@ -22,7 +22,7 @@ from tabpfn_client.client import (
     PredictionResult,
     ServiceClient,
 )
-from tabpfn_client.sdks.gapi import ClassifierTabPFNConfig
+from tabpfn_client.api_models import ClassifierTabPFNConfig
 
 
 def _model_limits_payload(

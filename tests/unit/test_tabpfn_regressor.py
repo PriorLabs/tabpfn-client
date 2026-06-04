@@ -23,7 +23,7 @@ from tabpfn_client.client import (
     PredictionResult,
     ServiceClient,
 )
-from tabpfn_client.sdks.gapi import RegressorTabPFNConfig
+from tabpfn_client.api_models import RegressorTabPFNConfig
 
 
 def _model_limits_payload(

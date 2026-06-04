@@ -19,7 +19,7 @@ from typing import (
 import pytest
 
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
-from tabpfn_client.sdks.gapi import (
+from tabpfn_client.api_models import (
     ClassifierTabPFNConfig,
     RegressorTabPFNConfig,
     ClassifierPredictParams,
