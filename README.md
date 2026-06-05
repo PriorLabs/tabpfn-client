@@ -266,13 +266,11 @@ This project is licensed under the Apache License 2.0 — see the [LICENSE](LICE
 <details>
 <summary><b>Setup, build, and release instructions</b></summary>
 
-To encourage better coding practices, linting and formatting are managed with [Trunk](https://trunk.io) (running `ruff` and `basedpyright`). To check your changes, run:
+To encourage better coding practices, linting and formatting are managed with [Trunk](https://docs.trunk.io/code-quality/overview/initialize-trunk) (running `ruff` and `basedpyright`). To check your changes, run:
 
 ```bash
 trunk check
 ```
-
-Additionally, it is recommended that developers install the ruff extension in their preferred editor. For installation instructions, refer to the [Ruff Integrations Documentation](https://docs.astral.sh/ruff/integrations/).
 
 ### Build from GitHub
 
