@@ -397,7 +397,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     ) -> np.ndarray:
         # IMPORTANT: self._get_predict_params() should be called first to make sure
         # we capture the original user-provided values.
-        predict_params = self._get_predict_params( locals())
+        predict_params = self._get_predict_params(locals())
 
         check_is_fitted(self)
 
@@ -741,7 +741,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         """
         # IMPORTANT: self._get_predict_params() should be called first to make sure
         # we capture the original user-provided values.
-        predict_params = self._get_predict_params( locals())
+        predict_params = self._get_predict_params(locals())
 
         check_is_fitted(self)
 
