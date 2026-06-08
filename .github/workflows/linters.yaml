@@ -3,6 +3,9 @@ name: linters
 on:
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: linters-${{ github.head_ref }}
   cancel-in-progress: true
