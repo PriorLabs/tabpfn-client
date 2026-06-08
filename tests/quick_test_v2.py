@@ -7,6 +7,7 @@ Run with:
     pytest tests/quick_test_v2.py -v -k regressor
 """
 
+from typing import Any, cast
 from unittest.mock import patch
 
 import numpy as np
@@ -24,7 +25,7 @@ from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
 
 
 @pytest.fixture(autouse=True)
-def _patch_webbrowser():
+def _patch_webbrowser():  # pyright: ignore[reportUnusedFunction]  # used by pytest (autouse)
     """Prevent browser login popup during tests."""
     with patch("webbrowser.open", return_value=False):
         yield
@@ -62,7 +63,9 @@ def _fit_and_predict_classifier(clf, X_train, y_train, X_test):
     return preds, probas
 
 
-def _fit_and_predict_regressor(reg, X_train, y_train, X_test, **predict_kwargs):
+def _fit_and_predict_regressor(reg, X_train, y_train, X_test, **predict_kwargs) -> Any:
+    # predict()'s return type varies with output_type (ndarray / list / dict),
+    # so callers narrow it themselves; Any keeps the helper usable for all of them.
     reg.fit(X_train, y_train)
     return reg.predict(X_test, **predict_kwargs)
 
@@ -132,7 +135,7 @@ class TestClassifierConfig:
             n_estimators=3,
             average_before_softmax=True,
         )
-        preds, probas = _fit_and_predict_classifier(clf, X_train, y_train, X_test)
+        preds, _ = _fit_and_predict_classifier(clf, X_train, y_train, X_test)
         assert preds.shape == (len(X_test),)
 
     def test_predict_twice_without_refit(self, clf_data):
@@ -159,7 +162,7 @@ class TestClassifierInputFormats:
         clf = TabPFNClassifier.create_default_for_version(
             ModelVersion.V2_5, n_estimators=3
         )
-        preds, probas = _fit_and_predict_classifier(clf, X_train_df, y_train, X_test_df)
+        preds, _ = _fit_and_predict_classifier(clf, X_train_df, y_train, X_test_df)
         assert preds.shape == (len(X_test),)
 
     def test_small_train_set(self, clf_data):
@@ -168,9 +171,7 @@ class TestClassifierInputFormats:
         clf = TabPFNClassifier.create_default_for_version(
             ModelVersion.V2_5, n_estimators=3
         )
-        preds, probas = _fit_and_predict_classifier(
-            clf, X_train[:10], y_train[:10], X_test
-        )
+        preds, _ = _fit_and_predict_classifier(clf, X_train[:10], y_train[:10], X_test)
         assert preds.shape == (len(X_test),)
 
     def test_single_test_sample(self, clf_data):
@@ -194,7 +195,7 @@ class TestClassifierInputFormats:
         clf = TabPFNClassifier.create_default_for_version(
             ModelVersion.V2_5, n_estimators=3
         )
-        preds, probas = _fit_and_predict_classifier(clf, X_train, y_train, X_test)
+        preds, _ = _fit_and_predict_classifier(clf, X_train, y_train, X_test)
         assert preds.shape == (10,)
 
 
@@ -354,7 +355,7 @@ class TestRegressorInputFormats:
             ModelVersion.V2_5, n_estimators=3
         )
         reg.fit(X_train, y_train)
-        preds = reg.predict(X_test[:1])
+        preds = cast(np.ndarray, reg.predict(X_test[:1]))
         assert preds.shape == (1,)
 
     def test_few_features(self):

@@ -4,7 +4,8 @@
     "**/__pycache__",
     "experiments_*",
     "tmp",
-    ".venv"
+    ".venv",
+    "src/tabpfn_client/api_models.py"
   ],
   "extraPaths": [
     "./.venv/lib/*/site-packages"
