@@ -12,6 +12,11 @@
 # `Annotated[..., Field(union_mode="left_to_right")]` because pydantic's
 # default smart mode would land known values in the wider branch.
 # Discriminator `const` fields are intentionally left non-forward-compatible.
+#
+# Nullified-defaults note: every field with a literal default is projected
+# as `<type> | None = None`. The server's concrete defaults are intentionally
+# dropped so an omitted (None) value lets the server apply its own. `const`
+# discriminator and `default_factory` fields keep their original shape.
 
 from __future__ import annotations
 
@@ -46,8 +51,8 @@ class ModelLimit(BaseModel):
     train_set_max_cells: int
     test_set_max_rows: int
     max_classes: int
-    max_cols: int = 2000
-    test_set_max_rows_w_full_regression_output: int = 400
+    max_cols: int
+    test_set_max_rows_w_full_regression_output: int
     test_set_max_cells: int
 
 
@@ -73,9 +78,9 @@ class RegressorOutputType(str, Enum):
 
 
 class ClassifierPredictParams(BaseModel):
-    output_type: Annotated[ClassifierOutputType | UnknownEnum, Field(union_mode="left_to_right")] = (
-        ClassifierOutputType.PROBAS
-    )
+    output_type: (
+        Annotated[ClassifierOutputType | UnknownEnum, Field(union_mode="left_to_right")] | None
+    ) = None
 
 
 class ClassifierTabPFNConfig(BaseModel):
@@ -90,7 +95,7 @@ class ClassifierTabPFNConfig(BaseModel):
     inference_precision: (
         Annotated[Literal["autocast", "auto"] | str, Field(union_mode="left_to_right")] | None
     ) = None
-    ignore_pretraining_limits: bool = True
+    ignore_pretraining_limits: bool | None = None
     model_path: str | None = None
     balance_probabilities: bool | None = None
 
@@ -102,9 +107,9 @@ class ClassifierConfig(BaseModel):
 
 
 class RegressorPredictParams(BaseModel):
-    output_type: Annotated[RegressorOutputType | UnknownEnum, Field(union_mode="left_to_right")] = (
-        RegressorOutputType.MEAN
-    )
+    output_type: (
+        Annotated[RegressorOutputType | UnknownEnum, Field(union_mode="left_to_right")] | None
+    ) = None
     quantiles: list[float] | None = None
 
 
@@ -120,7 +125,7 @@ class RegressorTabPFNConfig(BaseModel):
     inference_precision: (
         Annotated[Literal["autocast", "auto"] | str, Field(union_mode="left_to_right")] | None
     ) = None
-    ignore_pretraining_limits: bool = True
+    ignore_pretraining_limits: bool | None = None
     model_path: str | None = None
 
 
@@ -155,8 +160,8 @@ class FileInfo(BaseModel):
         default=None,
         description="The size of the file in bytes, used to compute the optimal number of chunks when chunking is enabled.",
     )
-    use_chunks: bool = Field(
-        default=False,
+    use_chunks: bool | None = Field(
+        default=None,
         description="Whether to split the the file into chunks and upload them in parallel.",
     )
 
@@ -186,7 +191,7 @@ class TransformTrainSetRequest(BaseModel):
         Annotated[Literal["preprocessing", "text", "thinking"] | str, Field(union_mode="left_to_right")]
     ]
     task_config: dict[str, Any] | None = None
-    ag_time_limit_s: float = 1200.0
+    ag_time_limit_s: float | None = None
     thinking_effort_metric: str | None = None
     max_tabprep_configs: int | None = None
 
@@ -194,17 +199,22 @@ class TransformTrainSetRequest(BaseModel):
 class FitRequest(BaseModel):
     train_set_upload_id: UUID
     task: Annotated[PredictionTask | UnknownEnum, Field(union_mode="left_to_right")]
-    tabpfn_systems: list[
-        Annotated[Literal["preprocessing", "text", "thinking"] | str, Field(union_mode="left_to_right")]
-    ] = ["preprocessing", "text"]
+    tabpfn_systems: (
+        list[
+            Annotated[
+                Literal["preprocessing", "text", "thinking"] | str, Field(union_mode="left_to_right")
+            ]
+        ]
+        | None
+    ) = None
     tabpfn_config: dict[str, Any] | None = None
     thinking_effort: (
         Annotated[Literal["medium", "high"] | str, Field(union_mode="left_to_right")] | None
     ) = None
     thinking_timeout_s: float | None = None
     thinking_effort_metric: str | None = None
-    force_refit: bool = Field(
-        default=False,
+    force_refit: bool | None = Field(
+        default=None,
         description="Whether to force the fitting of the train set even if a fittedtrain set and transform states already exist.",
     )
 
@@ -248,8 +258,8 @@ class PredictRequest(BaseModel):
     test_set_upload_id: UUID
     fitted_train_set_id: UUID
     task_config: TaskConfig
-    force_refit: bool = Field(
-        default=False,
+    force_refit: bool | None = Field(
+        default=None,
         description="Whether to force the fitting of the test set even if a fittedtest set and transform states already exist.",
     )
 
@@ -269,8 +279,8 @@ class ErrorResponse(BaseModel):
 class PrepareTestSetUploadRequest(BaseModel):
     fitted_train_set_id: UUID
     x_test_info: FileInfo
-    force_reupload: bool = Field(
-        default=False,
+    force_reupload: bool | None = Field(
+        default=None,
         description="Whether to force the upload of the file even if a file with the same hash already exists.",
     )
 
@@ -292,8 +302,8 @@ class PrepareTrainSetUploadRequest(BaseModel):
     x_train_info: FileInfo
     y_train_info: FileInfo
     description: str | None = None
-    force_reupload: bool = Field(
-        default=False,
+    force_reupload: bool | None = Field(
+        default=None,
         description="Whether to force the upload of the file even if a file with the same hash already exists.",
     )
 
