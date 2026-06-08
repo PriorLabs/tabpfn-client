@@ -61,9 +61,9 @@ DEFAULT_V2_6_MODEL_PATH = "v2.6_default"
 DEFAULT_V3_MODEL_PATH = "v3_default"
 
 # Sentinel values for `model_path` that defer model selection to the server.
-# "auto" is the canonical name (matches the OSS tabpfn package); "default"
-# is kept as a backward-compatible alias.
-_AUTO_MODEL_PATH_ALIASES = frozenset({"auto", "default"})
+# `None` means the caller didn't pick a model; "auto" is the canonical name
+# (matches the OSS tabpfn package); "default" is a backward-compatible alias.
+_AUTO_MODEL_PATH_ALIASES: frozenset[str | None] = frozenset({None, "auto", "default"})
 
 THINKING_TIMEOUT_MAX_S = 40 * 60
 
@@ -82,11 +82,10 @@ class TabPFNModelSelection:
 
     @classmethod
     def _validate_model_name(cls, model_name: str | None) -> None:
-        # `None` means the caller didn't pick a model and defers to the server,
-        # so it is a valid "auto" alias rather than an unknown model name.
+        # `None` (defer to the server) is one of the auto aliases, so it counts
+        # as valid rather than an unknown model name.
         if (
-            model_name is not None
-            and model_name not in _AUTO_MODEL_PATH_ALIASES
+            model_name not in _AUTO_MODEL_PATH_ALIASES
             and model_name not in cls._AVAILABLE_MODELS
         ):
             raise ValueError(
@@ -101,8 +100,11 @@ class TabPFNModelSelection:
         cls._validate_model_name(model_name)
         model_name_task = "classifier" if task == "classification" else "regressor"
         # Let the server pick the default model when the caller defers to us.
-        if model_name is None or model_name in _AUTO_MODEL_PATH_ALIASES:
+        if model_name in _AUTO_MODEL_PATH_ALIASES:
             return None
+        # `None` is one of the auto aliases handled above, so the remainder is a
+        # concrete model name; assert it to narrow `str | None` -> `str`.
+        assert model_name is not None
         if V_3_IDENTIFIER in model_name:
             return f"tabpfn-{V_3_IDENTIFIER}-{model_name_task}-{model_name}.ckpt"
         if V_2_6_IDENTIFIER in model_name:
@@ -393,12 +395,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         X,
         output_type: Literal["probas", "preds"],
     ) -> np.ndarray:
-        kwargs = locals()
+        # IMPORTANT: self._get_predict_params() should be called first to make sure
+        # we capture the original user-provided values.
+        predict_params = self._get_predict_params( locals())
+
         check_is_fitted(self)
 
         tabpfn_config = self._get_tabpfn_config()
-        predict_params = self._get_predict_params(kwargs)
-
         task_config = ClassifierConfig(
             tabpfn_config=tabpfn_config,
             predict_params=predict_params,
@@ -453,12 +456,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
     def _get_tabpfn_config(self) -> ClassifierTabPFNConfig:
         init_params = self.get_params()
-        # Drop params left at their `None` default so the config model applies its
-        # own field defaults (e.g. ignore_pretraining_limits) rather than failing
-        # validation on a `None` for a non-optional field.
         cfg = {
             k: v
             for k, v in init_params.items()
+            # Nones are treated as unset
             if k in ClassifierTabPFNConfig.model_fields and v is not None
         }
         cfg["model_path"] = self._model_name_to_path("classification", self.model_path)
@@ -738,12 +739,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         array-like or dict
             The predicted values.
         """
-        kwargs = locals()
+        # IMPORTANT: self._get_predict_params() should be called first to make sure
+        # we capture the original user-provided values.
+        predict_params = self._get_predict_params( locals())
+
         check_is_fitted(self)
 
         tabpfn_config = self._get_tabpfn_config()
-        predict_params = self._get_predict_params(kwargs)
-
         task_config = RegressorConfig(
             tabpfn_config=tabpfn_config,
             predict_params=predict_params,
@@ -813,24 +815,20 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
     def _get_tabpfn_config(self) -> RegressorTabPFNConfig:
         init_params = self.get_params()
-        # Drop params left at their `None` default so the config model applies its
-        # own field defaults (e.g. ignore_pretraining_limits) rather than failing
-        # validation on a `None` for a non-optional field.
         cfg = {
             k: v
             for k, v in init_params.items()
+            # Nones are treated as unset
             if k in RegressorTabPFNConfig.model_fields and v is not None
         }
         cfg["model_path"] = self._model_name_to_path("regression", self.model_path)
         return RegressorTabPFNConfig.model_validate(cfg)
 
     def _get_predict_params(self, kwargs: dict[str, Any]) -> RegressorPredictParams:
-        # Drop params left at their `None` default so the model applies its own
-        # field defaults (e.g. output_type) rather than failing validation on a
-        # `None` for a non-optional field.
         params = {
             k: v
             for k, v in kwargs.items()
+            # Nones are treated as unset
             if k in RegressorPredictParams.model_fields and v is not None
         }
         return RegressorPredictParams.model_validate(params)
@@ -844,9 +842,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 def _is_thinking_supported_model_path(model_path: str | None) -> bool:
     """Thinking is server-side supported only for v3 models (or the auto sentinel,
     which lets the server pick — currently a v3 model)."""
-    # `None` defers model selection to the server (currently a v3 model).
-    if model_path is None or model_path in _AUTO_MODEL_PATH_ALIASES:
+    if model_path in _AUTO_MODEL_PATH_ALIASES:
         return True
+    # `None` is an auto alias handled above, so the remainder is a concrete path.
+    assert model_path is not None
     return V_3_IDENTIFIER in model_path
 
 
