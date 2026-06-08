@@ -72,6 +72,6 @@ dev = [
     "pre-commit==4.3.0",
     "pytest==8.4.2",
     "respx==0.22.0",
-    "ruff==0.15.15",
+    "ruff==0.15.16",
     "licensecheck==2025.1.0"
 ]
