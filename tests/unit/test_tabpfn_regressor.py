@@ -536,7 +536,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             regressor.predict(test_X)
 
             predict_params = mock_predict.call_args[1]["task_config"].predict_params
-            self.assertEqual(predict_params.output_type, "mean")
+            self.assertEqual(predict_params.output_type, None)
             self.assertIsNone(predict_params.quantiles)
 
         # Test predict() with quantiles
