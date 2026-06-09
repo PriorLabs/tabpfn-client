@@ -1,6 +1,3 @@
-#  Copyright (c) Prior Labs GmbH 2025.
-#  Licensed under the Apache License, Version 2.0
-
 from __future__ import annotations
 
 import inspect
@@ -210,6 +207,18 @@ class _FakeInferenceServer:
         return PredictionResult(y_pred=y_pred, metadata={})
 
 
+# `expected_failed_checks` was added to `check_estimator` in scikit-learn 1.6.
+# Older versions (e.g. the build pinned on Python 3.9) don't accept it and have
+# no equivalent way to express expected failures, so we skip there.
+_SUPPORTS_EXPECTED_FAILED_CHECKS = (
+    "expected_failed_checks" in inspect.signature(check_estimator).parameters
+)
+
+
+@pytest.mark.skipif(
+    not _SUPPORTS_EXPECTED_FAILED_CHECKS,
+    reason="check_estimator(expected_failed_checks=...) requires scikit-learn >= 1.6",
+)
 @pytest.mark.parametrize(
     "estimator",
     [TabPFNClassifier],
