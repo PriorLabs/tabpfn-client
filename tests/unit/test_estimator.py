@@ -18,10 +18,17 @@ from typing import (
     get_origin,
     get_type_hints,
 )
+from unittest.mock import patch
+from uuid import UUID
+
+import numpy as np
 import pytest
 from eval_type_backport import eval_type_backport
 from sklearn.utils.estimator_checks import check_estimator
 
+from tabpfn_client import estimator as estimator_module
+from tabpfn_client.client import PredictionResult, ServiceClient
+from tabpfn_client.config import Config
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
 from tabpfn_client.api_models import (
     ClassifierTabPFNConfig,
@@ -164,11 +171,43 @@ _EXPECTED_FAILED_CHECKS = {
     "check_classifier_data_not_an_array": "Non-array array-likes are not coerced.",
     "check_classifiers_train": "Non-array array-likes are not coerced.",
     "check_parameters_default_constructible": "client_options default is materialized in __init__.",
-    "check_methods_subset_invariance": "In-context predictions are not subset-invariant.",
-    "check_dict_unchanged": "predict() records metadata on the instance.",
+    "check_estimators_overwrite_params": "fit() mutates client_options.headers (e.g. sentry-trace).",
+    "check_do_not_raise_errors_in_init_or_set_params": "__init__ evaluates client_options truthiness.",
     "check_fit1d": "1D input is not validated client-side.",
     "check_fit2d_predict1d": "1D input is not validated client-side.",
 }
+
+
+class _FakeInferenceServer:
+    """Stand-in for the remote inference service used by ``check_estimator``.
+
+    ``check_estimator`` calls ``fit``/``predict`` many times with datasets of
+    varying size and label sets, so a static HTTP mock can't serve it. Instead we
+    mock the ``InferenceClient`` boundary directly: ``fit`` receives ``y`` (so we
+    know the classes) and ``predict`` receives ``X`` (so we know the row count),
+    which lets us return correctly-shaped, valid responses without a network call.
+    """
+
+    _DUMMY_ID = UUID("00000000-0000-0000-0000-000000000002")
+
+    def __init__(self):
+        self.classes_ = np.array([0])
+
+    def fit(self, X, y, *args, **kwargs) -> UUID:
+        self.classes_ = np.unique(np.asarray(y))
+        return self._DUMMY_ID
+
+    def predict(self, X, *, task_config, **kwargs) -> PredictionResult:
+        n_rows = np.asarray(X).shape[0]
+        output_type = task_config.predict_params.output_type
+        if output_type == "probas":
+            n_classes = len(self.classes_)
+            y_pred = np.full((n_rows, n_classes), 1.0 / n_classes)
+        else:
+            # A constant, valid label keeps predictions deterministic and within
+            # ``classes_`` (enough for the structural/consistency checks we run).
+            y_pred = np.full(n_rows, self.classes_[0])
+        return PredictionResult(y_pred=y_pred, metadata={})
 
 
 @pytest.mark.parametrize(
@@ -178,7 +217,24 @@ _EXPECTED_FAILED_CHECKS = {
 def test_sklearn_compatible(
     estimator: Type[TabPFNClassifier | TabPFNRegressor],
 ):
-    check_estimator(
-        estimator(),
-        expected_failed_checks=_EXPECTED_FAILED_CHECKS,
-    )
+    # Run the sklearn conformance suite fully offline: ``init`` (which would
+    # trigger interactive auth / open a browser) is neutralized and the remote
+    # inference calls are served by an in-process fake, so this is CI-safe.
+    fake = _FakeInferenceServer()
+    use_server_before = Config.use_server
+    Config.use_server = True
+    try:
+        with (
+            patch.object(estimator_module, "init", lambda *a, **k: None),
+            patch.object(estimator_module.InferenceClient, "fit", side_effect=fake.fit),
+            patch.object(
+                estimator_module.InferenceClient, "predict", side_effect=fake.predict
+            ),
+            patch.object(ServiceClient, "get_model_limits", return_value=None),
+        ):
+            check_estimator(
+                estimator(),
+                expected_failed_checks=_EXPECTED_FAILED_CHECKS,
+            )
+    finally:
+        Config.use_server = use_server_before
