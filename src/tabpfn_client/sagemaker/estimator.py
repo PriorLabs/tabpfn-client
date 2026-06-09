@@ -23,11 +23,10 @@ from sklearn.utils.validation import check_is_fitted
 
 try:
     import boto3  # type: ignore[import-untyped]
-
-    _BOTO3_AVAILABLE = True
 except ImportError:  # pragma: no cover
     boto3 = None  # type: ignore[assignment]
-    _BOTO3_AVAILABLE = False
+
+_BOTO3_AVAILABLE = boto3 is not None
 
 
 ThinkingEffort = Literal["medium", "high"]
@@ -124,7 +123,9 @@ class _SagemakerBase(BaseEstimator):
             "inference_precision": self.inference_precision,
             "random_state": self.random_state,
             "inference_config": self.inference_config,
-            "fit_mode": "fit_with_cache" if self._effective_use_kv_cache else "fit_preprocessors",
+            "fit_mode": "fit_with_cache"
+            if self._effective_use_kv_cache
+            else "fit_preprocessors",
         }
         if self._TASK == "classification":
             cfg["balance_probabilities"] = self.balance_probabilities
@@ -137,7 +138,9 @@ class _SagemakerBase(BaseEstimator):
         if not self._thinking_active:
             return {}
         block: Dict[str, Any] = {
-            "thinking_effort": self.thinking_effort if self.thinking_effort is not None else "medium",
+            "thinking_effort": self.thinking_effort
+            if self.thinking_effort is not None
+            else "medium",
         }
         if self.thinking_timeout_s is not None:
             block["thinking_timeout_s"] = self.thinking_timeout_s
@@ -151,6 +154,7 @@ class _SagemakerBase(BaseEstimator):
         if client is not None:
             return client
         _require_boto3()
+        assert boto3 is not None
         if self.boto_session is not None:
             client = self.boto_session.client("sagemaker-runtime")
         elif self.region_name is not None:
@@ -165,6 +169,7 @@ class _SagemakerBase(BaseEstimator):
         if client is not None:
             return client
         _require_boto3()
+        assert boto3 is not None
         if self.boto_session is not None:
             client = self.boto_session.client("s3")
         elif self.region_name is not None:

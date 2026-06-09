@@ -2,6 +2,7 @@
 #  Licensed under the Apache License, Version 2.0
 
 from __future__ import annotations
+
 from uuid import UUID
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -18,7 +19,7 @@ import time
 import traceback
 import warnings
 from pydantic import BaseModel, ValidationError
-from typing import Any, Callable, Dict, Literal, Union, cast
+from typing import Any, Callable, cast, Literal, Mapping, Union
 
 import google_crc32c
 
@@ -26,7 +27,7 @@ import pandas as pd
 
 import backoff
 import httpx
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 from tabpfn_client.browser_auth import BrowserAuthHandler
 from tabpfn_client.constants import (
     dedup_datasets_enabled,
@@ -53,8 +54,10 @@ from tabpfn_client.api_models import (
     FitResponse,
     PredictRequest,
     PredictResponse,
-    TaskConfig,
+    ClassifierConfig,
+    RegressorConfig,
     ErrorResponse,
+    PredictionTask,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,7 +67,7 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
 
 
-def _on_backoff(details: Dict[str, Any]):
+def _on_backoff(details: Mapping[str, Any]):
     """Callback function for retry attempts."""
     function_name = details["target"].__name__
     message = (
@@ -74,7 +77,7 @@ def _on_backoff(details: Dict[str, Any]):
     logger.warning(message)
 
 
-def _on_giveup(details: Dict[str, Any]):
+def _on_giveup(details: Mapping[str, Any]):
     """Callback function when retries are exhausted."""
     function_name: str = details["target"].__name__.title()
     message = (
@@ -110,13 +113,18 @@ class RetryableServerError(Exception):
 
 
 class SensitiveDataFilter(logging.Filter):
-    def filter(self, record):
-        if "password" in record.getMessage():
-            original_query = str(record.args[1])
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if (
+            "password" in record.getMessage()
+            and isinstance(args, tuple)
+            and len(args) >= 2
+        ):
+            original_query = str(args[1])
             filtered_query = re.sub(
                 r"(password|password_confirm)=[^&]*", r"\1=[FILTERED]", original_query
             )
-            record.args = (record.args[0], filtered_query, *record.args[2:])
+            record.args = (args[0], filtered_query, *args[2:])
         return True
 
 
@@ -126,7 +134,7 @@ httpx_logger.setLevel(logging.WARNING)
 httpx_logger.addFilter(SensitiveDataFilter())
 
 SERVER_CONFIG_FILE = Path(__file__).parent.resolve() / "server_config.yaml"
-SERVER_CONFIG = OmegaConf.load(SERVER_CONFIG_FILE)
+SERVER_CONFIG = cast(DictConfig, OmegaConf.load(SERVER_CONFIG_FILE))
 
 
 def get_client_version() -> str:
@@ -160,6 +168,9 @@ class NeedsRefittingError(Exception):
     pass
 
 
+ThinkingEffort = Literal["medium", "high"]
+
+
 @dataclass
 class ClientOptions:
     """
@@ -182,7 +193,7 @@ class ClientOptions:
 
 @dataclass(frozen=True)
 class PredictionResult:
-    y_pred: Union[np.ndarray, list[np.ndarray], dict[str, np.ndarray]]
+    y_pred: np.ndarray | list[np.ndarray] | dict[str, np.ndarray]
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -218,7 +229,7 @@ class ServiceClient(Singleton):
         headers={"Prior-Client-Version": get_client_version()},
         follow_redirects=True,
     )
-    _access_token = None
+    _access_token: str | None = None
     _model_limits: GetModelLimitsResponse | None = None
     _model_limits_ts: float = 0.0
 
@@ -265,11 +276,15 @@ class ServiceClient(Singleton):
         cls,
         X: pd.DataFrame | np.ndarray,
         y: pd.Series | np.ndarray,
-        task: Literal["classification", "regression"],
-        tabpfn_config: Union[dict, None] = None,
-        description: str | None = None,
+        task_config: ClassifierConfig | RegressorConfig,
+        paper_version: bool = False,
+        thinking_mode: bool = False,
+        thinking_effort: ThinkingEffort | None = None,
+        thinking_timeout_s: float | None = None,
+        thinking_metric: str | None = None,
         force_refit: bool = False,
         client_options: ClientOptions | None = None,
+        description: str | None = None,
     ) -> UUID:
         """
         Upload a train set to server and return the train set UID if successful.
@@ -280,7 +295,7 @@ class ServiceClient(Singleton):
             The training input samples.
         y : array-like of shape (n_samples,) or (n_samples, n_outputs)
             The target values.
-        task: str
+        task: PredictionTask
             Task type: "classification" or "regression"
         tabpfn_config : dict, optional
             Configuration for the fit method. Supported keys currently include
@@ -297,13 +312,27 @@ class ServiceClient(Singleton):
         fitted_train_set_id: UUID
             The unique ID of the fitted train set in the server.
         """
-        if task not in {"classification", "regression"}:
-            raise ValueError("task must be either 'classification' or 'regression'.")
+        tabpfn_systems = ["preprocessing", "text"]
+        thinking_enabled = thinking_mode is True or thinking_effort is not None
+
+        # The client-side `thinking_*` knobs forward 1:1 to the server's
+        # top-level FitRequest fields. When the user enabled thinking via
+        # `thinking_mode=True` without picking a level, default to "medium".
+        # The user-facing kwarg is `thinking_metric`; on the wire it is sent
+        # as `thinking_effort_metric` (matching the server's FitRequest schema).
+        if thinking_enabled:
+            thinking_effort = thinking_effort or "medium"
+            # Thinking runs on top of the base systems rather than
+            # replacing them — keep preprocessing + text alongside it.
+            tabpfn_systems = ["preprocessing", "text", "thinking"]
+
+        if paper_version:
+            tabpfn_systems = []
 
         client_options = client_options or ClientOptions()
 
         df_X = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
-        df_y = y if isinstance(y, pd.DataFrame) else pd.DataFrame(y)
+        df_y = cast(pd.DataFrame, y if isinstance(y, pd.DataFrame) else pd.DataFrame(y))
 
         limits = cls.get_model_limits()
         if limits is not None:
@@ -341,10 +370,7 @@ class ServiceClient(Singleton):
             headers=client_options.headers,
         )
         prepare_resp = cast(
-            Union[
-                PrepareTrainSetUploadResponse,
-                DuplicateTrainSetErrorResponse,
-            ],
+            Union[PrepareTrainSetUploadResponse, DuplicateTrainSetErrorResponse],
             cls._validate_response(
                 res,
                 "prepare_train_set_upload",
@@ -381,63 +407,17 @@ class ServiceClient(Singleton):
                         f.cancel()
                     raise
 
-        tabpfn_systems = ["preprocessing", "text"]
-        # Thinking is enabled when either flag is set: explicit `thinking_mode=True`,
-        # or any non-None `thinking_effort`. Setting `thinking_effort` alone is
-        # enough — the server-side validator on FitRequest also normalises this,
-        # but doing it here means the request body itself is consistent.
-        thinking_enabled = bool(tabpfn_config) and (
-            bool(tabpfn_config.get("thinking_mode"))
-            or tabpfn_config.get("thinking_effort") is not None
-        )
-        if tabpfn_config:
-            if tabpfn_config.get("paper_version") is True:
-                tabpfn_systems = []
-            elif thinking_enabled:
-                # Thinking runs on top of the base systems rather than
-                # replacing them — keep preprocessing + text alongside it.
-                tabpfn_systems = ["preprocessing", "text", "thinking"]
-
-        # The client-side `thinking_*` knobs forward 1:1 to the server's
-        # top-level FitRequest fields. When the user enabled thinking via
-        # `thinking_mode=True` without picking a level, default to "medium".
-        # The user-facing kwarg is `thinking_metric`; on the wire it is sent
-        # as `thinking_effort_metric` (matching the server's FitRequest schema).
-        if thinking_enabled and tabpfn_config:
-            thinking_effort = tabpfn_config.get("thinking_effort") or "medium"
-            thinking_timeout_s = tabpfn_config.get("thinking_timeout_s")
-            thinking_metric = tabpfn_config.get("thinking_metric")
-        else:
-            thinking_effort = None
-            thinking_timeout_s = None
-            thinking_metric = None
-
-        # Strip client-only keys that the server does not expect (mirrors
-        # the predict path's filter below).
-        server_tabpfn_config = (
-            {
-                k: v
-                for k, v in tabpfn_config.items()
-                if k
-                not in {
-                    "paper_version",
-                    "thinking_mode",
-                    "thinking_effort",
-                    "thinking_timeout_s",
-                    "thinking_metric",
-                }
-            }
-            if tabpfn_config is not None
-            else None
-        )
-
         res = cls._fit(
             req=FitRequest(
                 train_set_upload_id=prepare_resp.train_set_upload_id,
-                task=task,
+                task=PredictionTask(task_config.task),
                 tabpfn_systems=tabpfn_systems,
                 force_refit=force_refit or force_refit_enabled(),
-                tabpfn_config=server_tabpfn_config,
+                # NOTE: Since the current shape of the fit request makes it difficult to
+                # discriminate `tabpfn_config` it is set to a generic dict.
+                # TODO: Refactor FitRequest, use tabpfn-system specific config objects
+                # and discriminate based on task (see TaskConfig).
+                tabpfn_config=task_config.tabpfn_config.model_dump(),
                 thinking_effort=thinking_effort,
                 thinking_timeout_s=thinking_timeout_s,
                 thinking_effort_metric=thinking_metric,
@@ -491,9 +471,7 @@ class ServiceClient(Singleton):
         cls,
         fitted_train_set_id: UUID,
         x_test: pd.DataFrame | np.ndarray,
-        task: Literal["classification", "regression"],
-        tabpfn_config: Union[dict, None] = None,
-        predict_params: Union[dict, None] = None,
+        task_config: ClassifierConfig | RegressorConfig,
         client_options: ClientOptions | None = None,
     ) -> PredictionResult:
         """
@@ -505,7 +483,7 @@ class ServiceClient(Singleton):
             The unique ID of the fitted train set in the server.
         x_test : array-like of shape (n_samples, n_features)
             The test input.
-        task: str, optional
+        task: PredictionTask, optional
             Task type: "classification" or "regression"
         tabpfn_config : dict, optional
             Configuration used to initialize the the TabPFN model.
@@ -554,10 +532,7 @@ class ServiceClient(Singleton):
             headers=client_options.headers,
         )
         prepare_resp = cast(
-            Union[
-                PrepareTestSetUploadResponse,
-                DuplicateTestSetErrorResponse,
-            ],
+            Union[PrepareTestSetUploadResponse, DuplicateTestSetErrorResponse],
             cls._validate_response(
                 res,
                 "prepare_test_set_upload",
@@ -579,30 +554,11 @@ class ServiceClient(Singleton):
                 prepare_resp.x_test_info,
             )
 
-        # Strip client-only keys that the server does not expect.
-        if tabpfn_config is not None:
-            tabpfn_config = {
-                k: v
-                for k, v in tabpfn_config.items()
-                if k
-                not in {
-                    "paper_version",
-                    "thinking_mode",
-                    "thinking_effort",
-                    "thinking_timeout_s",
-                    "thinking_metric",
-                }
-            }
-
         res = cls._predict(
             req=PredictRequest(
                 test_set_upload_id=prepare_resp.test_set_upload_id,
                 fitted_train_set_id=fitted_train_set_id,
-                task_config=TaskConfig(
-                    task=task,
-                    tabpfn_config=tabpfn_config,
-                    predict_params=predict_params,
-                ),
+                task_config=task_config,
                 force_refit=force_refit_enabled(),
             ),
             timeout=client_options.timeout,
@@ -623,7 +579,7 @@ class ServiceClient(Singleton):
         if isinstance(prediction, dict):
             result = {}
             for k, v in prediction.items():
-                if isinstance(v, list):
+                if isinstance(v, list):  # type: ignore
                     dtype = float if _contains_none(v) else None
                     result[k] = np.array(v, dtype=dtype)
                 else:
@@ -778,7 +734,7 @@ class ServiceClient(Singleton):
         method_name: str,
         only_version_check: bool = False,
         response_models: dict[int, type[BaseModel]] | None = None,
-        handlers: dict[int, Callable[[BaseModel], Any]] | None = None,
+        handlers: dict[int, Callable[[Any], Any]] | None = None,
     ) -> BaseModel | None:
         ServiceClient._warn_if_deprecated(response)
 
@@ -804,9 +760,7 @@ class ServiceClient(Singleton):
         # real message is buried inside `input_value`.
         if isinstance(load, dict) and load.get("_streamed_error"):
             message = (
-                load.get("message")
-                or load.get("detail", "")
-                or response.reason_phrase
+                load.get("message") or load.get("detail", "") or response.reason_phrase
             )
             logger.info(
                 f"Fail to call {method_name}, streamed error on status "
@@ -945,7 +899,7 @@ class ServiceClient(Singleton):
         return found_valid_connection
 
     @classmethod
-    def is_auth_token_outdated(cls, access_token) -> Union[bool, None]:
+    def is_auth_token_outdated(cls, access_token) -> bool | None:
         """
         Check if the provided access token is valid and return True if successful.
         """
@@ -1129,7 +1083,7 @@ class ServiceClient(Singleton):
         return access_token, message, response.status_code, session_id
 
     @classmethod
-    def get_password_policy(cls) -> dict:
+    def get_password_policy(cls) -> list[str]:
         """
         Get the password policy from the server.
 
@@ -1216,7 +1170,7 @@ class ServiceClient(Singleton):
         return response.json()
 
     @classmethod
-    def download_all_data(cls, save_dir: Path) -> Union[Path, None]:
+    def download_all_data(cls, save_dir: Path) -> Path | None:
         """
         Download all data uploaded by the user from the server.
 
@@ -1275,13 +1229,13 @@ class ServiceClient(Singleton):
         return response.json()["deleted_dataset_uids"]
 
     @classmethod
-    def delete_all_datasets(cls) -> [str]:
+    def delete_all_datasets(cls) -> list[str]:
         """
         Delete all datasets uploaded by the user from the server.
 
         Returns
         -------
-        deleted_dataset_uids : [str]
+        deleted_dataset_uids : list[str]
             The list of deleted dataset UIDs.
         """
         response = cls.httpx_client.delete(

@@ -1,5 +1,7 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
+from __future__ import annotations
+
 import getpass
 import sys
 import textwrap
@@ -24,7 +26,7 @@ from tabpfn_client.ui import (
 
 def maybe_graceful_exit() -> None:
     try:
-        from IPython import get_ipython
+        from IPython import get_ipython  # type: ignore
 
         if get_ipython() is not None:
             return
@@ -86,7 +88,7 @@ class PromptAgent:
         console.print("  Requirements:")
         for req in password_req:
             # Parse requirement like "Length(8)" -> ("length", "8")
-            word_part, number_part = req.split("(")
+            word_part, _ = req.split("(")
             req_key = word_part.lower()
 
             # Check if this requirement is in failed tests
@@ -118,7 +120,7 @@ class PromptAgent:
     def prompt_and_set_token(cls) -> bool:
         """Prompt for login/registration. Returns True if successful, False if interrupted."""
         try:
-            success, message = UserAuthenticationClient.try_browser_login()
+            success, _ = UserAuthenticationClient.try_browser_login()
             if success:
                 console.print("[green]Login via browser successful![/green]")
                 return True
@@ -274,7 +276,7 @@ class PromptAgent:
             return True
 
         # Login
-        elif choice == "2":
+        else:
             console.print("\n[bold]Login[/bold]")
             email = console.input("Email: ").strip()
 
@@ -461,7 +463,7 @@ class PromptAgent:
 
     @classmethod
     def prompt_and_retry(
-        cls, prompt: str, min_length: int = 2, example: str = None
+        cls, prompt: str, min_length: int = 2, example: str | None = None
     ) -> str:
         """Prompt with validation and optional example."""
         console.print(f"\n{prompt}:")
@@ -627,7 +629,10 @@ class PromptAgent:
         return choice.lower()
 
     @classmethod
-    def _verify_user_email(cls, access_token: str) -> bool:
+    def _verify_user_email(cls, access_token: str | None) -> bool:
+        if access_token is None:
+            fail("No access token available for email verification.")
+            return False
         console.print("\n[bold]Email Verification[/bold]")
         console.print("Enter the verification code sent to your email.")
         console.print(

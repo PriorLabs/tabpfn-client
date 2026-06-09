@@ -1,7 +1,8 @@
+from __future__ import annotations
+
 import os
 import json
 import requests
-from typing import Optional
 
 from tabpfn_common_utils.utils import get_example_dataset
 
@@ -9,7 +10,7 @@ TARGET_NAME = "target"
 
 
 def call_fit(
-    train_path: str, target_name: str = TARGET_NAME, api_key: Optional[str] = None
+    train_path: str, target_name: str = TARGET_NAME, api_key: str | None = None
 ) -> str:
     """
     Call the /v1/fit endpoint to train a model.
@@ -50,7 +51,7 @@ def call_fit(
     return model_id
 
 
-def call_predict(test_path: str, model_id: str, api_key: Optional[str] = None) -> None:
+def call_predict(test_path: str, model_id: str, api_key: str | None = None) -> None:
     """
     Call the /v1/predict endpoint to get predictions.
 

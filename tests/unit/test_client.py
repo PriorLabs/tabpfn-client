@@ -1,5 +1,6 @@
 import time
 import unittest
+from typing import Any, cast
 from uuid import UUID
 from unittest.mock import Mock, patch
 
@@ -12,6 +13,12 @@ from tabpfn_client.client import (
     NeedsRefittingError,
     ServiceClient,
 )
+from tabpfn_client.api_models import (
+    ClassifierConfig,
+    RegressorConfig,
+    RegressorOutputType,
+    RegressorPredictParams,
+)
 from tests.mock_tabpfn_server import with_mock_server
 
 
@@ -22,7 +29,7 @@ def _model_limits_payload(
     max_classes=10,
     max_rows=None,
     test_max_cells=None,
-):
+) -> dict[str, Any]:
     max_rows = max_cells if max_rows is None else max_rows
     test_max_cells = max_cells if test_max_cells is None else test_max_cells
     model_limit = {
@@ -45,8 +52,9 @@ def _model_limits_payload(
 class TestServiceClient(unittest.TestCase):
     def setUp(self):
         X, y = load_breast_cancer(return_X_y=True)
-        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
-            X, y, test_size=0.33, random_state=42
+        self.X_train, self.X_test, self.y_train, self.y_test = cast(
+            "tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]",
+            train_test_split(X, y, test_size=0.33, random_state=42),
         )
 
         ServiceClient.reset_authorization()
@@ -87,7 +95,7 @@ class TestServiceClient(unittest.TestCase):
             "metadata": {
                 "task": "classification",
                 "package_version": "0.3.0rc1",
-                "tabpfn_config": None,
+                "tabpfn_config": {},
                 "test_set_num_rows": len(self.X_test),
                 "test_set_num_cols": self.X_test.shape[1],
             },
@@ -241,12 +249,12 @@ class TestServiceClient(unittest.TestCase):
             fitted_train_set_id = ServiceClient.fit(
                 self.X_train,
                 self.y_train,
-                task="classification",
+                task_config=ClassifierConfig(),
             )
             pred = ServiceClient.predict(
                 fitted_train_set_id=fitted_train_set_id,
                 x_test=self.X_test,
-                task="classification",
+                task_config=ClassifierConfig(),
             )
 
         self.assertEqual(
@@ -348,12 +356,12 @@ class TestServiceClient(unittest.TestCase):
             fitted_train_set_id_1 = ServiceClient.fit(
                 self.X_train,
                 self.y_train,
-                task="classification",
+                task_config=ClassifierConfig(),
             )
             fitted_train_set_id_2 = ServiceClient.fit(
                 self.X_train,
                 self.y_train,
-                task="classification",
+                task_config=ClassifierConfig(),
             )
 
         self.assertEqual(fitted_train_set_id_1, fitted_train_set_id_2)
@@ -383,12 +391,12 @@ class TestServiceClient(unittest.TestCase):
             pred_1 = ServiceClient.predict(
                 fitted_train_set_id=fitted_train_set_id,
                 x_test=self.X_test,
-                task="classification",
+                task_config=ClassifierConfig(),
             )
             pred_2 = ServiceClient.predict(
                 fitted_train_set_id=fitted_train_set_id,
                 x_test=self.X_test,
-                task="classification",
+                task_config=ClassifierConfig(),
             )
 
         self.assertTrue(np.array_equal(pred_1.y_pred, pred_2.y_pred))
@@ -404,7 +412,7 @@ class TestServiceClient(unittest.TestCase):
             json={
                 "message": "fitted train set missing",
                 "error_code": "NOT_FOUND",
-                "trace_id": "trace-123",
+                "trace_id": "00000000-0000-0000-0000-0000000000aa",
             },
         )
 
@@ -412,7 +420,7 @@ class TestServiceClient(unittest.TestCase):
             ServiceClient.predict(
                 fitted_train_set_id=UUID("00000000-0000-0000-0000-000000000002"),
                 x_test=self.X_test,
-                task="classification",
+                task_config=ClassifierConfig(),
             )
 
     def test_get_model_limits_uses_cache(self):
@@ -434,6 +442,7 @@ class TestServiceClient(unittest.TestCase):
             first = ServiceClient.get_model_limits()
             second = ServiceClient.get_model_limits()
 
+        assert first is not None
         self.assertEqual(first.dataset_max_size_bytes, 456)
         self.assertIs(first, second)
         self.assertEqual(m.call_count, 1)
@@ -485,7 +494,7 @@ class TestServiceClientPredictionNormalization(unittest.TestCase):
             "metadata": {
                 "task": "regression",
                 "package_version": "0.3.0rc1",
-                "tabpfn_config": None,
+                "tabpfn_config": {},
                 "test_set_num_rows": 2,
                 "test_set_num_cols": 1,
             },
@@ -514,19 +523,23 @@ class TestServiceClientPredictionNormalization(unittest.TestCase):
                 pred = ServiceClient.predict(
                     fitted_train_set_id=UUID("00000000-0000-0000-0000-000000000002"),
                     x_test=np.array([[1.0], [2.0]]),
-                    task="regression",
-                    predict_params={"output_type": "full"},
+                    task_config=RegressorConfig(
+                        predict_params=RegressorPredictParams(
+                            output_type=RegressorOutputType.FULL
+                        )
+                    ),
                 )
 
-        self.assertTrue(np.issubdtype(pred.y_pred["borders"].dtype, np.floating))
-        self.assertTrue(np.issubdtype(pred.y_pred["logits"].dtype, np.floating))
+        y_pred = cast("dict[str, np.ndarray]", pred.y_pred)
+        self.assertTrue(np.issubdtype(y_pred["borders"].dtype, np.floating))
+        self.assertTrue(np.issubdtype(y_pred["logits"].dtype, np.floating))
         np.testing.assert_allclose(
-            pred.y_pred["borders"],
+            y_pred["borders"],
             np.array([0.0, np.nan, 2.0]),
             equal_nan=True,
         )
         np.testing.assert_allclose(
-            pred.y_pred["logits"],
+            y_pred["logits"],
             np.array([[1.0, np.nan], [np.nan, 4.0]]),
             equal_nan=True,
         )

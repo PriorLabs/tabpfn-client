@@ -8,7 +8,7 @@ import sys
 import time
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Dict, Literal, Optional, Union
+from typing import Any, Callable, Literal, cast, overload
 from typing_extensions import Self
 from uuid import UUID
 
@@ -23,6 +23,7 @@ from tabpfn_client.client import (
     ClientOptions,
     PredictionResult,
     NeedsRefittingError,
+    ThinkingEffort,
 )
 from tabpfn_client.config import Config, init
 from tabpfn_client.constants import (
@@ -31,13 +32,21 @@ from tabpfn_client.constants import (
     ModelVersion,
 )
 from tabpfn_client.service_wrapper import InferenceClient
+from tabpfn_client.api_models import (
+    RegressorTabPFNConfig,
+    ClassifierTabPFNConfig,
+    RegressorPredictParams,
+    ClassifierPredictParams,
+    ClassifierConfig,
+    RegressorConfig,
+)
 
 try:
-    from torch import Tensor
-
-    TORCH_AVAILABLE = True
+    from torch import Tensor  # type: ignore
 except ImportError:
-    TORCH_AVAILABLE = False
+    Tensor = None
+
+TORCH_AVAILABLE = Tensor is not None
 
 logger = logging.getLogger(__name__)
 
@@ -52,13 +61,12 @@ DEFAULT_V2_6_MODEL_PATH = "v2.6_default"
 DEFAULT_V3_MODEL_PATH = "v3_default"
 
 # Sentinel values for `model_path` that defer model selection to the server.
-# "auto" is the canonical name (matches the OSS tabpfn package); "default"
-# is kept as a backward-compatible alias.
-_AUTO_MODEL_PATH_ALIASES = frozenset({"auto", "default"})
+# `None` means the caller didn't pick a model; "auto" is the canonical name
+# (matches the OSS tabpfn package); "default" is a backward-compatible alias.
+_AUTO_MODEL_PATH_ALIASES: frozenset[str | None] = frozenset({None, "auto", "default"})
 
 THINKING_TIMEOUT_MAX_S = 40 * 60
 
-ThinkingEffort = Literal["medium", "high"]
 _VALID_THINKING_EFFORT_LEVELS = frozenset({"medium", "high"})
 
 
@@ -73,7 +81,9 @@ class TabPFNModelSelection:
         return cls._AVAILABLE_MODELS
 
     @classmethod
-    def _validate_model_name(cls, model_name: str) -> None:
+    def _validate_model_name(cls, model_name: str | None) -> None:
+        # `None` (defer to the server) is one of the auto aliases, so it counts
+        # as valid rather than an unknown model name.
         if (
             model_name not in _AUTO_MODEL_PATH_ALIASES
             and model_name not in cls._AVAILABLE_MODELS
@@ -85,13 +95,16 @@ class TabPFNModelSelection:
 
     @classmethod
     def _model_name_to_path(
-        cls, task: Literal["classification", "regression"], model_name: str
-    ) -> Optional[str]:
+        cls, task: Literal["classification", "regression"], model_name: str | None
+    ) -> str | None:
         cls._validate_model_name(model_name)
         model_name_task = "classifier" if task == "classification" else "regressor"
         # Let the server pick the default model when the caller defers to us.
         if model_name in _AUTO_MODEL_PATH_ALIASES:
             return None
+        # `None` is one of the auto aliases handled above, so the remainder is a
+        # concrete model name; assert it to narrow `str | None` -> `str`.
+        assert model_name is not None
         if V_3_IDENTIFIER in model_name:
             return f"tabpfn-{V_3_IDENTIFIER}-{model_name_task}-{model_name}.ckpt"
         if V_2_6_IDENTIFIER in model_name:
@@ -109,7 +122,7 @@ class TabPFNModelSelection:
 
         Any kwargs will override the default settings.
         """
-        options = {
+        options: dict[str, Any] = {
             "n_estimators": 8,
             "softmax_temperature": 0.9,
         }
@@ -127,28 +140,6 @@ class TabPFNModelSelection:
         options.update(overrides)
 
         return cls(**options)
-
-    def _get_estimator_params_with_model_path(
-        self, task: Literal["classification", "regression"]
-    ) -> Dict:
-        """Get estimator parameters with the model_path resolved to full path.
-
-        Parameters
-        ----------
-        task : {"classification", "regression"}
-            The task type to determine the correct model path.
-
-        Returns
-        -------
-        Dict
-            Dictionary of estimator parameters with model_path updated to full path.
-        """
-        estimator_param = self.get_params()
-        estimator_param["model_path"] = self._model_name_to_path(task, self.model_path)
-        # Client-side concerns — passed separately to InferenceClient, not part of server config.
-        estimator_param.pop("client_options", None)
-        estimator_param.pop("force_refit", None)
-        return estimator_param
 
 
 class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
@@ -178,22 +169,23 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
     def __init__(
         self,
-        model_path: str = "auto",
-        n_estimators: int = 8,
-        softmax_temperature: float = 0.9,
-        balance_probabilities: bool = False,
-        average_before_softmax: bool = False,
-        ignore_pretraining_limits: bool = True,
-        inference_precision: Literal["autocast", "auto"] = "auto",
-        random_state: Optional[
-            Union[int, np.random.RandomState, np.random.Generator]
-        ] = 0,
-        inference_config: Optional[Dict] = None,
+        # start: tabpfn_config
+        model_path: str | None = None,
+        categorical_features_indices: list[int] | None = None,
+        n_estimators: int | None = None,
+        softmax_temperature: float | None = None,
+        balance_probabilities: bool | None = None,
+        average_before_softmax: bool | None = None,
+        ignore_pretraining_limits: bool | None = None,
+        inference_precision: Literal["autocast", "auto"] | None = None,
+        random_state: int | None = None,
+        inference_config: dict[str, Any] | None = None,
+        # end: tabpfn_config
         paper_version: bool = False,
         thinking_mode: bool = False,
-        thinking_effort: Optional[ThinkingEffort] = None,
-        thinking_timeout_s: Optional[float] = None,
-        thinking_metric: Optional[str] = None,
+        thinking_effort: ThinkingEffort | None = None,
+        thinking_timeout_s: float | None = None,
+        thinking_metric: str | None = None,
         force_refit: bool = False,
         client_options: ClientOptions | None = None,
     ):
@@ -286,6 +278,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             Aliases "acc", "nll", "pac_score" are also accepted.
         """
         self.model_path = model_path
+        self.categorical_features_indices = categorical_features_indices
         self.n_estimators = n_estimators
         self.softmax_temperature = softmax_temperature
         self.balance_probabilities = balance_probabilities
@@ -296,7 +289,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.inference_config = inference_config
         self.paper_version = paper_version
         self.thinking_mode = thinking_mode
-        self.thinking_effort = thinking_effort
+        self.thinking_effort: ThinkingEffort | None = thinking_effort
         self.thinking_timeout_s = thinking_timeout_s
         self.thinking_metric = thinking_metric
         self.force_refit = force_refit
@@ -319,7 +312,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         # assert init() is called
         init()
 
-        estimator_param = self._get_estimator_params_with_model_path("classification")
+        tabpfn_config = self._get_tabpfn_config()
+
+        task_config = ClassifierConfig(tabpfn_config=tabpfn_config)
+
         validate_train_set(X, y)
         validate_thinking_mode(
             self.thinking_mode,
@@ -328,7 +324,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             self.thinking_metric,
             self.model_path,
         )
-        X = _clean_text_features(X)
+        X_clean = _clean_text_features(X)
         self._validate_targets_and_classes(y)
 
         if Config.use_server:
@@ -348,17 +344,21 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
             def fit_task() -> UUID:
                 return InferenceClient.fit(
-                    X,
+                    X_clean,
                     y,
-                    task="classification",
-                    tabpfn_config=estimator_param,
-                    description=description,
+                    task_config=task_config,
+                    paper_version=self.paper_version,
+                    thinking_mode=self.thinking_mode,
+                    thinking_effort=self.thinking_effort,
+                    thinking_timeout_s=self.thinking_timeout_s,
+                    thinking_metric=self.thinking_metric,
                     force_refit=self.force_refit,
                     client_options=self.client_options,
+                    description=description,
                 )
 
-            self.last_fitted_train_set_id = run_task(fit_task, "Fitting")
-            self.last_train_X = X
+            self.last_fitted_train_set_id = cast(UUID, run_task(fit_task, "Fitting"))
+            self.last_train_X = X_clean
             self.last_train_y = y
             self.fitted_ = True
             self.fit_count += 1
@@ -393,14 +393,27 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     def _predict(
         self,
         X,
-        output_type,
-    ) -> dict[str, np.ndarray]:
-        check_is_fitted(self)
-        estimator_param = self._get_estimator_params_with_model_path("classification")
-        validate_test_set(X, output_type, estimator_param["model_path"])
-        X = _clean_text_features(X)
+        output_type: Literal["probas", "preds"],
+    ) -> np.ndarray:
+        # IMPORTANT: self._get_predict_params() should be called first to make sure
+        # we capture the original user-provided values.
+        predict_params = self._get_predict_params(locals())
 
-        if "sentry-trace" not in self.client_options.headers:
+        check_is_fitted(self)
+
+        tabpfn_config = self._get_tabpfn_config()
+        task_config = ClassifierConfig(
+            tabpfn_config=tabpfn_config,
+            predict_params=predict_params,
+        )
+
+        validate_test_set(X, output_type, tabpfn_config.model_path)
+        X_clean = _clean_text_features(X)
+
+        if (
+            "sentry-trace" not in self.client_options.headers
+            and self.last_trace_id is not None
+        ):
             self.client_options.headers["sentry-trace"] = self.last_trace_id
 
         def predict_task() -> PredictionResult:
@@ -413,11 +426,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                     ) from last_exc
                 try:
                     return InferenceClient.predict(
-                        X,
-                        fitted_train_set_id=self.last_fitted_train_set_id,
-                        task="classification",
-                        tabpfn_config=estimator_param,
-                        predict_params={"output_type": output_type},
+                        X_clean,
+                        fitted_train_set_id=cast(UUID, self.last_fitted_train_set_id),
+                        task_config=task_config,
                         client_options=self.client_options,
                     )
                 except NeedsRefittingError as exc:
@@ -426,11 +437,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                     self.last_fitted_train_set_id = InferenceClient.fit(
                         self.last_train_X,
                         self.last_train_y,
-                        task="classification",
-                        tabpfn_config=estimator_param,
-                        description=self.last_train_set_description,
+                        task_config=task_config,
+                        paper_version=self.paper_version,
+                        thinking_mode=self.thinking_mode,
+                        thinking_effort=self.thinking_effort,
+                        thinking_timeout_s=self.thinking_timeout_s,
+                        thinking_metric=self.thinking_metric,
                         force_refit=True,
                         client_options=self.client_options,
+                        description=self.last_train_set_description,
                     )
 
         result = run_task(predict_task, "Predicting")
@@ -439,7 +454,24 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
         return result.y_pred
 
-    def _validate_targets_and_classes(self, y) -> np.ndarray:
+    def _get_tabpfn_config(self) -> ClassifierTabPFNConfig:
+        init_params = self.get_params()
+        cfg = {
+            k: v
+            for k, v in init_params.items()
+            # Nones are treated as unset
+            if k in ClassifierTabPFNConfig.model_fields and v is not None
+        }
+        cfg["model_path"] = self._model_name_to_path("classification", self.model_path)
+        return ClassifierTabPFNConfig.model_validate(cfg)
+
+    def _get_predict_params(self, kwargs: dict[str, Any]) -> ClassifierPredictParams:
+        params = {
+            k: v for k, v in kwargs.items() if k in ClassifierPredictParams.model_fields
+        }
+        return ClassifierPredictParams.model_validate(params)
+
+    def _validate_targets_and_classes(self, y) -> None:
         y_ = column_or_1d(y, warn=True)
         if sum(pd.isnull(y_)) > 0:
             raise ValueError("Input y contains NaN.")
@@ -490,21 +522,22 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
     def __init__(
         self,
-        model_path: str = "auto",
-        n_estimators: int = 8,
-        softmax_temperature: float = 0.9,
-        average_before_softmax: bool = False,
-        ignore_pretraining_limits: bool = False,
-        inference_precision: Literal["autocast", "auto"] = "auto",
-        random_state: Optional[
-            Union[int, np.random.RandomState, np.random.Generator]
-        ] = 0,
-        inference_config: Optional[Dict] = None,
+        # start: tabpfn_config
+        model_path: str | None = None,
+        categorical_features_indices: list[int] | None = None,
+        n_estimators: int | None = None,
+        softmax_temperature: float | None = None,
+        average_before_softmax: bool | None = None,
+        ignore_pretraining_limits: bool | None = None,
+        inference_precision: Literal["autocast", "auto"] | None = None,
+        random_state: int | None = None,
+        inference_config: dict[str, Any] | None = None,
+        # end: tabpfn_config
         paper_version: bool = False,
         thinking_mode: bool = False,
-        thinking_effort: Optional[ThinkingEffort] = None,
-        thinking_timeout_s: Optional[float] = None,
-        thinking_metric: Optional[str] = None,
+        thinking_effort: ThinkingEffort | None = None,
+        thinking_timeout_s: float | None = None,
+        thinking_metric: str | None = None,
         force_refit: bool = False,
         client_options: ClientOptions | None = None,
     ):
@@ -585,6 +618,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             Client specific options (e.g. timeout, headers).
         """
         self.model_path = model_path
+        self.categorical_features_indices = categorical_features_indices
         self.n_estimators = n_estimators
         self.softmax_temperature = softmax_temperature
         self.average_before_softmax = average_before_softmax
@@ -594,7 +628,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.inference_config = inference_config
         self.paper_version = paper_version
         self.thinking_mode = thinking_mode
-        self.thinking_effort = thinking_effort
+        self.thinking_effort: ThinkingEffort | None = thinking_effort
         self.thinking_timeout_s = thinking_timeout_s
         self.thinking_metric = thinking_metric
         self.force_refit = force_refit
@@ -617,7 +651,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         # assert init() is called
         init()
 
-        estimator_param = self._get_estimator_params_with_model_path("regression")
+        tabpfn_config = self._get_tabpfn_config()
+
+        task_config = RegressorConfig(tabpfn_config=tabpfn_config)
+
         validate_train_set(X, y)
         validate_thinking_mode(
             self.thinking_mode,
@@ -627,7 +664,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             self.model_path,
         )
         self._validate_targets(y)
-        X = _clean_text_features(X)
+        X_clean = _clean_text_features(X)
 
         if Config.use_server:
             # Create a new sentry trace at every fit, provided that:
@@ -647,17 +684,21 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
             def fit_task() -> UUID:
                 return InferenceClient.fit(
-                    X,
+                    X_clean,
                     y,
-                    task="regression",
-                    tabpfn_config=estimator_param,
-                    description=description,
+                    task_config=task_config,
+                    paper_version=self.paper_version,
+                    thinking_mode=self.thinking_mode,
+                    thinking_effort=self.thinking_effort,
+                    thinking_timeout_s=self.thinking_timeout_s,
+                    thinking_metric=self.thinking_metric,
                     force_refit=self.force_refit,
                     client_options=self.client_options,
+                    description=description,
                 )
 
-            self.last_fitted_train_set_id = run_task(fit_task, "Fitting")
-            self.last_train_X = X
+            self.last_fitted_train_set_id = cast(UUID, run_task(fit_task, "Fitting"))
+            self.last_train_X = X_clean
             self.last_train_y = y
             self.fitted_ = True
             self.fit_count += 1
@@ -671,11 +712,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
     def predict(
         self,
         X: pd.DataFrame | np.ndarray,
-        output_type: Literal[
-            "mean", "median", "mode", "quantiles", "full", "main"
-        ] = "mean",
-        quantiles: Optional[list[float]] = None,
-    ) -> Union[np.ndarray, list[np.ndarray], dict[str, np.ndarray]]:
+        output_type: Literal["mean", "median", "mode", "quantiles", "full", "main"]
+        | None = None,
+        quantiles: list[float] | None = None,
+    ) -> np.ndarray | list[np.ndarray] | dict[str, np.ndarray]:
         """Predict regression target for X.
 
         Parameters
@@ -699,18 +739,25 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         array-like or dict
             The predicted values.
         """
+        # IMPORTANT: self._get_predict_params() should be called first to make sure
+        # we capture the original user-provided values.
+        predict_params = self._get_predict_params(locals())
+
         check_is_fitted(self)
-        estimator_param = self._get_estimator_params_with_model_path("regression")
-        validate_test_set(X, output_type, estimator_param["model_path"])
-        X = _clean_text_features(X)
 
-        # Add new parameters
-        predict_params = {
-            "output_type": output_type,
-            "quantiles": quantiles,
-        }
+        tabpfn_config = self._get_tabpfn_config()
+        task_config = RegressorConfig(
+            tabpfn_config=tabpfn_config,
+            predict_params=predict_params,
+        )
 
-        if "sentry-trace" not in self.client_options.headers:
+        validate_test_set(X, output_type, tabpfn_config.model_path)
+        X_clean = _clean_text_features(X)
+
+        if (
+            "sentry-trace" not in self.client_options.headers
+            and self.last_trace_id is not None
+        ):
             self.client_options.headers["sentry-trace"] = self.last_trace_id
 
         def predict_task() -> PredictionResult:
@@ -723,11 +770,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     ) from last_exc
                 try:
                     return InferenceClient.predict(
-                        X,
-                        fitted_train_set_id=self.last_fitted_train_set_id,
-                        task="regression",
-                        tabpfn_config=estimator_param,
-                        predict_params=predict_params,
+                        X_clean,
+                        fitted_train_set_id=cast(UUID, self.last_fitted_train_set_id),
+                        task_config=task_config,
                         client_options=self.client_options,
                     )
                 except NeedsRefittingError as exc:
@@ -736,11 +781,15 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     self.last_fitted_train_set_id = InferenceClient.fit(
                         self.last_train_X,
                         self.last_train_y,
-                        task="regression",
-                        tabpfn_config=estimator_param,
-                        description=self.last_train_set_description,
+                        task_config=task_config,
+                        paper_version=self.paper_version,
+                        thinking_mode=self.thinking_mode,
+                        thinking_effort=self.thinking_effort,
+                        thinking_timeout_s=self.thinking_timeout_s,
+                        thinking_metric=self.thinking_metric,
                         force_refit=True,
                         client_options=self.client_options,
+                        description=self.last_train_set_description,
                     )
 
         result = run_task(predict_task, "Predicting")
@@ -750,8 +799,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         output = result.y_pred
         if output_type == "full":
             try:
-                from tabpfn.regressor import FullSupportBarDistribution
-                import torch
+                from tabpfn.regressor import FullSupportBarDistribution  # type: ignore
+                import torch  # type: ignore
 
                 output["criterion"] = FullSupportBarDistribution(
                     borders=torch.tensor(output["borders"])
@@ -764,26 +813,48 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
         return output
 
-    def _validate_targets(self, y) -> np.ndarray:
+    def _get_tabpfn_config(self) -> RegressorTabPFNConfig:
+        init_params = self.get_params()
+        cfg = {
+            k: v
+            for k, v in init_params.items()
+            # Nones are treated as unset
+            if k in RegressorTabPFNConfig.model_fields and v is not None
+        }
+        cfg["model_path"] = self._model_name_to_path("regression", self.model_path)
+        return RegressorTabPFNConfig.model_validate(cfg)
+
+    def _get_predict_params(self, kwargs: dict[str, Any]) -> RegressorPredictParams:
+        params = {
+            k: v
+            for k, v in kwargs.items()
+            # Nones are treated as unset
+            if k in RegressorPredictParams.model_fields and v is not None
+        }
+        return RegressorPredictParams.model_validate(params)
+
+    def _validate_targets(self, y) -> None:
         y_ = column_or_1d(y, warn=True)
         if sum(pd.isnull(y_)) > 0:
             raise ValueError("Input y contains NaN.")
 
 
-def _is_thinking_supported_model_path(model_path: str) -> bool:
+def _is_thinking_supported_model_path(model_path: str | None) -> bool:
     """Thinking is server-side supported only for v3 models (or the auto sentinel,
     which lets the server pick — currently a v3 model)."""
     if model_path in _AUTO_MODEL_PATH_ALIASES:
         return True
+    # `None` is an auto alias handled above, so the remainder is a concrete path.
+    assert model_path is not None
     return V_3_IDENTIFIER in model_path
 
 
 def validate_thinking_mode(
     thinking_mode: bool,
-    thinking_effort: Optional[str],
-    thinking_timeout_s: Optional[float],
-    thinking_metric: Optional[str],
-    model_path: str,
+    thinking_effort: ThinkingEffort | None,
+    thinking_timeout_s: float | None,
+    thinking_metric: str | None,
+    model_path: str | None,
 ) -> None:
     if (
         thinking_effort is not None
@@ -805,10 +876,7 @@ def validate_thinking_mode(
             "consulted when thinking is enabled; pass `thinking_mode=True` "
             "or `thinking_effort=...` to use them."
         )
-    if (
-        thinking_timeout_s is not None
-        and thinking_timeout_s > THINKING_TIMEOUT_MAX_S
-    ):
+    if thinking_timeout_s is not None and thinking_timeout_s > THINKING_TIMEOUT_MAX_S:
         raise ValueError(
             f"thinking_timeout_s ({thinking_timeout_s}) exceeds the "
             f"maximum allowed of {THINKING_TIMEOUT_MAX_S} seconds "
@@ -824,7 +892,9 @@ def validate_thinking_mode(
         )
 
 
-def validate_train_set(X: np.ndarray, y: Union[np.ndarray, None] = None):
+def validate_train_set(
+    X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray | None = None
+):
     """Check the integrity of the training data."""
 
     # check if the number of samples is consistent (ValueError)
@@ -855,7 +925,11 @@ def validate_train_set(X: np.ndarray, y: Union[np.ndarray, None] = None):
         )
 
 
-def validate_test_set(X: np.ndarray, output_type: str, model_path: str | None = None):
+def validate_test_set(
+    X: pd.DataFrame | np.ndarray,
+    output_type: str | None,
+    model_path: str | None = None,
+):
     """Check the integrity of the test data."""
 
     limits = ServiceClient.get_model_limits()
@@ -891,6 +965,10 @@ def validate_test_set(X: np.ndarray, output_type: str, model_path: str | None = 
             )
 
 
+@overload
+def _clean_text_features(X: pd.DataFrame) -> pd.DataFrame: ...
+@overload
+def _clean_text_features(X: np.ndarray) -> np.ndarray: ...
 def _clean_text_features(X):
     """
     Clean text features in the input data. This is used to avoid
@@ -899,31 +977,32 @@ def _clean_text_features(X):
     """
     # Convert numpy array to pandas DataFrame if necessary
     # not necessary if numpy array of numbers
-    if TORCH_AVAILABLE and isinstance(X, Tensor):
-        if X.requires_grad:
-            X = X.detach()
-        if X.is_cuda:
-            X = X.cpu()
+    data = X
+    if Tensor is not None and isinstance(data, Tensor):
+        if data.requires_grad:
+            data = data.detach()
+        if data.is_cuda:
+            data = data.cpu()
 
-        X = X.numpy()
+        data = data.numpy()
 
-    if isinstance(X, np.ndarray):
-        if np.issubdtype(X.dtype, np.number):
-            return X
+    if isinstance(data, np.ndarray):
+        if np.issubdtype(data.dtype, np.number):
+            return data
         else:
-            X_ = pd.DataFrame(X.copy())
+            df = pd.DataFrame(data.copy())
     else:
-        X_ = X.copy()
+        df = data.copy()
 
     # limit to 2500 chars and remove commas for text features
-    for col in X_.columns:
+    for col in df.columns:
         # check if we can't convert to float
         try:
-            pd.to_numeric(X_[col])
+            pd.to_numeric(df[col])
         except ValueError:
-            if X_[col].dtype == object:  # only process string/object columns
-                X_[col] = (
-                    X_[col]
+            if df[col].dtype == object:  # only process string/object columns
+                df[col] = (
+                    df[col]
                     .str.replace(",", "")
                     .str.replace(r"\s+", " ", regex=True)
                     .str.strip()
@@ -931,9 +1010,9 @@ def _clean_text_features(X):
                 )
 
     # Convert back to numpy if input was numpy (or tensor that was converted to numpy)
-    if isinstance(X, np.ndarray):
-        return X_.to_numpy()
-    return X_
+    if isinstance(data, np.ndarray):
+        return df.to_numpy()
+    return df
 
 
 def run_task(task: Callable, message: str, with_spinner: bool = True) -> Any:

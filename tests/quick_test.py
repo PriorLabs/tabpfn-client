@@ -7,7 +7,10 @@ and try various prediction types.
 """
 
 import logging
+from typing import cast
 from unittest.mock import patch
+
+import numpy as np
 
 from sklearn.datasets import load_breast_cancer, load_diabetes
 from sklearn.model_selection import train_test_split
@@ -26,13 +29,15 @@ if __name__ == "__main__":
         # use_server = False
 
         X, y = load_breast_cancer(return_X_y=True)
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.33, random_state=42
+        X_train, X_test, y_train, y_test = cast(
+            "tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]",
+            train_test_split(X, y, test_size=0.33, random_state=42),
         )
 
         tabpfn = TabPFNClassifier.create_default_for_version(
             ModelVersion.V2_5, n_estimators=3
         )
+        estimator = TabPFNClassifier()
         # print("checking estimator", check_estimator(tabpfn))
         tabpfn.fit(X_train[:99], y_train[:99])
         print("predicting")
@@ -44,9 +49,10 @@ if __name__ == "__main__":
         # can be slow if you have a lot of data
         # print(UserDataClient.get_data_summary())
 
-        X, y = load_diabetes(return_X_y=True)
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.33, random_state=42
+        X_reg, y_reg = load_diabetes(return_X_y=True)
+        X_train, X_test, y_train, y_test = cast(
+            "tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]",
+            train_test_split(X_reg, y_reg, test_size=0.33, random_state=42),
         )
 
         tabpfn = TabPFNRegressor.create_default_for_version(
