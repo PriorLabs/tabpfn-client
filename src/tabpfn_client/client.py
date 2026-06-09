@@ -417,7 +417,9 @@ class ServiceClient(Singleton):
                 # discriminate `tabpfn_config` it is set to a generic dict.
                 # TODO: Refactor FitRequest, use tabpfn-system specific config objects
                 # and discriminate based on task (see TaskConfig).
-                tabpfn_config=task_config.tabpfn_config.model_dump(),
+                tabpfn_config=task_config.tabpfn_config.model_dump(
+                    mode="json", exclude_none=True
+                ),
                 thinking_effort=thinking_effort,
                 thinking_timeout_s=thinking_timeout_s,
                 thinking_effort_metric=thinking_metric,
