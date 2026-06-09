@@ -89,7 +89,7 @@ class TestClassifierVersions:
         assert probas.shape[1] == 2  # binary classification
         # probabilities sum to 1
         np.testing.assert_allclose(probas.sum(axis=1), 1.0, atol=1e-5)
-        assert clf.last_meta, "last_meta should be populated after predict"
+        assert clf._last_meta, "last_meta should be populated after predict"
 
 
 class TestClassifierConfig:
@@ -213,7 +213,7 @@ class TestRegressorVersions:
         reg = TabPFNRegressor.create_default_for_version(version, n_estimators=3)
         preds = _fit_and_predict_regressor(reg, X_train, y_train, X_test)
         assert preds.shape == (len(X_test),)
-        assert reg.last_meta, "last_meta should be populated after predict"
+        assert reg._last_meta, "last_meta should be populated after predict"
 
 
 class TestRegressorOutputTypes:

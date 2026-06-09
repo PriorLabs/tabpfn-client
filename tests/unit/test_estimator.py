@@ -148,6 +148,29 @@ def test_client_predict_params_include_server_predict_params(
         )
 
 
+# sklearn's `check_estimator` runs a large battery of conformance checks. The
+# ones below don't hold for TabPFN's server-backed, in-context-learning design
+# (or assume the sklearn input-validation pipeline we intentionally don't use),
+# so we mark them as expected failures rather than asserting on them.
+_EXPECTED_FAILED_CHECKS = {
+    "check_n_features_in_after_fitting": "TabPFN does not set n_features_in_.",
+    "check_n_features_in": "TabPFN does not set n_features_in_.",
+    "check_dtype_object": "Object-dtype handling differs from sklearn's pipeline.",
+    "check_estimators_empty_data_messages": "Empty-data errors are not validated client-side.",
+    "check_estimators_nan_inf": "TabPFN accepts NaN/inf inputs.",
+    "check_estimator_sparse_tag": "Sparse input is not supported with an sklearn-style message.",
+    "check_estimator_sparse_array": "Sparse input is not supported with an sklearn-style message.",
+    "check_estimator_sparse_matrix": "Sparse input is not supported with an sklearn-style message.",
+    "check_classifier_data_not_an_array": "Non-array array-likes are not coerced.",
+    "check_classifiers_train": "Non-array array-likes are not coerced.",
+    "check_parameters_default_constructible": "client_options default is materialized in __init__.",
+    "check_methods_subset_invariance": "In-context predictions are not subset-invariant.",
+    "check_dict_unchanged": "predict() records metadata on the instance.",
+    "check_fit1d": "1D input is not validated client-side.",
+    "check_fit2d_predict1d": "1D input is not validated client-side.",
+}
+
+
 @pytest.mark.parametrize(
     "estimator",
     [TabPFNClassifier],
@@ -155,4 +178,7 @@ def test_client_predict_params_include_server_predict_params(
 def test_sklearn_compatible(
     estimator: Type[TabPFNClassifier | TabPFNRegressor],
 ):
-    check_estimator(estimator())
+    check_estimator(
+        estimator(),
+        expected_failed_checks=_EXPECTED_FAILED_CHECKS,
+    )

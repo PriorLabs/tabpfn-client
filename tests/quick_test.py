@@ -44,7 +44,7 @@ if __name__ == "__main__":
         print(tabpfn.predict(X_test))
         print("predicting_proba")
         print(tabpfn.predict_proba(X_test))
-        print(f"last meta: {tabpfn.last_meta}")
+        print(f"last meta: {tabpfn._last_meta}")
 
         # can be slow if you have a lot of data
         # print(UserDataClient.get_data_summary())
@@ -69,4 +69,4 @@ if __name__ == "__main__":
         print(
             tabpfn.predict(X_test[:30], output_type="full", quantiles=[0.1, 0.5, 0.9])
         )
-        print(f"last meta: {tabpfn.last_meta}")
+        print(f"last meta: {tabpfn._last_meta}")

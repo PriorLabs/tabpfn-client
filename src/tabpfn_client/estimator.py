@@ -293,11 +293,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.thinking_timeout_s = thinking_timeout_s
         self.thinking_metric = thinking_metric
         self.force_refit = force_refit
-
-        if client_options is not None:
-            self.client_options = client_options
-        else:
-            self.client_options = ClientOptions()
+        self.client_options = client_options or ClientOptions()
 
         self._last_trace_id = None
         self._last_fitted_train_set_id = None
@@ -336,14 +332,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             # - The user has not explicitly set a sentry-trace header.
             # - In any case if we're going to refit.
             # - In any case if we have already called .fit() on this instance.
-            # if (
-            #     self.force_refit
-            #     or self._fit_count > 0
-            #     or "sentry-trace" not in self.client_options.headers
-            # ):
-            #     self.client_options.headers["sentry-trace"] = uuid4().hex
+            if (
+                self.force_refit
+                or self._fit_count > 0
+                or "sentry-trace" not in self.client_options.headers
+            ):
+                self.client_options.headers["sentry-trace"] = uuid4().hex
 
-            # self._last_trace_id = self.client_options.headers["sentry-trace"]
+            self._last_trace_id = self.client_options.headers["sentry-trace"]
             self._last_train_set_description = description
 
             def fit_task() -> UUID:
