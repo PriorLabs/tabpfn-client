@@ -293,15 +293,19 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.thinking_timeout_s = thinking_timeout_s
         self.thinking_metric = thinking_metric
         self.force_refit = force_refit
-        self.client_options = client_options or ClientOptions()
 
-        self.last_trace_id = None
-        self.last_fitted_train_set_id = None
-        self.last_train_X = None
-        self.last_train_y = None
-        self.last_meta = {}
-        self.last_train_set_description = None
-        self.fit_count = 0
+        if client_options is not None:
+            self.client_options = client_options
+        else:
+            self.client_options = ClientOptions()
+
+        self._last_trace_id = None
+        self._last_fitted_train_set_id = None
+        self._last_train_X = None
+        self._last_train_y = None
+        self._last_meta = {}
+        self._last_train_set_description = None
+        self._fit_count = 0
 
     def fit(
         self,
@@ -332,15 +336,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             # - The user has not explicitly set a sentry-trace header.
             # - In any case if we're going to refit.
             # - In any case if we have already called .fit() on this instance.
-            if (
-                self.force_refit
-                or self.fit_count > 0
-                or "sentry-trace" not in self.client_options.headers
-            ):
-                self.client_options.headers["sentry-trace"] = uuid4().hex
+            # if (
+            #     self.force_refit
+            #     or self._fit_count > 0
+            #     or "sentry-trace" not in self.client_options.headers
+            # ):
+            #     self.client_options.headers["sentry-trace"] = uuid4().hex
 
-            self.last_trace_id = self.client_options.headers["sentry-trace"]
-            self.last_train_set_description = description
+            # self._last_trace_id = self.client_options.headers["sentry-trace"]
+            self._last_train_set_description = description
 
             def fit_task() -> UUID:
                 return InferenceClient.fit(
@@ -357,11 +361,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                     description=description,
                 )
 
-            self.last_fitted_train_set_id = cast(UUID, run_task(fit_task, "Fitting"))
-            self.last_train_X = X_clean
-            self.last_train_y = y
+            self._last_fitted_train_set_id = cast(UUID, run_task(fit_task, "Fitting"))
+            self._last_train_X = X_clean
+            self._last_train_y = y
             self.fitted_ = True
-            self.fit_count += 1
+            self._fit_count += 1
         else:
             raise NotImplementedError(
                 "Only server mode is supported at the moment for init(use_server=False)"
@@ -412,9 +416,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
         if (
             "sentry-trace" not in self.client_options.headers
-            and self.last_trace_id is not None
+            and self._last_trace_id is not None
         ):
-            self.client_options.headers["sentry-trace"] = self.last_trace_id
+            self.client_options.headers["sentry-trace"] = self._last_trace_id
 
         def predict_task() -> PredictionResult:
             last_exc = None
@@ -427,16 +431,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 try:
                     return InferenceClient.predict(
                         X_clean,
-                        fitted_train_set_id=cast(UUID, self.last_fitted_train_set_id),
+                        fitted_train_set_id=cast(UUID, self._last_fitted_train_set_id),
                         task_config=task_config,
                         client_options=self.client_options,
                     )
                 except NeedsRefittingError as exc:
                     last_exc = exc
                     refit_attempts += 1
-                    self.last_fitted_train_set_id = InferenceClient.fit(
-                        self.last_train_X,
-                        self.last_train_y,
+                    self._last_fitted_train_set_id = InferenceClient.fit(
+                        self._last_train_X,
+                        self._last_train_y,
                         task_config=task_config,
                         paper_version=self.paper_version,
                         thinking_mode=self.thinking_mode,
@@ -445,12 +449,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                         thinking_metric=self.thinking_metric,
                         force_refit=True,
                         client_options=self.client_options,
-                        description=self.last_train_set_description,
+                        description=self._last_train_set_description,
                     )
 
         result = run_task(predict_task, "Predicting")
         # Unpack and store metadata
-        self.last_meta = result.metadata
+        self._last_meta = result.metadata
 
         return result.y_pred
 
@@ -634,13 +638,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.force_refit = force_refit
         self.client_options = client_options or ClientOptions()
 
-        self.last_trace_id = None
-        self.last_fitted_train_set_id = None
-        self.last_train_X = None
-        self.last_train_y = None
-        self.last_meta = {}
-        self.last_train_set_description = None
-        self.fit_count = 0
+        self._last_trace_id = None
+        self._last_fitted_train_set_id = None
+        self._last_train_X = None
+        self._last_train_y = None
+        self._last_meta = {}
+        self._last_train_set_description = None
+        self._fit_count = 0
 
     def fit(
         self,
@@ -673,14 +677,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             # - In any case if we have already called .fit() on this instance.
             if (
                 self.force_refit
-                or self.fit_count > 0
+                or self._fit_count > 0
                 or "sentry-trace" not in self.client_options.headers
             ):
                 self.client_options.headers["sentry-trace"] = uuid4().hex
 
-            self.last_trace_id = self.client_options.headers["sentry-trace"]
+            self._last_trace_id = self.client_options.headers["sentry-trace"]
 
-            self.last_train_set_description = description
+            self._last_train_set_description = description
 
             def fit_task() -> UUID:
                 return InferenceClient.fit(
@@ -697,11 +701,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     description=description,
                 )
 
-            self.last_fitted_train_set_id = cast(UUID, run_task(fit_task, "Fitting"))
-            self.last_train_X = X_clean
-            self.last_train_y = y
+            self._last_fitted_train_set_id = cast(UUID, run_task(fit_task, "Fitting"))
+            self._last_train_X = X_clean
+            self._last_train_y = y
             self.fitted_ = True
-            self.fit_count += 1
+            self._fit_count += 1
         else:
             raise NotImplementedError(
                 "Only server mode is supported at the moment for init(use_server=False)"
@@ -756,9 +760,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
         if (
             "sentry-trace" not in self.client_options.headers
-            and self.last_trace_id is not None
+            and self._last_trace_id is not None
         ):
-            self.client_options.headers["sentry-trace"] = self.last_trace_id
+            self.client_options.headers["sentry-trace"] = self._last_trace_id
 
         def predict_task() -> PredictionResult:
             last_exc = None
@@ -771,16 +775,16 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                 try:
                     return InferenceClient.predict(
                         X_clean,
-                        fitted_train_set_id=cast(UUID, self.last_fitted_train_set_id),
+                        fitted_train_set_id=cast(UUID, self._last_fitted_train_set_id),
                         task_config=task_config,
                         client_options=self.client_options,
                     )
                 except NeedsRefittingError as exc:
                     last_exc = exc
                     refit_attempts += 1
-                    self.last_fitted_train_set_id = InferenceClient.fit(
-                        self.last_train_X,
-                        self.last_train_y,
+                    self._last_fitted_train_set_id = InferenceClient.fit(
+                        self._last_train_X,
+                        self._last_train_y,
                         task_config=task_config,
                         paper_version=self.paper_version,
                         thinking_mode=self.thinking_mode,
@@ -789,12 +793,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                         thinking_metric=self.thinking_metric,
                         force_refit=True,
                         client_options=self.client_options,
-                        description=self.last_train_set_description,
+                        description=self._last_train_set_description,
                     )
 
         result = run_task(predict_task, "Predicting")
         # Unpack and store metadata
-        self.last_meta = result.metadata
+        self._last_meta = result.metadata
 
         output = result.y_pred
         if output_type == "full":

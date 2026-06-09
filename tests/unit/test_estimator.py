@@ -20,6 +20,7 @@ from typing import (
 )
 import pytest
 from eval_type_backport import eval_type_backport
+from sklearn.utils.estimator_checks import check_estimator
 
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
 from tabpfn_client.api_models import (
@@ -145,3 +146,13 @@ def test_client_predict_params_include_server_predict_params(
             f"Default of `{param}` on {predict_fn.__qualname__}() is {default!r}, "
             f"but server-backed params must default to None."
         )
+
+
+@pytest.mark.parametrize(
+    "estimator",
+    [TabPFNClassifier],
+)
+def test_sklearn_compatible(
+    estimator: Type[TabPFNClassifier | TabPFNRegressor],
+):
+    check_estimator(estimator())
