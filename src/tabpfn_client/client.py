@@ -366,7 +366,7 @@ class ServiceClient(Singleton):
         )
         res = cls.httpx_client.post(
             url="/tabpfn/prepare_train_set_upload",
-            json=prepare_req.model_dump(mode="json"),
+            json=prepare_req.model_dump(mode="json", exclude_none=True),
             headers=client_options.headers,
         )
         prepare_resp = cast(
@@ -461,7 +461,7 @@ class ServiceClient(Singleton):
     ) -> httpx.Response:
         return cls.httpx_client.post(
             url="/tabpfn/fit",
-            json=req.model_dump(mode="json"),
+            json=req.model_dump(mode="json", exclude_none=True),
             headers=headers,
             timeout=timeout,
         )
@@ -528,7 +528,7 @@ class ServiceClient(Singleton):
         )
         res = cls.httpx_client.post(
             url="/tabpfn/prepare_test_set_upload",
-            json=prepare_req.model_dump(mode="json"),
+            json=prepare_req.model_dump(mode="json", exclude_none=True),
             headers=client_options.headers,
         )
         prepare_resp = cast(
@@ -591,7 +591,7 @@ class ServiceClient(Singleton):
 
         return PredictionResult(
             y_pred=result,
-            metadata=predict_resp.metadata.model_dump(mode="json"),
+            metadata=predict_resp.metadata.model_dump(mode="json", exclude_none=True),
         )
 
     @classmethod
@@ -619,7 +619,7 @@ class ServiceClient(Singleton):
     ) -> httpx.Response:
         return cls.httpx_client.post(
             url="/tabpfn/predict",
-            json=req.model_dump(mode="json"),
+            json=req.model_dump(mode="json", exclude_none=True),
             headers=headers,
             timeout=timeout,
         )
