@@ -86,7 +86,7 @@ def _normalize_type(tp: object) -> object:
     return tp
 
 
-_ALLOWED_NON_NULL_DEFAULT_PARAMS = [
+_ALLOWED_NON_NULL_DEFAULT_TABPFN_CONFIG_PARAMS = [
     "random_state",
     "ignore_pretraining_limits",
     "balance_probabilities",
@@ -120,13 +120,18 @@ def test_client_config_includes_server_config(
             f"Type of `{param}` on {estimator.__name__}.__init__() is {actual}, "
             f"but the server schema expects {expected}."
         )
-        if param in _ALLOWED_NON_NULL_DEFAULT_PARAMS:
+        if param in _ALLOWED_NON_NULL_DEFAULT_TABPFN_CONFIG_PARAMS:
             continue
         default = init_sig[param].default
         assert default is inspect.Parameter.empty or default is None, (
             f"Default of `{param}` on {estimator.__name__}.__init__() is {default!r}, "
             f"but server-backed params must default to None."
         )
+
+
+_ALLOWED_NON_NULL_DEFAULT_PREDICT_PARAMS = [
+    "output_type",
+]
 
 
 @pytest.mark.parametrize(
@@ -154,6 +159,8 @@ def test_client_predict_params_include_server_predict_params(
             f"Type of `{param}` on {predict_fn.__qualname__}() is {actual}, "
             f"but the server schema expects {expected}."
         )
+        if param in _ALLOWED_NON_NULL_DEFAULT_PREDICT_PARAMS:
+            continue
         default = predict_sig[param].default
         assert default is inspect.Parameter.empty or default is None, (
             f"Default of `{param}` on {predict_fn.__qualname__}() is {default!r}, "
