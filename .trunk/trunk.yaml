@@ -1,0 +1,86 @@
+# Reference: https://docs.trunk.io/reference/trunk-yaml
+version: 0.1
+cli:
+  version: 1.25.0
+
+plugins:
+  sources:
+    - id: trunk
+      ref: v1.7.3
+      uri: https://github.com/trunk-io/plugins
+
+lint:
+  enabled:
+    # Make sure versions are compatible by looking at "known_good_version"
+    # in the corresponding plugin.yaml file: https://github.com/trunk-io/plugins/blob/main/linters/
+    # Python
+    - basedpyright
+    - ruff_ # avoid conflict with official plugin
+  ignore:
+    - linters: [ruff_]
+      paths:
+        - "src/tabpfn_client/api_models.py"
+    - linters: [ALL]
+      paths:
+        - "**/*.ipynb"
+        - .trunk/scripts/**
+        - "examples/**"
+  definitions:
+    - name: ruff_
+      files: [python, python-interface, jupyter]
+      commands:
+        - name: lint
+          # As of ruff v0.6.0, ruff runs by default on jupyter notebooks
+          version: ">=0.6.0"
+          files: [python, python-interface, jupyter]
+          run: ruff check --cache-dir ${cachedir} --output-format json ${target}
+          output: sarif
+          parser:
+            run: ${workspace}/.venv/bin/python3 ${workspace}/.trunk/scripts/ruff_to_sarif.py 0
+          batch: true
+          success_codes: [0, 1]
+          formatter: true
+        - name: format
+          files: [python, python-interface]
+          run: ruff format ${target}
+          output: rewrite
+          batch: true
+          success_codes: [0]
+          in_place: true
+          formatter: true
+          allow_empty_files: false
+          cache_results: true
+      affects_cache:
+        - pyproject.toml
+      direct_configs:
+        - ruff.toml
+      environment:
+        - name: PYTHONPATH
+          value: ${workspace}/src
+        - name: PATH
+          list: ["${workspace}/.venv/bin"]
+    - name: basedpyright
+      files: [python]
+      commands:
+        - name: lint
+          output: sarif
+          run: basedpyright --outputjson ${target}
+          success_codes: [0, 1]
+          read_output_from: stdout
+          batch: true
+          cache_results: false
+          parser:
+            run: ${workspace}/.venv/bin/python3 ${workspace}/.trunk/scripts/pyright_to_sarif.py
+      affects_cache:
+        - pyproject.toml
+      direct_configs:
+        - pyrightconfig.json
+      environment:
+        - name: PYTHONPATH
+          value: ${workspace}/src
+        - name: PATH
+          list: ["${workspace}/.venv/bin"]
+
+# https://docs.trunk.io/cli/configuration/tools#package-based-tools
+tools:
+  auto_sync: true # whether shims should be hot-reloaded off config changes.

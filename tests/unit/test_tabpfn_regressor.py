@@ -1,6 +1,8 @@
 import time
 import unittest
+from typing import Any, cast
 from unittest.mock import patch
+from uuid import UUID
 import sys
 import types
 import builtins
@@ -23,6 +25,7 @@ from tabpfn_client.client import (
     PredictionResult,
     ServiceClient,
 )
+from tabpfn_client.api_models import RegressorTabPFNConfig
 
 
 def _model_limits_payload(
@@ -32,7 +35,7 @@ def _model_limits_payload(
     max_classes=10,
     max_rows=None,
     test_max_cells=None,
-):
+) -> dict[str, Any]:
     max_rows = max_cells if max_rows is None else max_rows
     test_max_cells = max_cells if test_max_cells is None else test_max_cells
     model_limit = {
@@ -61,8 +64,9 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         ServiceClient.reset_authorization()
         ServiceClient._model_limits = None
         X, y = load_diabetes(return_X_y=True)
-        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
-            X, y, test_size=0.33
+        self.X_train, self.X_test, self.y_train, self.y_test = cast(
+            "tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]",
+            train_test_split(X, y, test_size=0.33),
         )
 
     def tearDown(self):
@@ -124,7 +128,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
                 "metadata": {
                     "task": "regression",
                     "package_version": "0.3.0rc1",
-                    "tabpfn_config": None,
+                    "tabpfn_config": {},
                     "test_set_num_rows": len(self.X_test),
                     "test_set_num_cols": self.X_test.shape[1],
                 },
@@ -296,7 +300,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
                 "metadata": {
                     "task": "regression",
                     "package_version": "0.3.0rc1",
-                    "tabpfn_config": None,
+                    "tabpfn_config": {},
                     "test_set_num_rows": 5,
                     "test_set_num_cols": 5,
                 },
@@ -457,26 +461,17 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
     def test_only_allowed_parameters_passed_to_config(self):
         """Test that only allowed parameters are passed to the config."""
-        ALLOWED_PARAMS = {
-            "n_estimators",
-            # TODO: put it back
-            # "categorical_features_indices",
-            "softmax_temperature",
-            "average_before_softmax",
-            "ignore_pretraining_limits",
-            "inference_precision",
-            "random_state",
-            "inference_config",
-            "model_path",
+        # The server-side tabpfn_config is a typed RegressorTabPFNConfig, so the
+        # set of allowed parameters is exactly its model fields. Client-only knobs
+        # such as paper_version and the thinking_* params are forwarded as separate
+        # top-level fit arguments and must not leak into tabpfn_config.
+        ALLOWED_PARAMS = set(RegressorTabPFNConfig.model_fields)
+        LEAKED_PARAMS = {
             "paper_version",
             "thinking_mode",
             "thinking_effort",
             "thinking_timeout_s",
             "thinking_metric",
-        }
-        OPTIONAL_PARAMS = {
-            "thinking",
-            "thinking_params",
         }
 
         # Create regressor with various parameters
@@ -489,7 +484,9 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
         # Skip fitting
         regressor.fitted_ = True
-        regressor.last_fitted_train_set_id = "dummy_uid"
+        regressor._last_fitted_train_set_id = UUID(
+            "00000000-0000-0000-0000-000000000000"
+        )
 
         test_X = np.random.randn(10, 5)
 
@@ -501,11 +498,12 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             regressor.predict(test_X)
 
             # Get the config that was passed to predict
-            actual_config = mock_predict.call_args[1]["tabpfn_config"]
+            task_config = mock_predict.call_args[1]["task_config"]
+            actual_config = task_config.tabpfn_config.model_dump()
 
-            # Check that only allowed parameters are present
+            # Check that exactly the allowed parameters are present
             config_params = set(actual_config.keys())
-            unexpected_params = config_params - (ALLOWED_PARAMS | OPTIONAL_PARAMS)
+            unexpected_params = config_params - ALLOWED_PARAMS
             missing_required_params = ALLOWED_PARAMS - config_params
 
             self.assertEqual(
@@ -517,6 +515,11 @@ class TestTabPFNRegressorInference(unittest.TestCase):
                 missing_required_params,
                 set(),
                 f"Missing required parameters in config: {missing_required_params}",
+            )
+            self.assertEqual(
+                config_params & LEAKED_PARAMS,
+                set(),
+                "Client-only params leaked into the server-side tabpfn_config",
             )
 
     def test_predict_params_output_type(self):
@@ -532,8 +535,9 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             )
             regressor.predict(test_X)
 
-            predict_params = mock_predict.call_args[1]["predict_params"]
-            self.assertEqual(predict_params, {"output_type": "mean", "quantiles": None})
+            predict_params = mock_predict.call_args[1]["task_config"].predict_params
+            self.assertEqual(predict_params.output_type, "mean")
+            self.assertIsNone(predict_params.quantiles)
 
         # Test predict() with quantiles
         with patch.object(InferenceClient, "predict") as mock_predict:
@@ -543,17 +547,18 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             quantiles = [0.1, 0.5, 0.9]
             regressor.predict(test_X, output_type="quantiles", quantiles=quantiles)
 
-            predict_params = mock_predict.call_args[1]["predict_params"]
-            self.assertEqual(
-                predict_params, {"output_type": "quantiles", "quantiles": quantiles}
-            )
+            predict_params = mock_predict.call_args[1]["task_config"].predict_params
+            self.assertEqual(predict_params.output_type, "quantiles")
+            self.assertEqual(predict_params.quantiles, quantiles)
 
     def test_predict_full_adds_criterion_with_optional_dependencies(self):
         regressor = TabPFNRegressor()
         regressor.fitted_ = True
-        regressor.last_fitted_train_set_id = "dummy_uid"
-        regressor.last_train_X = np.random.randn(5, 2)
-        regressor.last_train_y = np.random.randn(5)
+        regressor._last_fitted_train_set_id = UUID(
+            "00000000-0000-0000-0000-000000000000"
+        )
+        regressor._last_train_X = np.random.randn(5, 2)
+        regressor._last_train_y = np.random.randn(5)
 
         test_X = np.random.randn(3, 2)
         dummy_output = {"borders": [0.0, 1.0], "mean": np.random.randn(3)}
@@ -564,11 +569,15 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
         module_tabpfn = types.ModuleType("tabpfn")
         module_regressor = types.ModuleType("tabpfn.regressor")
-        module_regressor.FullSupportBarDistribution = DummyFullSupportBarDistribution
-        module_tabpfn.regressor = module_regressor
+        setattr(
+            module_regressor,
+            "FullSupportBarDistribution",
+            DummyFullSupportBarDistribution,
+        )
+        setattr(module_tabpfn, "regressor", module_regressor)
 
         module_torch = types.ModuleType("torch")
-        module_torch.tensor = lambda borders: borders
+        setattr(module_torch, "tensor", lambda borders: borders)
 
         with patch.dict(
             sys.modules,
@@ -580,9 +589,12 @@ class TestTabPFNRegressorInference(unittest.TestCase):
         ):
             with patch.object(InferenceClient, "predict") as mock_predict:
                 mock_predict.return_value = PredictionResult(
-                    y_pred=dummy_output.copy(), metadata={}
+                    y_pred=cast(Any, dummy_output.copy()), metadata={}
                 )
-                output = regressor.predict(test_X, output_type="full")
+                output = cast(
+                    "dict[str, Any]",
+                    regressor.predict(test_X, output_type="full"),
+                )
 
         self.assertIn("criterion", output)
         self.assertIsInstance(output["criterion"], DummyFullSupportBarDistribution)
@@ -591,16 +603,18 @@ class TestTabPFNRegressorInference(unittest.TestCase):
     def test_predict_full_missing_optional_dependencies_logs_warning(self):
         regressor = TabPFNRegressor()
         regressor.fitted_ = True
-        regressor.last_fitted_train_set_id = "dummy_uid"
-        regressor.last_train_X = np.random.randn(5, 2)
-        regressor.last_train_y = np.random.randn(5)
+        regressor._last_fitted_train_set_id = UUID(
+            "00000000-0000-0000-0000-000000000000"
+        )
+        regressor._last_train_X = np.random.randn(5, 2)
+        regressor._last_train_y = np.random.randn(5)
 
         test_X = np.random.randn(3, 2)
         dummy_output = {"borders": [0.0, 1.0], "mean": np.random.randn(3)}
 
         with patch.object(InferenceClient, "predict") as mock_predict:
             mock_predict.return_value = PredictionResult(
-                y_pred=dummy_output.copy(), metadata={}
+                y_pred=cast(Any, dummy_output.copy()), metadata={}
             )
 
             original_import = builtins.__import__
@@ -743,7 +757,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
             # Verify DataFrame wasn't modified
             pd.testing.assert_frame_equal(
-                df, df_copy, "Input DataFrame was modified during prediction"
+                df, df_copy, obj="Input DataFrame was modified during prediction"
             )
 
             # Verify predictions are returned as expected
@@ -752,7 +766,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             # Test that column order doesn't matter
             shuffled_columns = list(df.columns)
             np.random.shuffle(shuffled_columns)
-            df_shuffled = df[shuffled_columns]
+            df_shuffled = cast(pd.DataFrame, df[shuffled_columns])
             df_shuffled_copy = df_shuffled.copy()
 
             # Test predict with shuffled columns
@@ -765,7 +779,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             pd.testing.assert_frame_equal(
                 df_shuffled,
                 df_shuffled_copy,
-                "Shuffled DataFrame was modified during prediction",
+                obj="Shuffled DataFrame was modified during prediction",
             )
 
             # Verify predictions match regardless of column order
@@ -939,7 +953,8 @@ class TestTabPFNModelSelection(unittest.TestCase):
                 expected_model_path = "tabpfn-v2-regressor-2noar4o2.ckpt"
 
                 self.assertEqual(
-                    predict_kwargs["tabpfn_config"]["model_path"], expected_model_path
+                    predict_kwargs["task_config"].tabpfn_config.model_path,
+                    expected_model_path,
                 )
 
     @patch.object(InferenceClient, "fit", return_value="dummy_uid")

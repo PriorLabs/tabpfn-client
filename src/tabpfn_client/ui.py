@@ -6,7 +6,7 @@ import logging
 import os
 import sys
 from contextlib import contextmanager
-from typing import Iterator, List
+from typing import Iterator
 
 from rich.console import Console
 from rich.logging import RichHandler
@@ -18,18 +18,6 @@ from rich.progress import (
     TextColumn,
     TimeElapsedColumn,
 )
-
-
-def _collect_suppressed_modules() -> List[object]:
-    suppressed: List[object] = []
-    for name in ("typer", "click", "rich"):
-        try:
-            module = __import__(name)
-        except ModuleNotFoundError:
-            continue
-        else:
-            suppressed.append(module)
-    return suppressed
 
 
 def _should_use_color() -> bool:
@@ -63,7 +51,7 @@ def setup_logging(verbosity: int = 0) -> None:
     )
 
 
-def header(title: str, subtitle: str = None) -> None:
+def header(title: str, subtitle: str | None = None) -> None:
     """Render a section header."""
 
     console.print(

@@ -1,0 +1,29 @@
+{
+  "include": ["src"],
+  "exclude": [
+    "**/__pycache__",
+    "experiments_*",
+    "tmp",
+    ".venv",
+    "src/tabpfn_client/api_models.py"
+  ],
+  "extraPaths": [
+    "./.venv/lib/*/site-packages"
+  ],
+  "pythonVersion": "3.9",
+  "typeCheckingMode": "strict",
+  "reportPossiblyUnboundVariable": true,
+  "reportUnusedFunction": true,
+  // Disable
+  "reportWildcardImportFromLibrary": false,
+  "reportUnknownVariableType": false,
+  "reportUnknownMemberType": false,
+  "reportUnknownArgumentType": false,
+  "reportUnknownParameterType": false,
+  "reportUnknownLambdaType": false,
+  "reportMissingTypeStubs": false,
+  "reportMissingParameterType": false,
+  "reportMissingTypeArgument": false,
+  "reportPrivateUsage": false,
+  "reportUntypedFunctionDecorator": false,
+}

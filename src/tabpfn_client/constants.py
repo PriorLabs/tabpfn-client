@@ -7,6 +7,7 @@ import logging
 from enum import Enum
 from functools import cache
 from pathlib import Path
+from typing import Any
 from tabpfn_client.api_models import ModelLimit
 
 logger = logging.getLogger(__name__)
@@ -19,7 +20,7 @@ class ModelVersion(str, Enum):
     V2_6 = "v2.6"
     V3 = "v3"
 
-    def model_limit(self, model_limits: dict[str, ModelLimit]) -> ModelLimit:
+    def model_limit(self, model_limits: dict[Any, ModelLimit]) -> ModelLimit:
         """Resolve limit of a model to the same or closest previous version limit.
 
         Raises:

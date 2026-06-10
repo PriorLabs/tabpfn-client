@@ -1,22 +1,23 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
 
+from __future__ import annotations
+
 from threading import Event
 import http.server
 import socketserver
 import webbrowser
 import urllib.parse
-from typing import Optional, Tuple
 
 
 class BrowserAuthHandler:
     def __init__(self, gui_url: str):
         self.gui_url = gui_url
 
-    def try_browser_login(self) -> Tuple[bool, Optional[str]]:
+    def try_browser_login(self) -> tuple[bool, str | None]:
         """
         Attempts to perform browser-based login
-        Returns (success: bool, token: Optional[str])
+        Returns (success: bool, token: str | None)
         """
         auth_event = Event()
         received_token = None

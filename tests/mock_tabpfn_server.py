@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import respx
 from contextlib import AbstractContextManager
 
@@ -9,7 +11,7 @@ class MockTabPFNServer(AbstractContextManager):
         self.server_config = SERVER_CONFIG
         self.endpoints = self.server_config.endpoints
         self.base_url = f"{self.server_config.protocol}://{self.server_config.host}:{self.server_config.port}"
-        self.router = None
+        self.router: respx.MockRouter | None = None
 
     def __enter__(self):
         self.router = respx.mock(base_url=self.base_url, assert_all_called=True)
@@ -17,6 +19,7 @@ class MockTabPFNServer(AbstractContextManager):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        assert self.router is not None
         self.router.stop()
 
 

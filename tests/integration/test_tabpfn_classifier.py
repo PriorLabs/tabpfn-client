@@ -1,4 +1,5 @@
 import unittest
+from typing import cast
 
 from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
@@ -13,8 +14,9 @@ from tabpfn_client.service_wrapper import UserAuthenticationClient
 class TestTabPFNClassifier(unittest.TestCase):
     def setUp(self):
         X, y = load_breast_cancer(return_X_y=True)
-        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
-            X, y, test_size=0.33, random_state=42
+        self.X_train, self.X_test, self.y_train, self.y_test = cast(
+            "tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]",
+            train_test_split(X, y, test_size=0.33, random_state=42),
         )
 
     def tearDown(self):
@@ -69,7 +71,7 @@ class TestTabPFNClassifier(unittest.TestCase):
                 "metadata": {
                     "task": "classification",
                     "package_version": "0.3.0rc1",
-                    "tabpfn_config": None,
+                    "tabpfn_config": {},
                     "test_set_num_rows": len(self.X_test),
                     "test_set_num_cols": self.X_test.shape[1],
                 },

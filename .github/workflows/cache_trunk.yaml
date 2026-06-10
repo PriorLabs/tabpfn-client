@@ -1,0 +1,23 @@
+# https://github.com/trunk-io/trunk-action?tab=readme-ov-file#caching
+name: cache_trunk
+
+on:
+  push:
+    branches: [main]
+    paths: [.trunk/trunk.yaml]
+
+permissions: read-all
+
+jobs:
+  cache_trunk:
+    name: Cache Trunk
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Trunk Populate Cache
+        uses: trunk-io/trunk-action@04ba50e7658c81db7356da96657e6e77f220bfa3 # v1.3.1
+        with:
+          check-mode: populate_cache_only
