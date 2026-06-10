@@ -722,7 +722,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
     def predict(
         self,
         X: pd.DataFrame | np.ndarray,
-        output_type: Literal["mean", "median", "mode", "quantiles", "full", "main"] = "mean",
+        output_type: Literal[
+            "mean", "median", "mode", "quantiles", "full", "main"
+        ] = "mean",
         quantiles: list[float] | None = None,
     ) -> np.ndarray | list[np.ndarray] | dict[str, np.ndarray]:
         """Predict regression target for X.
