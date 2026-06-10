@@ -86,6 +86,13 @@ def _normalize_type(tp: object) -> object:
     return tp
 
 
+_ALLOWED_NON_NULL_DEFAULT_PARAMS = [
+    "random_state",
+    "ignore_pretraining_limits",
+    "balance_probabilities",
+]
+
+
 @pytest.mark.parametrize(
     "estimator, config_model",
     [
@@ -113,6 +120,8 @@ def test_client_config_includes_server_config(
             f"Type of `{param}` on {estimator.__name__}.__init__() is {actual}, "
             f"but the server schema expects {expected}."
         )
+        if param in _ALLOWED_NON_NULL_DEFAULT_PARAMS:
+            continue
         default = init_sig[param].default
         assert default is inspect.Parameter.empty or default is None, (
             f"Default of `{param}` on {estimator.__name__}.__init__() is {default!r}, "

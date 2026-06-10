@@ -171,15 +171,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self,
         # start: tabpfn_config
         model_path: str | None = None,
-        categorical_features_indices: list[int] | None = None,
         n_estimators: int | None = None,
         softmax_temperature: float | None = None,
-        balance_probabilities: bool | None = None,
+        balance_probabilities: bool = False,
         average_before_softmax: bool | None = None,
-        ignore_pretraining_limits: bool | None = None,
+        ignore_pretraining_limits: bool = False,
         inference_precision: Literal["autocast", "auto"] | None = None,
-        random_state: int | None = None,
+        random_state: int | None = 0,
         inference_config: dict[str, Any] | None = None,
+        categorical_features_indices: list[int] | None = None,
         # end: tabpfn_config
         paper_version: bool = False,
         thinking_mode: bool = False,
@@ -240,6 +240,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             Additional advanced arguments for model interface. See the doc of InferenceConfig
             in the tabpfn package for more details. For the client, the inference_config and the
             preprocess transforms need to be dictionaries.
+        categorical_features_indices: list[int] or None, default=None
+            The indices of the columns that should be treated as categorical.
+            If None, the model infers which columns are categorical.
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
@@ -276,6 +279,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 "roc_auc_ovr_micro", "roc_auc_ovr_weighted".
 
             Aliases "acc", "nll", "pac_score" are also accepted.
+        force_refit: bool, default=False
+            Whether to force refit the model even if the model has already been fitted.
+        client_options : ClientOptions, default=None
+            Client specific options (e.g. timeout, headers).
         """
         self.model_path = model_path
         self.categorical_features_indices = categorical_features_indices
@@ -524,14 +531,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self,
         # start: tabpfn_config
         model_path: str | None = None,
-        categorical_features_indices: list[int] | None = None,
         n_estimators: int | None = None,
         softmax_temperature: float | None = None,
         average_before_softmax: bool | None = None,
-        ignore_pretraining_limits: bool | None = None,
+        ignore_pretraining_limits: bool = False,
         inference_precision: Literal["autocast", "auto"] | None = None,
-        random_state: int | None = None,
+        random_state: int | None = 0,
         inference_config: dict[str, Any] | None = None,
+        categorical_features_indices: list[int] | None = None,
         # end: tabpfn_config
         paper_version: bool = False,
         thinking_mode: bool = False,
@@ -584,6 +591,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             Additional advanced arguments for model interface. See the doc of InferenceConfig
             in the tabpfn package for more details. For the client, the inference_config and the
             preprocess transforms need to be dictionaries.
+        categorical_features_indices: list[int] or None, default=None
+            The indices of the columns that should be treated as categorical.
+            If None, the model infers which columns are categorical.
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
