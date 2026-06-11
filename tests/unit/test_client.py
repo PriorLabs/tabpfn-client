@@ -260,6 +260,7 @@ class TestServiceClient(unittest.TestCase):
         self.assertEqual(
             fitted_train_set_id, UUID("00000000-0000-0000-0000-000000000002")
         )
+        assert isinstance(pred.y_pred, np.ndarray)
         self.assertTrue(np.array_equal(pred.y_pred, [1, 0, 1]))
         self.assertEqual(pred.metadata["task"], "classification")
         self.assertEqual(mock_upload.call_count, 3)
@@ -399,6 +400,8 @@ class TestServiceClient(unittest.TestCase):
                 task_config=ClassifierConfig(),
             )
 
+        assert isinstance(pred_1.y_pred, np.ndarray)
+        assert isinstance(pred_2.y_pred, np.ndarray)
         self.assertTrue(np.array_equal(pred_1.y_pred, pred_2.y_pred))
         self.assertEqual(prepare_route.call_count, 2)
         self.assertEqual(predict_route.call_count, 2)

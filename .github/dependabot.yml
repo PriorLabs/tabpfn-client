@@ -12,7 +12,6 @@ updates:
           - "ruff"
       test-dependencies:
         patterns:
-          - "scikit-learn"
           - "respx"
 
   # GitHub Actions
