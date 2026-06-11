@@ -15,11 +15,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            python-version: "3.9"
+            python-version: "3.10"
             dependency-set: minimum
           - os: macos-15-intel # We need x86 as ARM is python>= 3.11 only.
             # https://github.com/actions/setup-python/issues/855
-            python-version: "3.9"
+            python-version: "3.10"
             dependency-set: minimum
           - os: ubuntu-latest
             python-version: "3.13"
@@ -83,7 +83,7 @@ jobs:
         run: git submodule update --init --recursive
 
       - name: Check for forbidden licenses
-        if: runner.os == 'macOS' && matrix.python-version == '3.9'
+        if: runner.os == 'macOS' && matrix.python-version == '3.10'
         run: |
           licensecheck \
             --requirements-paths pyproject.toml \

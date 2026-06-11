@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "tabpfn-client"
 version = "0.3.1"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 
 description = "API access for TabPFN: Foundation model for tabular data"
 classifiers = [
@@ -19,7 +19,6 @@ classifiers = [
   'Operating System :: Unix',
   'Operating System :: MacOS',
   'Programming Language :: Python :: 3',
-  'Programming Language :: Python :: 3.9',
   'Programming Language :: Python :: 3.10',
   'Programming Language :: Python :: 3.11',
   'Programming Language :: Python :: 3.12',
@@ -32,7 +31,7 @@ dependencies = [
     "pandas>=2.1.2,<=2.3.3",
     "password-strength>=0.0.3.post2,<=0.0.3.post2",
     "pydantic>=2.11.7,<=2.13.4",
-    "scikit-learn>=1.3.1,<=1.6.1",
+    "scikit-learn>=1.3.1,<=1.9.0",
     "sseclient-py>=1.8.0,<=1.9.0",
     "tqdm>=4.63.0,<=4.67.3",
     "typing_extensions>=4.12.2,<=4.15.0",
@@ -42,7 +41,6 @@ dependencies = [
     "tabpfn-common-utils>=0.2.10,<=0.2.19",
     "google-crc32c>=1.5.0,<=1.8.0",
     "pyarrow>=14.0.0,<=23.0.1",
-    "eval-type-backport>=0.3.1,<=0.4.0",
 ]
 
 [project.optional-dependencies]

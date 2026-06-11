@@ -10,7 +10,7 @@
   "extraPaths": [
     "./.venv/lib/*/site-packages"
   ],
-  "pythonVersion": "3.9",
+  "pythonVersion": "3.10",
   "typeCheckingMode": "strict",
   "reportPossiblyUnboundVariable": true,
   "reportUnusedFunction": true,

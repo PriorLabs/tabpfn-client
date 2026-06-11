@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import inspect
-import sys
 import types
-import typing
 from enum import Enum
 from typing import (
     Annotated,
@@ -20,7 +18,6 @@ from uuid import UUID
 
 import numpy as np
 import pytest
-from eval_type_backport import eval_type_backport
 from sklearn.utils.estimator_checks import check_estimator
 
 from tabpfn_client import estimator as estimator_module
@@ -35,33 +32,6 @@ from tabpfn_client.api_models import (
     UnknownEnum,
 )
 
-# ``types.UnionType`` (the ``X | Y`` form) only exists on Python 3.10+; fall back
-# to an empty tuple so ``isinstance(..., _UNION_TYPES)`` is a no-op on 3.9.
-_UNION_TYPE = getattr(types, "UnionType", ())
-
-
-def _resolve_hints(fn: Callable) -> dict:
-    """Like ``typing.get_type_hints`` but works on Python < 3.10.
-
-    The estimators use ``from __future__ import annotations``, so their PEP 604
-    ``X | Y`` annotations are stored as strings. ``get_type_hints`` evaluates
-    them, which raises ``TypeError`` on 3.9 where ``|`` is unsupported between
-    types. In that case we resolve each annotation through ``eval-type-backport``
-    (already a runtime dependency), which rewrites ``X | Y`` into ``Union[X, Y]``.
-    """
-    try:
-        return get_type_hints(fn)
-    except TypeError:
-        globalns = getattr(sys.modules.get(fn.__module__, None), "__dict__", {})
-        return {
-            name: (
-                eval_type_backport(typing.ForwardRef(ann), globalns, None)
-                if isinstance(ann, str)
-                else ann
-            )
-            for name, ann in getattr(fn, "__annotations__", {}).items()
-        }
-
 
 def _normalize_type(tp: object) -> object:
     """Reduce a type hint to a comparable core: unwrap ``Annotated[T, ...]`` and
@@ -69,7 +39,7 @@ def _normalize_type(tp: object) -> object:
     compare equal to the estimator's concrete ``X`` params."""
     if get_origin(tp) is Annotated:
         tp = get_args(tp)[0]
-    if get_origin(tp) is Union or isinstance(tp, _UNION_TYPE):
+    if get_origin(tp) is Union or isinstance(tp, types.UnionType):
         args = [a for a in get_args(tp) if a is not type(None)]
         # Special case: a two-element ``Leading | Fallback`` union where the
         # trailing member is only a permissive fallback (used on the server with
@@ -108,7 +78,7 @@ def test_client_config_includes_server_config(
     init_params = set(init_sig) - {"self"}
     # Resolve stringized annotations (the estimator uses `from __future__ import
     # annotations`, so raw signature annotations are str, not types).
-    init_hints = _resolve_hints(estimator.__init__)
+    init_hints = get_type_hints(estimator.__init__)
 
     for param, field in config_model.model_fields.items():
         assert param in init_params, (
@@ -147,7 +117,7 @@ def test_client_predict_params_include_server_predict_params(
 ):
     predict_sig = inspect.signature(predict_fn).parameters
     predict_params = set(predict_sig) - {"self"}
-    predict_hints = _resolve_hints(predict_fn)
+    predict_hints = get_type_hints(predict_fn)
 
     for param, field in predict_params_model.model_fields.items():
         assert param in predict_params, (
@@ -224,8 +194,8 @@ class _FakeInferenceServer:
 
 
 # `expected_failed_checks` was added to `check_estimator` in scikit-learn 1.6.
-# Older versions (e.g. the build pinned on Python 3.9) don't accept it and have
-# no equivalent way to express expected failures, so we skip there.
+# Older versions (e.g. the minimum-supported scikit-learn) don't accept it and
+# have no equivalent way to express expected failures, so we skip there.
 _SUPPORTS_EXPECTED_FAILED_CHECKS = (
     "expected_failed_checks" in inspect.signature(check_estimator).parameters
 )
