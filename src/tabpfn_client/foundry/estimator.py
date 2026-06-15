@@ -133,6 +133,23 @@ class _FoundryBase(BaseEstimator):
             "Accept": "application/json",
         }
 
+    def _http_client(self) -> httpx.Client:
+        # Cache the httpx.Client so repeated predict* calls reuse the TCP /
+        # TLS connection (keep-alive) instead of redoing the handshake on
+        # every request.
+        client = getattr(self, "_cached_client", None)
+        if client is not None:
+            return client
+        client = httpx.Client(timeout=self.timeout_s)
+        self._cached_client = client
+        return client
+
+    def __getstate__(self) -> Dict[str, Any]:
+        # httpx.Client isn't pickleable; strip the cache for sklearn pickling.
+        state = self.__dict__.copy()
+        state.pop("_cached_client", None)
+        return state
+
     def fit(self, X: Any, y: Any) -> "_FoundryBase":
         X_arr = X if isinstance(X, pd.DataFrame) else np.asarray(X)
         y_arr = y if isinstance(y, (pd.DataFrame, pd.Series)) else np.asarray(y)
@@ -145,6 +162,8 @@ class _FoundryBase(BaseEstimator):
         self.X_train_ = X_arr
         self.y_train_ = y_arr
         self._cached_model_id: Optional[str] = None
+        if self._task == "classification":
+            self.classes_ = np.unique(y_arr)
         return self
 
     def _invoke(
@@ -166,11 +185,10 @@ class _FoundryBase(BaseEstimator):
             y_train=self.y_train_,
             cached_model_id=self._cached_model_id if self.use_kv_cache else None,
         )
-        resp = httpx.post(
+        resp = self._http_client().post(
             self.endpoint_url,
             json=body,
             headers=self._headers(),
-            timeout=self.timeout_s,
         )
         resp.raise_for_status()
         payload = resp.json()
