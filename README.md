@@ -163,6 +163,49 @@ clf = TabPFNClassifier(
 
 The first `predict*` call after `fit()` runs the fit on the endpoint and can take from tens of seconds up to several minutes depending on `thinking_effort` and data size; the fitted model is cached on the endpoint and subsequent calls are fast. Caching is **required** when thinking is enabled (the client sets `use_kv_cache=True` automatically) — without it every prediction would redo the fit, which would exceed SageMaker's synchronous invoke window. Only `thinking_effort="medium"` is reliable within the real-time endpoint's ~60 s sync window for the *first* call; `"high"` may exceed it and is currently best-effort.
 
+## Azure AI Foundry
+
+If you've deployed TabPFN to an Azure AI Foundry managed online endpoint, you can invoke it through `tabpfn_client.foundry` using the same scikit-learn surface. There is no PriorLabs API token in this path — you authenticate against your own Foundry endpoint with its bearer key, and `predict` calls are billed by Azure rather than against your TabPFN usage allowance.
+
+Point the estimator at your endpoint URL and pass the bearer key:
+
+```python
+from tabpfn_client.foundry import TabPFNClassifier, TabPFNRegressor
+from sklearn.datasets import load_breast_cancer
+from sklearn.model_selection import train_test_split
+
+X, y = load_breast_cancer(return_X_y=True)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.5, random_state=42)
+
+clf = TabPFNClassifier(
+    endpoint_url="https://<your-endpoint>.<region>.inference.ml.azure.com/predict",
+    api_key="<your-foundry-bearer-token>",
+)
+clf.fit(X_train, y_train)
+clf.predict(X_test)
+clf.predict_proba(X_test)
+```
+
+Notes:
+
+- `endpoint_url` is the full Foundry scoring URL, including the `/predict` path. The bearer key is sent as `Authorization: Bearer <api_key>`.
+- Requests are sent as `application/json`; the Foundry path does not use multipart, so all data travels JSON-encoded.
+
+Set `use_kv_cache=True` if you will call `predict*` more than once on the same training data. The first call ships `X_train` / `y_train` to the endpoint, runs the fit there, and gets back a `model_id`. The client caches that id, and every subsequent call sends only `X_test` plus the id — the server **skips the fit and runs inference only**. That makes follow-up calls dramatically faster on non-trivial training sets, and shrinks the wire payload from O(n_train + n_test) down to O(n_test):
+
+```python
+clf = TabPFNClassifier(
+    endpoint_url="https://<your-endpoint>.<region>.inference.ml.azure.com/predict",
+    api_key="<your-foundry-bearer-token>",
+    use_kv_cache=True,
+)
+clf.fit(X_train, y_train)
+clf.predict(X_test_a)          # first call: fit + predict on the endpoint
+clf.predict_proba(X_test_b)    # cache hit: predict only — much faster
+```
+
+Leave `use_kv_cache=False` (the default) when each call uses a different training set; otherwise the cache is dead weight on the endpoint.
+
 ## Join Our Community
 
 We're building the future of tabular machine learning and would love your involvement! Here's how you can participate and get help:
