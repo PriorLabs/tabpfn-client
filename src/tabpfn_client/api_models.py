@@ -181,21 +181,6 @@ TaskConfig = Annotated[Union[ClassifierConfig, RegressorConfig], Field(discrimin
 Metadata = Annotated[Union[ClassifierMetadata, RegressorMetadata], Field(discriminator="task")]
 
 
-class TransformTrainSetRequest(BaseModel):
-    bucket: str
-    x_train_key: str
-    y_train_key: str
-    fitted_train_set_prefix: str
-    task: Annotated[PredictionTask | UnknownEnum, Field(union_mode="left_to_right")]
-    tabpfn_systems: list[
-        Annotated[Literal["preprocessing", "text", "thinking"] | str, Field(union_mode="left_to_right")]
-    ]
-    task_config: dict[str, Any] | None = None
-    ag_time_limit_s: float | None = None
-    thinking_effort_metric: str | None = None
-    max_tabprep_configs: int | None = None
-
-
 class FitRequest(BaseModel):
     train_set_upload_id: UUID
     task: Annotated[PredictionTask | UnknownEnum, Field(union_mode="left_to_right")]
@@ -230,28 +215,6 @@ class GetModelLimitsResponse(BaseModel):
         Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")], ModelLimit
     ]
     dataset_max_size_bytes: int
-
-
-class TransformTestSetRequest(BaseModel):
-    bucket: str
-    x_test_key: str
-    fitted_train_set_prefix: str
-    fitted_test_set_prefix: str
-    x_train_cols: int
-    output_type: (
-        Annotated[ClassifierOutputType | UnknownEnum, Field(union_mode="left_to_right")]
-        | Annotated[RegressorOutputType | UnknownEnum, Field(union_mode="left_to_right")]
-    )
-    tabpfn_systems: list[
-        Annotated[Literal["preprocessing", "text", "thinking"] | str, Field(union_mode="left_to_right")]
-    ]
-
-
-class NotFoundErrorResponse(BaseModel):
-    message: str
-    error_code: str = "NOT_FOUND"
-    trace_id: UUID | None = None
-    detail: str | None = None
 
 
 class PredictRequest(BaseModel):
