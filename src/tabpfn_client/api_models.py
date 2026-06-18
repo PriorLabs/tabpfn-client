@@ -226,7 +226,7 @@ class FitRequest(BaseModel):
     )
     async_mode: bool | None = Field(
         default=None,
-        description="Submit the fit and return immediately with status=pending; poll GET /fit/{fitted_train_set_id}/status for the outcome. Defaults to the blocking behaviour.",
+        description="Submit the fit and return immediately with status=pending; poll GET /tabpfn/fit/{fitted_train_set_id} for the outcome. Defaults to the blocking behaviour.",
     )
 
 
