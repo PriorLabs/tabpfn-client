@@ -100,7 +100,11 @@ class TestTabPFNRegressorInit(unittest.TestCase):
             },
         )
         mock_server.router.post(mock_server.endpoints.fit.path).respond(
-            200, json={"fitted_train_set_id": "00000000-0000-0000-0000-000000000002"}
+            200,
+            json={
+                "fitted_train_set_id": "00000000-0000-0000-0000-000000000002",
+                "status": "completed",
+            },
         )
         mock_server.router.post("/tabpfn/prepare_test_set_upload").respond(
             409,
@@ -269,7 +273,11 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         )
         fit_route = mock_server.router.post(mock_server.endpoints.fit.path)
         fit_route.respond(
-            200, json={"fitted_train_set_id": "00000000-0000-0000-0000-000000000002"}
+            200,
+            json={
+                "fitted_train_set_id": "00000000-0000-0000-0000-000000000002",
+                "status": "completed",
+            },
         )
         mock_server.router.post("/tabpfn/prepare_test_set_upload").respond(
             409,

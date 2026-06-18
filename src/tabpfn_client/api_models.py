@@ -41,34 +41,6 @@ class UnknownEnum(str):
         return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
-class PredictionTask(str, Enum):
-    CLASSIFICATION = "classification"
-    REGRESSION = "regression"
-
-
-class FitStatus(str, Enum):
-    PENDING = "pending"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-class ModelLimit(BaseModel):
-    train_set_max_rows: int
-    train_set_max_cells: int
-    test_set_max_rows: int
-    max_classes: int
-    max_cols: int
-    test_set_max_rows_w_full_regression_output: int
-    test_set_max_cells: int
-
-
-class ModelVersion(str, Enum):
-    V2 = "v2"
-    V2_5 = "v2.5"
-    V2_6 = "v2.6"
-    V3 = "v3"
-
-
 class ClassifierOutputType(str, Enum):
     PROBAS = "probas"
     PREDS = "preds"
@@ -101,6 +73,63 @@ class ClassifierConfig(BaseModel):
     task: Literal["classification"] = "classification"
     tabpfn_config: ClassifierTabPFNConfig = Field(default_factory=ClassifierTabPFNConfig)
     predict_params: ClassifierPredictParams = Field(default_factory=ClassifierPredictParams)
+
+
+class ClassifierMetadata(BaseModel):
+    test_set_num_rows: int
+    test_set_num_cols: int
+    task: Literal["classification"] = "classification"
+    package_version: str
+    tabpfn_config: ClassifierTabPFNConfig
+
+
+class FileInfo(BaseModel):
+    format: Annotated[Literal["csv", "parquet"] | str, Field(union_mode="left_to_right")]
+    hash: str | None = Field(
+        default=None, description="The crc32c hash of the file, used to deduplicate the file."
+    )
+    size_bytes: int | None = Field(
+        default=None,
+        description="The size of the file in bytes, used to compute the optimal number of chunks when chunking is enabled.",
+    )
+    use_chunks: bool | None = Field(
+        default=None,
+        description="Whether to split the the file into chunks and upload them in parallel.",
+    )
+
+
+class FileUploadInfo(BaseModel):
+    signed_urls: list[str]
+    expires_at: float
+    required_headers: dict[str, str]
+
+
+class FitStatus(str, Enum):
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class ModelLimit(BaseModel):
+    train_set_max_rows: int
+    train_set_max_cells: int
+    test_set_max_rows: int
+    max_classes: int
+    max_cols: int
+    test_set_max_rows_w_full_regression_output: int
+    test_set_max_cells: int
+
+
+class ModelVersion(str, Enum):
+    V2 = "v2"
+    V2_5 = "v2.5"
+    V2_6 = "v2.6"
+    V3 = "v3"
+
+
+class PredictionTask(str, Enum):
+    CLASSIFICATION = "classification"
+    REGRESSION = "regression"
 
 
 class RegressorOutputType(str, Enum):
@@ -141,14 +170,6 @@ class RegressorConfig(BaseModel):
     predict_params: RegressorPredictParams = Field(default_factory=RegressorPredictParams)
 
 
-class ClassifierMetadata(BaseModel):
-    test_set_num_rows: int
-    test_set_num_cols: int
-    task: Literal["classification"] = "classification"
-    package_version: str
-    tabpfn_config: ClassifierTabPFNConfig
-
-
 class RegressorMetadata(BaseModel):
     test_set_num_rows: int
     test_set_num_cols: int
@@ -157,34 +178,29 @@ class RegressorMetadata(BaseModel):
     tabpfn_config: RegressorTabPFNConfig
 
 
-class FileInfo(BaseModel):
-    format: Annotated[Literal["csv", "parquet"] | str, Field(union_mode="left_to_right")]
-    hash: str | None = Field(
-        default=None, description="The crc32c hash of the file, used to deduplicate the file."
-    )
-    size_bytes: int | None = Field(
-        default=None,
-        description="The size of the file in bytes, used to compute the optimal number of chunks when chunking is enabled.",
-    )
-    use_chunks: bool | None = Field(
-        default=None,
-        description="Whether to split the the file into chunks and upload them in parallel.",
-    )
-
-
-class FileUploadInfo(BaseModel):
-    signed_urls: list[str]
-    expires_at: float
-    required_headers: dict[str, str]
-
-
 Prediction = Union[list[Any], list[list[Any]], dict[str, Union[list[Any], list[list[Any]]]]]
+
+
+Metadata = Annotated[Union[ClassifierMetadata, RegressorMetadata], Field(discriminator="task")]
 
 
 TaskConfig = Annotated[Union[ClassifierConfig, RegressorConfig], Field(discriminator="task")]
 
 
-Metadata = Annotated[Union[ClassifierMetadata, RegressorMetadata], Field(discriminator="task")]
+class DuplicateTestSetErrorResponse(BaseModel):
+    message: str
+    error_code: str = "DUPLICATE_TEST_SET_UPLOAD"
+    trace_id: UUID | None = None
+    detail: str | None = None
+    test_set_upload_id: UUID
+
+
+class DuplicateTrainSetErrorResponse(BaseModel):
+    message: str
+    error_code: str = "DUPLICATE_TRAIN_SET_UPLOAD"
+    trace_id: UUID | None = None
+    detail: str | None = None
+    train_set_upload_id: UUID
 
 
 class FitRequest(BaseModel):
@@ -219,6 +235,12 @@ class FitResponse(BaseModel):
     status: Annotated[FitStatus | UnknownEnum, Field(union_mode="left_to_right")]
 
 
+class FitStatusResponse(BaseModel):
+    fitted_train_set_id: UUID
+    status: Annotated[FitStatus | UnknownEnum, Field(union_mode="left_to_right")]
+    error: str | None = None
+
+
 class GetModelLimitsResponse(BaseModel):
     default_model_version: Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")]
     max_model_limit: ModelLimit
@@ -226,6 +248,13 @@ class GetModelLimitsResponse(BaseModel):
         Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")], ModelLimit
     ]
     dataset_max_size_bytes: int
+
+
+class NotFoundErrorResponse(BaseModel):
+    message: str
+    error_code: str = "NOT_FOUND"
+    trace_id: UUID | None = None
+    detail: str | None = None
 
 
 class PredictRequest(BaseModel):
@@ -257,14 +286,6 @@ class PrepareTestSetUploadResponse(BaseModel):
     x_test_info: FileUploadInfo
 
 
-class DuplicateTestSetErrorResponse(BaseModel):
-    message: str
-    error_code: str = "DUPLICATE_TEST_SET_UPLOAD"
-    trace_id: UUID | None = None
-    detail: str | None = None
-    test_set_upload_id: UUID
-
-
 class PrepareTrainSetUploadRequest(BaseModel):
     x_train_info: FileInfo
     y_train_info: FileInfo
@@ -279,11 +300,3 @@ class PrepareTrainSetUploadResponse(BaseModel):
     train_set_upload_id: UUID
     x_train_info: FileUploadInfo
     y_train_info: FileUploadInfo
-
-
-class DuplicateTrainSetErrorResponse(BaseModel):
-    message: str
-    error_code: str = "DUPLICATE_TRAIN_SET_UPLOAD"
-    trace_id: UUID | None = None
-    detail: str | None = None
-    train_set_upload_id: UUID

@@ -36,6 +36,8 @@ from tabpfn_client.constants import (
     TABPFN_CLIENT_TIMEOUT,
     TABPFN_CLIENT_UPLOAD_TIMEOUT,
     TABPFN_CLIENT_API_URL,
+    TABPFN_CLIENT_FIT_POLL_INTERVAL,
+    _ASYNC_MODE_ENABLED_ABOVE_SIZE_MB,
 )
 from tabpfn_common_utils import utils as common_utils
 from tabpfn_common_utils.utils import Singleton
@@ -47,15 +49,17 @@ from tabpfn_client.api_models import (
     PrepareTestSetUploadRequest,
     PrepareTestSetUploadResponse,
     DuplicateTestSetErrorResponse,
+    NotFoundErrorResponse,
     FileUploadInfo,
     FileInfo,
     FitRequest,
     FitResponse,
+    FitStatus,
+    FitStatusResponse,
     PredictRequest,
     PredictResponse,
     ClassifierConfig,
     RegressorConfig,
-    ErrorResponse,
     PredictionTask,
 )
 
@@ -330,10 +334,14 @@ class ServiceClient(Singleton):
         df_X = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
         df_y = cast(pd.DataFrame, y if isinstance(y, pd.DataFrame) else pd.DataFrame(y))
 
+        async_mode = True
+
         limits = cls.get_model_limits()
         if limits is not None:
             for name, df in [("x_train", df_X), ("y_train", df_y)]:
                 mem_usage = df.memory_usage(deep=True).sum()
+                if mem_usage <= _ASYNC_MODE_ENABLED_ABOVE_SIZE_MB:
+                    async_mode = False
                 if mem_usage > limits.dataset_max_size_bytes:
                     raise ValueError(
                         f"In-memory size of {name} ({mem_usage} bytes) exceeds "
@@ -418,6 +426,7 @@ class ServiceClient(Singleton):
                 thinking_effort=thinking_effort,
                 thinking_timeout_s=thinking_timeout_s,
                 thinking_effort_metric=thinking_metric,
+                async_mode=async_mode,
             ),
             timeout=client_options.timeout,
             headers=client_options.headers,
@@ -431,7 +440,74 @@ class ServiceClient(Singleton):
             ),
         )
 
+        # In async mode the server returns immediately with status=PENDING and
+        # the outcome must be retrieved by polling GET /tabpfn/fit/{id}. The sync
+        # path can also return PENDING if the server-side blocking poll times out
+        # before the fit finishes, so branch on the returned status rather than on
+        # `async_mode` to cover both cases.
+        if fit_resp.status == FitStatus.PENDING:
+            cls._wait_for_fit(
+                fit_resp.fitted_train_set_id,
+                timeout=client_options.timeout,
+                headers=client_options.headers,
+            )
+
         return fit_resp.fitted_train_set_id
+
+    @classmethod
+    def _wait_for_fit(
+        cls,
+        fitted_train_set_id: UUID,
+        timeout: float,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        """Poll ``GET /tabpfn/fit/{id}`` until the fit reaches a terminal state.
+
+        Returns once the fit is COMPLETED. Raises if the fit FAILED, or
+        ``TimeoutError`` if it does not reach a terminal state within ``timeout``
+        seconds. A failed fit is reported by the server as HTTP 200 with
+        ``status=failed`` (only an unknown/foreign id is a 404), so the status
+        field — not the HTTP code — is what we inspect here.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            res = cls._get_fit_status(fitted_train_set_id, headers=headers)
+            status_resp = cast(
+                FitStatusResponse,
+                cls._validate_response(
+                    res,
+                    "get_fit_status",
+                    response_models={200: FitStatusResponse},
+                ),
+            )
+
+            if status_resp.status == FitStatus.COMPLETED:
+                return
+            if status_resp.status == FitStatus.FAILED:
+                raise RuntimeError(
+                    f"Fit {fitted_train_set_id} failed: "
+                    f"{status_resp.error or 'no error message provided'}"
+                )
+
+            # status == PENDING: keep polling until the deadline.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"Fit {fitted_train_set_id} did not reach a terminal state "
+                    f"within {timeout} seconds."
+                )
+            time.sleep(min(TABPFN_CLIENT_FIT_POLL_INTERVAL, remaining))
+
+    @classmethod
+    def _get_fit_status(
+        cls,
+        fitted_train_set_id: UUID,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        return cls.httpx_client.get(
+            url=f"/tabpfn/fit/{fitted_train_set_id}",
+            headers=headers,
+        )
 
     @classmethod
     @backoff.on_exception(
@@ -535,7 +611,7 @@ class ServiceClient(Singleton):
                 "prepare_test_set_upload",
                 response_models={
                     200: PrepareTestSetUploadResponse,
-                    404: ErrorResponse,
+                    404: NotFoundErrorResponse,
                     409: DuplicateTestSetErrorResponse,
                 },
                 handlers={404: cls._raise_not_found_error},
@@ -565,7 +641,7 @@ class ServiceClient(Singleton):
             cls._validate_response(
                 res,
                 "predict",
-                response_models={200: PredictResponse, 404: ErrorResponse},
+                response_models={200: PredictResponse, 404: NotFoundErrorResponse},
                 handlers={404: cls._raise_not_found_error},
             ),
         )
@@ -700,7 +776,7 @@ class ServiceClient(Singleton):
         )
 
     @staticmethod
-    def _raise_not_found_error(error_response: ErrorResponse) -> None:
+    def _raise_not_found_error(error_response: NotFoundErrorResponse) -> None:
         if error_response.error_code == "NOT_FOUND":
             raise NeedsRefittingError(error_response.message)
         raise RuntimeError(error_response.message)

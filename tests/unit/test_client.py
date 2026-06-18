@@ -230,7 +230,10 @@ class TestServiceClient(unittest.TestCase):
         )
         mock_server.router.post("/tabpfn/fit").respond(
             200,
-            json={"fitted_train_set_id": "00000000-0000-0000-0000-000000000002"},
+            json={
+                "fitted_train_set_id": "00000000-0000-0000-0000-000000000002",
+                "status": "completed",
+            },
         )
         mock_server.router.post("/tabpfn/prepare_test_set_upload").respond(
             200,
@@ -348,7 +351,10 @@ class TestServiceClient(unittest.TestCase):
         fit_route = mock_server.router.post("/tabpfn/fit")
         fit_route.respond(
             200,
-            json={"fitted_train_set_id": "00000000-0000-0000-0000-000000000002"},
+            json={
+                "fitted_train_set_id": "00000000-0000-0000-0000-000000000002",
+                "status": "completed",
+            },
         )
 
         ServiceClient.authorize("dummy_access_token")
@@ -368,6 +374,93 @@ class TestServiceClient(unittest.TestCase):
         self.assertEqual(fitted_train_set_id_1, fitted_train_set_id_2)
         self.assertEqual(prepare_route.call_count, 2)
         self.assertEqual(fit_route.call_count, 2)
+
+    @with_mock_server()
+    def test_fit_async_mode_polls_until_completed(self, mock_server):
+        # In async mode POST /tabpfn/fit returns immediately with status=pending;
+        # the client must poll GET /tabpfn/fit/{id} until a terminal state.
+        import httpx
+
+        fitted_train_set_id = "00000000-0000-0000-0000-000000000002"
+        mock_server.router.post("/tabpfn/prepare_train_set_upload").respond(
+            200,
+            json=self._prepare_train_set_upload_response(
+                "00000000-0000-0000-0000-000000000001"
+            ),
+        )
+        mock_server.router.post("/tabpfn/fit").respond(
+            200,
+            json={"fitted_train_set_id": fitted_train_set_id, "status": "pending"},
+        )
+        status_route = mock_server.router.get(f"/tabpfn/fit/{fitted_train_set_id}")
+        # First poll still pending, second poll completed — exercises the loop.
+        status_route.side_effect = [
+            httpx.Response(
+                200,
+                json={"fitted_train_set_id": fitted_train_set_id, "status": "pending"},
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "fitted_train_set_id": fitted_train_set_id,
+                    "status": "completed",
+                },
+            ),
+        ]
+
+        ServiceClient.authorize("dummy_access_token")
+
+        with (
+            patch.object(ServiceClient, "_upload_to_gcs"),
+            patch("tabpfn_client.client.TABPFN_CLIENT_FIT_POLL_INTERVAL", 0),
+        ):
+            result = ServiceClient.fit(
+                self.X_train,
+                self.y_train,
+                task_config=ClassifierConfig(),
+            )
+
+        self.assertEqual(result, UUID(fitted_train_set_id))
+        self.assertEqual(status_route.call_count, 2)
+
+    @with_mock_server()
+    def test_fit_async_mode_raises_on_failed(self, mock_server):
+        # A failed fit is reported as HTTP 200 + status=failed on the polling
+        # endpoint, so the client must inspect the status field and raise.
+        fitted_train_set_id = "00000000-0000-0000-0000-000000000002"
+        mock_server.router.post("/tabpfn/prepare_train_set_upload").respond(
+            200,
+            json=self._prepare_train_set_upload_response(
+                "00000000-0000-0000-0000-000000000001"
+            ),
+        )
+        mock_server.router.post("/tabpfn/fit").respond(
+            200,
+            json={"fitted_train_set_id": fitted_train_set_id, "status": "pending"},
+        )
+        mock_server.router.get(f"/tabpfn/fit/{fitted_train_set_id}").respond(
+            200,
+            json={
+                "fitted_train_set_id": fitted_train_set_id,
+                "status": "failed",
+                "error": "boom",
+            },
+        )
+
+        ServiceClient.authorize("dummy_access_token")
+
+        with (
+            patch.object(ServiceClient, "_upload_to_gcs"),
+            patch("tabpfn_client.client.TABPFN_CLIENT_FIT_POLL_INTERVAL", 0),
+        ):
+            with self.assertRaises(RuntimeError) as cm:
+                ServiceClient.fit(
+                    self.X_train,
+                    self.y_train,
+                    task_config=ClassifierConfig(),
+                )
+
+        self.assertIn("boom", str(cm.exception))
 
     @with_mock_server()
     def test_predict_with_same_test_set_calls_prepare_and_predict_each_time(
