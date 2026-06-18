@@ -57,6 +57,7 @@ TABPFN_CLIENT_MAX_THREAD_PER_UPLOAD = int(
 )
 TABPFN_CLIENT_TIMEOUT = float(os.getenv("TABPFN_CLIENT_TIMEOUT", 900.0))
 TABPFN_CLIENT_UPLOAD_TIMEOUT = float(os.getenv("TABPFN_CLIENT_UPLOAD_TIMEOUT", 7200.0))
+TABPFN_CLIENT_FORCE_ASYNC = os.getenv("TABPFN_CLIENT_FORCE_ASYNC")
 TABPFN_CLIENT_FIT_POLL_INTERVAL = float(
     os.getenv("TABPFN_CLIENT_FIT_POLL_INTERVAL", 5.0)
 )
@@ -67,6 +68,12 @@ _ASYNC_MODE_ENABLED_ABOVE_SIZE_MB = 50
 @cache
 def ci_mode_enabled() -> bool:
     val = os.getenv("TABPFN_CLIENT_CI_MODE")
+    return str(val).lower() in {"1", "true", "yes", "on"}
+
+
+@cache
+def force_async_enabled() -> bool:
+    val = os.getenv("TABPFN_CLIENT_FORCE_ASYNC")
     return str(val).lower() in {"1", "true", "yes", "on"}
 
 

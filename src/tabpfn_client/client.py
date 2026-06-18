@@ -32,6 +32,7 @@ from tabpfn_client.browser_auth import BrowserAuthHandler
 from tabpfn_client.constants import (
     dedup_datasets_enabled,
     force_reupload_enabled,
+    force_async_enabled,
     TABPFN_CLIENT_MAX_THREAD_PER_UPLOAD,
     TABPFN_CLIENT_TIMEOUT,
     TABPFN_CLIENT_UPLOAD_TIMEOUT,
@@ -340,7 +341,10 @@ class ServiceClient(Singleton):
         if limits is not None:
             for name, df in [("x_train", df_X), ("y_train", df_y)]:
                 mem_usage = df.memory_usage(deep=True).sum()
-                if mem_usage <= _ASYNC_MODE_ENABLED_ABOVE_SIZE_MB:
+                if (
+                    mem_usage <= _ASYNC_MODE_ENABLED_ABOVE_SIZE_MB
+                    and not force_async_enabled()
+                ):
                     async_mode = False
                 if mem_usage > limits.dataset_max_size_bytes:
                     raise ValueError(
