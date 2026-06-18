@@ -412,7 +412,7 @@ class TestServiceClient(unittest.TestCase):
 
         with (
             patch.object(ServiceClient, "_upload_to_gcs"),
-            patch("tabpfn_client.client.TABPFN_CLIENT_FIT_POLL_INTERVAL", 0),
+            patch("tabpfn_client.client.TABPFN_CLIENT_POLL_INTERVAL", 0),
         ):
             result = ServiceClient.fit(
                 self.X_train,
@@ -451,7 +451,7 @@ class TestServiceClient(unittest.TestCase):
 
         with (
             patch.object(ServiceClient, "_upload_to_gcs"),
-            patch("tabpfn_client.client.TABPFN_CLIENT_FIT_POLL_INTERVAL", 0),
+            patch("tabpfn_client.client.TABPFN_CLIENT_POLL_INTERVAL", 0),
         ):
             with self.assertRaises(RuntimeError) as cm:
                 ServiceClient.fit(

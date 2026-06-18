@@ -37,7 +37,8 @@ from tabpfn_client.constants import (
     TABPFN_CLIENT_TIMEOUT,
     TABPFN_CLIENT_UPLOAD_TIMEOUT,
     TABPFN_CLIENT_API_URL,
-    TABPFN_CLIENT_FIT_POLL_INTERVAL,
+    TABPFN_CLIENT_POLL_INTERVAL,
+    TABPFN_CLIENT_POLL_TIMEOUT,
     _ASYNC_MODE_ENABLED_ABOVE_SIZE_BYTES,
 )
 from tabpfn_common_utils import utils as common_utils
@@ -454,7 +455,6 @@ class ServiceClient(Singleton):
         if fit_resp.status == FitStatus.PENDING:
             cls._wait_for_fit(
                 fit_resp.fitted_train_set_id,
-                timeout=client_options.timeout,
                 headers=client_options.headers,
             )
 
@@ -464,7 +464,7 @@ class ServiceClient(Singleton):
     def _wait_for_fit(
         cls,
         fitted_train_set_id: UUID,
-        timeout: float,
+        timeout: float = TABPFN_CLIENT_POLL_TIMEOUT,
         headers: dict[str, str] | None = None,
     ) -> None:
         """Poll ``GET /tabpfn/fit/{id}`` until the fit reaches a terminal state.
@@ -485,7 +485,7 @@ class ServiceClient(Singleton):
                     f"within {timeout} seconds."
                 )
 
-            time.sleep(min(TABPFN_CLIENT_FIT_POLL_INTERVAL, remaining))
+            time.sleep(min(TABPFN_CLIENT_POLL_INTERVAL, remaining))
 
             try:
                 res = cls._get_fit_status(fitted_train_set_id, headers=headers)

@@ -133,7 +133,7 @@ class TestTabPFNClassifier(unittest.TestCase):
             ),
         ]
 
-        with patch("tabpfn_client.client.TABPFN_CLIENT_FIT_POLL_INTERVAL", 0):
+        with patch("tabpfn_client.client.TABPFN_CLIENT_POLL_INTERVAL", 0):
             tabpfn.fit(self.X_train, self.y_train)
 
         self.assertEqual(status_route.call_count, 2)
