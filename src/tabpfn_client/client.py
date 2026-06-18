@@ -31,7 +31,6 @@ from omegaconf import DictConfig, OmegaConf
 from tabpfn_client.browser_auth import BrowserAuthHandler
 from tabpfn_client.constants import (
     dedup_datasets_enabled,
-    force_refit_enabled,
     force_reupload_enabled,
     TABPFN_CLIENT_MAX_THREAD_PER_UPLOAD,
     TABPFN_CLIENT_TIMEOUT,
@@ -282,7 +281,6 @@ class ServiceClient(Singleton):
         thinking_effort: ThinkingEffort | None = None,
         thinking_timeout_s: float | None = None,
         thinking_metric: str | None = None,
-        force_refit: bool = False,
         client_options: ClientOptions | None = None,
         description: str | None = None,
     ) -> UUID:
@@ -302,8 +300,6 @@ class ServiceClient(Singleton):
             `paper_version`.
         description: str, optional
             Description of the dataset and task for the server.
-        force_refit: bool, optional
-            Whether to force refit the model even if the model has already been fitted.
         client_options : ClientOptions, optional
             Client specific options (e.g. timeout, headers).
 
@@ -412,7 +408,6 @@ class ServiceClient(Singleton):
                 train_set_upload_id=prepare_resp.train_set_upload_id,
                 task=PredictionTask(task_config.task),
                 tabpfn_systems=tabpfn_systems,
-                force_refit=force_refit or force_refit_enabled(),
                 # NOTE: Since the current shape of the fit request makes it difficult to
                 # discriminate `tabpfn_config` it is set to a generic dict.
                 # TODO: Refactor FitRequest, use tabpfn-system specific config objects
@@ -561,7 +556,6 @@ class ServiceClient(Singleton):
                 test_set_upload_id=prepare_resp.test_set_upload_id,
                 fitted_train_set_id=fitted_train_set_id,
                 task_config=task_config,
-                force_refit=force_refit_enabled(),
             ),
             timeout=client_options.timeout,
             headers=client_options.headers,

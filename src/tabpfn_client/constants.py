@@ -66,12 +66,6 @@ def ci_mode_enabled() -> bool:
 
 
 @cache
-def force_refit_enabled() -> bool:
-    force_refit = os.getenv("TABPFN_CLIENT_FORCE_REFIT")
-    return str(force_refit).lower() in {"1", "true", "yes", "on"}
-
-
-@cache
 def force_reupload_enabled() -> bool:
     # `DISABLE_DS_CACHING` is legacy, we keep it for backward compatibility.
     # Note: The new env var has the opposite meaning.

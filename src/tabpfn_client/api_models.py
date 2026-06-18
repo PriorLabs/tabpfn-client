@@ -46,6 +46,12 @@ class PredictionTask(str, Enum):
     REGRESSION = "regression"
 
 
+class FitStatus(str, Enum):
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class ModelLimit(BaseModel):
     train_set_max_rows: int
     train_set_max_cells: int
@@ -66,15 +72,6 @@ class ModelVersion(str, Enum):
 class ClassifierOutputType(str, Enum):
     PROBAS = "probas"
     PREDS = "preds"
-
-
-class RegressorOutputType(str, Enum):
-    MEAN = "mean"
-    MEDIAN = "median"
-    MODE = "mode"
-    QUANTILES = "quantiles"
-    FULL = "full"
-    MAIN = "main"
 
 
 class ClassifierPredictParams(BaseModel):
@@ -104,6 +101,15 @@ class ClassifierConfig(BaseModel):
     task: Literal["classification"] = "classification"
     tabpfn_config: ClassifierTabPFNConfig = Field(default_factory=ClassifierTabPFNConfig)
     predict_params: ClassifierPredictParams = Field(default_factory=ClassifierPredictParams)
+
+
+class RegressorOutputType(str, Enum):
+    MEAN = "mean"
+    MEDIAN = "median"
+    MODE = "mode"
+    QUANTILES = "quantiles"
+    FULL = "full"
+    MAIN = "main"
 
 
 class RegressorPredictParams(BaseModel):
@@ -200,12 +206,17 @@ class FitRequest(BaseModel):
     thinking_effort_metric: str | None = None
     force_refit: bool | None = Field(
         default=None,
-        description="Whether to force the fitting of the train set even if a fittedtrain set and transform states already exist.",
+        description="Deprecated, ignored: every fit creates a fresh fitted train set and runs unconditionally. Reuse fits by keeping the fitted_train_set_id (estimator save_model/load_model).",
+    )
+    async_mode: bool | None = Field(
+        default=None,
+        description="Submit the fit and return immediately with status=pending; poll GET /fit/{fitted_train_set_id}/status for the outcome. Defaults to the blocking behaviour.",
     )
 
 
 class FitResponse(BaseModel):
     fitted_train_set_id: UUID
+    status: Annotated[FitStatus | UnknownEnum, Field(union_mode="left_to_right")]
 
 
 class GetModelLimitsResponse(BaseModel):
@@ -230,13 +241,6 @@ class PredictRequest(BaseModel):
 class PredictResponse(BaseModel):
     prediction: Prediction
     metadata: Metadata
-
-
-class ErrorResponse(BaseModel):
-    message: str
-    error_code: str = "GENERAL_ERROR"
-    trace_id: UUID | None = None
-    detail: str | None = None
 
 
 class PrepareTestSetUploadRequest(BaseModel):
