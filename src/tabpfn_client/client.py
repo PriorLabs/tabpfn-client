@@ -38,7 +38,7 @@ from tabpfn_client.constants import (
     TABPFN_CLIENT_UPLOAD_TIMEOUT,
     TABPFN_CLIENT_API_URL,
     TABPFN_CLIENT_FIT_POLL_INTERVAL,
-    _ASYNC_MODE_ENABLED_ABOVE_SIZE_MB,
+    _ASYNC_MODE_ENABLED_ABOVE_SIZE_BYTES,
 )
 from tabpfn_common_utils import utils as common_utils
 from tabpfn_common_utils.utils import Singleton
@@ -339,18 +339,20 @@ class ServiceClient(Singleton):
 
         limits = cls.get_model_limits()
         if limits is not None:
+            total_mem_usage = 0
             for name, df in [("x_train", df_X), ("y_train", df_y)]:
                 mem_usage = df.memory_usage(deep=True).sum()
-                if (
-                    mem_usage <= _ASYNC_MODE_ENABLED_ABOVE_SIZE_MB
-                    and not force_async_enabled()
-                ):
-                    async_mode = False
+                total_mem_usage += mem_usage
                 if mem_usage > limits.dataset_max_size_bytes:
                     raise ValueError(
                         f"In-memory size of {name} ({mem_usage} bytes) exceeds "
                         f"the server limit of {limits.dataset_max_size_bytes} bytes."
                     )
+            if (
+                total_mem_usage <= _ASYNC_MODE_ENABLED_ABOVE_SIZE_BYTES
+                and not force_async_enabled()
+            ):
+                async_mode = False
 
         x_bytes, x_crc32c_hash = _serialize_to_parquet(df_X)
         y_bytes, y_crc32c_hash = _serialize_to_parquet(df_y)
@@ -475,7 +477,28 @@ class ServiceClient(Singleton):
         """
         deadline = time.monotonic() + timeout
         while True:
-            res = cls._get_fit_status(fitted_train_set_id, headers=headers)
+            # status == PENDING: keep polling until the deadline.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"Fit {fitted_train_set_id} did not reach a terminal state "
+                    f"within {timeout} seconds."
+                )
+
+            time.sleep(min(TABPFN_CLIENT_FIT_POLL_INTERVAL, remaining))
+
+            try:
+                res = cls._get_fit_status(fitted_train_set_id, headers=headers)
+            except (
+                httpx.ConnectError,
+                httpx.TimeoutException,
+                httpx.ReadTimeout,
+                httpx.WriteTimeout,
+                httpx.RemoteProtocolError,
+                RetryableServerError,
+            ):
+                continue
+
             status_resp = cast(
                 FitStatusResponse,
                 cls._validate_response(
@@ -484,7 +507,6 @@ class ServiceClient(Singleton):
                     response_models={200: FitStatusResponse},
                 ),
             )
-
             if status_resp.status == FitStatus.COMPLETED:
                 return
             if status_resp.status == FitStatus.FAILED:
@@ -492,15 +514,6 @@ class ServiceClient(Singleton):
                     f"Fit {fitted_train_set_id} failed: "
                     f"{status_resp.error or 'no error message provided'}"
                 )
-
-            # status == PENDING: keep polling until the deadline.
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError(
-                    f"Fit {fitted_train_set_id} did not reach a terminal state "
-                    f"within {timeout} seconds."
-                )
-            time.sleep(min(TABPFN_CLIENT_FIT_POLL_INTERVAL, remaining))
 
     @classmethod
     def _get_fit_status(
