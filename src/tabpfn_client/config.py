@@ -29,7 +29,7 @@ class Config:
 
     is_initialized = False
     use_server = False
-    settings: Settings = None  # type: ignore
+    settings: Settings = Settings()
     token: str | None = None
 
 
