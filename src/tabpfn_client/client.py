@@ -256,6 +256,7 @@ class ServiceClient(Singleton):
 
     @classmethod
     def authorize(cls, access_token: str):
+        get_opts().TABPFN_TOKEN = access_token
         cls._access_token = access_token
         cls.httpx_client.headers.update(
             {"Authorization": f"Bearer {cls.get_access_token()}"}
