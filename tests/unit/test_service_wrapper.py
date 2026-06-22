@@ -7,7 +7,7 @@ from pathlib import Path
 from tests.mock_tabpfn_server import with_mock_server
 from tabpfn_client.service_wrapper import UserAuthenticationClient, UserDataClient
 from tabpfn_client.client import ServiceClient
-from tabpfn_client.config import Config
+from tabpfn_client.options import get_opts
 
 
 class TestUserAuthClient(unittest.TestCase):
@@ -145,7 +145,7 @@ class TestUserAuthClient(unittest.TestCase):
 
             self.assertFalse(is_valid_token)
             self.assertIsNone(access_token)
-            self.assertIsNone(Config.token)
+            self.assertIsNone(get_opts().TABPFN_TOKEN)
 
     def test_reset_cache_without_token_set(self):
         # assert no exception is raised

@@ -38,6 +38,7 @@ from tabpfn_client.api_models import (
     ClassifierConfig,
     RegressorConfig,
 )
+from tabpfn_client.options import get_opts
 
 try:
     from torch import Tensor  # type: ignore
@@ -1005,7 +1006,7 @@ def _clean_text_features(X):
 
 
 def run_task(task: Callable, message: str, with_spinner: bool = True) -> Any:
-    if not with_spinner or Config.settings.TABPFN_CLIENT_CI_MODE:
+    if not with_spinner or get_opts().TABPFN_CLIENT_CI_MODE:
         result = task()
     else:
         start = time.time()

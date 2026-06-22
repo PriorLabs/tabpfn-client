@@ -23,6 +23,7 @@ from sklearn.utils.estimator_checks import check_estimator
 from tabpfn_client import estimator as estimator_module
 from tabpfn_client.client import PredictionResult, ServiceClient
 from tabpfn_client.config import Config
+from tabpfn_client.options import get_opts, reload_opts
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
 from tabpfn_client.api_models import (
     ClassifierTabPFNConfig,
@@ -233,3 +234,33 @@ def test_sklearn_compatible(
             )
     finally:
         Config.use_server = use_server_before
+
+
+def test_api_url_set_after_import_is_picked_up(monkeypatch):
+    """TABPFN_CLIENT_API_URL set after import but before use must be honored.
+
+    ``TabPFNClassifier`` is imported at module load (top of this file), which
+    also imports ``tabpfn_client.options`` and builds its initial ``Options``.
+    Setting the env var afterwards must still take effect: options are reloaded
+    (as ``config.init`` does before any request) rather than frozen at import,
+    so the value seen reflects the last one set before the estimator is used.
+    """
+    custom_url = "https://my-tabpfn.example.com"
+
+    # Sanity check: the custom value was not present when the module was imported.
+    assert get_opts().TABPFN_CLIENT_API_URL != custom_url
+
+    try:
+        monkeypatch.setenv("TABPFN_CLIENT_API_URL", custom_url)
+
+        # Constructing the estimator must not bake in a stale URL...
+        TabPFNClassifier()
+
+        # ...and the reload performed during init() (before any request is sent)
+        # picks up the value set above.
+        reload_opts()
+        assert get_opts().TABPFN_CLIENT_API_URL == custom_url
+    finally:
+        # Restore the global options so later tests see a clean environment.
+        monkeypatch.delenv("TABPFN_CLIENT_API_URL", raising=False)
+        reload_opts()
