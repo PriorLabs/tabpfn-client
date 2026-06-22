@@ -1,6 +1,7 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
 
+import os
 import shutil
 
 from httpx import ConnectError
@@ -10,6 +11,7 @@ from tabpfn_client.service_wrapper import UserAuthenticationClient
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client.prompt_agent import PromptAgent
 from tabpfn_client.ui import console, warn
+from tabpfn_client.settings import Settings
 
 
 CONNECTION_ERROR = RuntimeError(
@@ -27,6 +29,8 @@ class Config:
 
     is_initialized = False
     use_server = False
+    settings: Settings = None  # type: ignore
+    token: str | None = None
 
 
 def init(use_server=True):
@@ -47,6 +51,9 @@ def init(use_server=True):
     if Config.is_initialized:
         # Only do the following if the initialization has not been done yet
         return
+
+    Config.settings = Settings()
+    Config.token = os.getenv("TABPFN_TOKEN")
 
     if use_server:
         try:

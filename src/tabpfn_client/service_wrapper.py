@@ -14,6 +14,7 @@ from tabpfn_client.client import (
     PredictionResult,
     ThinkingEffort,
 )
+from tabpfn_client.config import Config
 import tabpfn_client.constants as constants
 from tabpfn_common_utils.utils import Singleton
 from tabpfn_client.api_models import (
@@ -102,8 +103,8 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
     @classmethod
     def try_reuse_existing_token(cls) -> tuple[bool, str | None]:
         if ServiceClient.get_access_token() is None:
-            if constants.TABPFN_TOKEN:
-                access_token = constants.TABPFN_TOKEN
+            if Config.token:
+                access_token = Config.token
             else:
                 if not cls.CACHED_TOKEN_FILE.exists():
                     return False, None
@@ -141,7 +142,7 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
         # the client it can only be used or unset, never set.
         # Note: we should prefix with the module to make sure the variable is not
         # only mutated in the local module binding.
-        constants.TABPFN_TOKEN = None
+        Config.token = None
 
     @classmethod
     def retrieve_greeting_messages(cls):

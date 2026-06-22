@@ -16,7 +16,7 @@ import pytest
 from sklearn.datasets import load_breast_cancer, load_diabetes
 from sklearn.model_selection import train_test_split
 
-from tabpfn_client.constants import ModelVersion
+from tabpfn_client.api_models import ModelVersion
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
 
 # ---------------------------------------------------------------------------

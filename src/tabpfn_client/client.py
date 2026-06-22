@@ -28,19 +28,9 @@ import pandas as pd
 import backoff
 import httpx
 from omegaconf import DictConfig, OmegaConf
+from tabpfn_client.config import Config
 from tabpfn_client.browser_auth import BrowserAuthHandler
-from tabpfn_client.constants import (
-    dedup_datasets_enabled,
-    force_reupload_enabled,
-    force_async_enabled,
-    TABPFN_CLIENT_MAX_THREAD_PER_UPLOAD,
-    TABPFN_CLIENT_TIMEOUT,
-    TABPFN_CLIENT_UPLOAD_TIMEOUT,
-    TABPFN_CLIENT_API_URL,
-    TABPFN_CLIENT_POLL_INTERVAL,
-    TABPFN_CLIENT_POLL_TIMEOUT,
-    _ASYNC_MODE_ENABLED_ABOVE_SIZE_BYTES,
-)
+from tabpfn_client.constants import ASYNC_MODE_ENABLED_ABOVE_SIZE_BYTES
 from tabpfn_common_utils import utils as common_utils
 from tabpfn_common_utils.utils import Singleton
 from tabpfn_client.api_models import (
@@ -192,7 +182,7 @@ class ClientOptions:
 
     # Note: timeout=None does not fallback to the client default, rather it disables
     # the timeout altogether.
-    timeout: float = TABPFN_CLIENT_TIMEOUT
+    timeout: float = Config.settings.TABPFN_CLIENT_TIMEOUT
     headers: dict[str, str] = field(default_factory=dict)
 
 
@@ -211,7 +201,7 @@ class ServiceClient(Singleton):
     server_config = SERVER_CONFIG
     server_endpoints = SERVER_CONFIG["endpoints"]
     base_url = (
-        TABPFN_CLIENT_API_URL
+        Config.settings.TABPFN_CLIENT_API_URL
         or f"{server_config.protocol}://{server_config.host}:{server_config.port}"
     )
     # NOTE: HTTP/1.1 only. HTTP/2 used to be selectively enabled for the
@@ -230,7 +220,7 @@ class ServiceClient(Singleton):
     # tradeoff is one-sided.
     httpx_client = httpx.Client(
         base_url=base_url,
-        timeout=TABPFN_CLIENT_TIMEOUT,
+        timeout=Config.settings.TABPFN_CLIENT_TIMEOUT,
         headers={"Prior-Client-Version": get_client_version()},
         follow_redirects=True,
     )
@@ -350,15 +340,15 @@ class ServiceClient(Singleton):
                         f"the server limit of {limits.dataset_max_size_bytes} bytes."
                     )
             if (
-                total_mem_usage <= _ASYNC_MODE_ENABLED_ABOVE_SIZE_BYTES
-                and not force_async_enabled()
+                total_mem_usage <= ASYNC_MODE_ENABLED_ABOVE_SIZE_BYTES
+                and not Config.settings.TABPFN_CLIENT_FORCE_ASYNC
             ):
                 async_mode = False
 
         x_bytes, x_crc32c_hash = _serialize_to_parquet(df_X)
         y_bytes, y_crc32c_hash = _serialize_to_parquet(df_y)
 
-        if dedup_datasets_enabled():
+        if Config.settings.TABPFN_CLIENT_DEDUP_DATASETS:
             x_dedup_hash = x_crc32c_hash
             y_dedup_hash = y_crc32c_hash
         else:
@@ -373,7 +363,7 @@ class ServiceClient(Singleton):
                 format="parquet", hash=y_dedup_hash, size_bytes=len(y_bytes)
             ),
             description=description,
-            force_reupload=force_reupload_enabled(),
+            force_reupload=Config.settings.TABPFN_CLIENT_FORCE_REUPLOAD,
         )
         res = cls.httpx_client.post(
             url="/tabpfn/prepare_train_set_upload",
@@ -464,7 +454,7 @@ class ServiceClient(Singleton):
     def _wait_for_fit(
         cls,
         fitted_train_set_id: UUID,
-        timeout: float = TABPFN_CLIENT_POLL_TIMEOUT,
+        timeout: float = Config.settings.TABPFN_CLIENT_POLL_TIMEOUT,
         headers: dict[str, str] | None = None,
     ) -> None:
         """Poll ``GET /tabpfn/fit/{id}`` until the fit reaches a terminal state.
@@ -485,7 +475,7 @@ class ServiceClient(Singleton):
                     f"within {timeout} seconds."
                 )
 
-            time.sleep(min(TABPFN_CLIENT_POLL_INTERVAL, remaining))
+            time.sleep(min(Config.settings.TABPFN_CLIENT_POLL_INTERVAL, remaining))
 
             try:
                 res = cls._get_fit_status(fitted_train_set_id, headers=headers)
@@ -602,7 +592,7 @@ class ServiceClient(Singleton):
 
         x_test_bytes, x_test_crc32c_hash = _serialize_to_parquet(df_x_test)
 
-        if dedup_datasets_enabled():
+        if Config.settings.TABPFN_CLIENT_DEDUP_DATASETS:
             x_test_dedup_hash = x_test_crc32c_hash
         else:
             x_test_dedup_hash = None
@@ -614,7 +604,7 @@ class ServiceClient(Singleton):
                 hash=x_test_dedup_hash,
                 size_bytes=len(x_test_bytes),
             ),
-            force_reupload=force_reupload_enabled(),
+            force_reupload=Config.settings.TABPFN_CLIENT_FORCE_REUPLOAD,
         )
         res = cls.httpx_client.post(
             url="/tabpfn/prepare_test_set_upload",
@@ -733,7 +723,9 @@ class ServiceClient(Singleton):
             return
 
         with ThreadPoolExecutor(
-            max_workers=min(TABPFN_CLIENT_MAX_THREAD_PER_UPLOAD, num_chunks)
+            max_workers=min(
+                Config.settings.TABPFN_CLIENT_MAX_THREAD_PER_UPLOAD, num_chunks
+            )
         ) as pool:
             futures = {
                 pool.submit(
@@ -778,7 +770,7 @@ class ServiceClient(Singleton):
             url,
             content=chunk,
             headers=headers,
-            timeout=TABPFN_CLIENT_UPLOAD_TIMEOUT,
+            timeout=Config.settings.TABPFN_CLIENT_UPLOAD_TIMEOUT,
         )
         if resp.status_code == 200:
             return
