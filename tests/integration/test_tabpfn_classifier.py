@@ -11,6 +11,7 @@ from tabpfn_client import init, reset
 from tabpfn_client import TabPFNClassifier
 from tests.mock_tabpfn_server import with_mock_server
 from tabpfn_client.service_wrapper import UserAuthenticationClient
+from tabpfn_client.options import get_opts
 
 
 class TestTabPFNClassifier(unittest.TestCase):
@@ -133,7 +134,7 @@ class TestTabPFNClassifier(unittest.TestCase):
             ),
         ]
 
-        with patch("tabpfn_client.client.TABPFN_CLIENT_POLL_INTERVAL", 0):
+        with patch.object(get_opts(), "TABPFN_CLIENT_POLL_INTERVAL", 0):
             tabpfn.fit(self.X_train, self.y_train)
 
         self.assertEqual(status_route.call_count, 2)
