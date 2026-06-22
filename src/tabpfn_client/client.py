@@ -182,7 +182,7 @@ class ClientOptions:
 
     # Note: timeout=None does not fallback to the client default, rather it disables
     # the timeout altogether.
-    timeout: float = field(default_factory=lambda: get_opts().TABPFN_CLIENT_TIMEOUT)
+    timeout: float = get_opts().TABPFN_CLIENT_TIMEOUT
     headers: dict[str, str] = field(default_factory=dict)
 
 
@@ -454,7 +454,7 @@ class ServiceClient(Singleton):
     def _wait_for_fit(
         cls,
         fitted_train_set_id: UUID,
-        timeout: float | None = None,
+        timeout: float = get_opts().TABPFN_CLIENT_POLL_TIMEOUT,
         headers: dict[str, str] | None = None,
     ) -> None:
         """Poll ``GET /tabpfn/fit/{id}`` until the fit reaches a terminal state.
@@ -465,11 +465,7 @@ class ServiceClient(Singleton):
         ``status=failed`` (only an unknown/foreign id is a 404), so the status
         field — not the HTTP code — is what we inspect here.
         """
-        if timeout is None:
-            timeout = get_opts().TABPFN_CLIENT_TIMEOUT
-
         deadline = time.monotonic() + timeout
-
         while True:
             # status == PENDING: keep polling until the deadline.
             remaining = deadline - time.monotonic()
