@@ -21,6 +21,8 @@ class Options(BaseSettings):
 _opts: Options = Options()
 
 
+# TODO(refactor): Some opts are used in the http client which is initialized as a class
+# variable of the ServiceClient singleton. These cannot be updated after importing.
 def reload_opts() -> None:
     global _opts
     _opts = Options()
