@@ -20,6 +20,7 @@ from tabpfn_client.api_models import (
     ClassifierConfig,
     RegressorConfig,
 )
+from tabpfn_client.options import get_opts
 
 
 logger = logging.getLogger(__name__)
@@ -102,8 +103,8 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
     @classmethod
     def try_reuse_existing_token(cls) -> tuple[bool, str | None]:
         if ServiceClient.get_access_token() is None:
-            if constants.TABPFN_TOKEN:
-                access_token = constants.TABPFN_TOKEN
+            if get_opts().TABPFN_TOKEN:
+                access_token = get_opts().TABPFN_TOKEN
             else:
                 if not cls.CACHED_TOKEN_FILE.exists():
                     return False, None
@@ -141,7 +142,7 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
         # the client it can only be used or unset, never set.
         # Note: we should prefix with the module to make sure the variable is not
         # only mutated in the local module binding.
-        constants.TABPFN_TOKEN = None
+        get_opts().TABPFN_TOKEN = None
 
     @classmethod
     def retrieve_greeting_messages(cls):
