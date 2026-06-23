@@ -70,7 +70,7 @@ norecursedirs = [
 dev = [
     "pytest==8.4.2",
     "respx==0.22.0",
-    "ruff==0.15.16",
+    "ruff==0.15.18",
     "licensecheck==2025.1.0",
     "basedpyright~=1.32.1"
 ]
