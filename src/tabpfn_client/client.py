@@ -31,12 +31,15 @@ from omegaconf import DictConfig, OmegaConf
 from tabpfn_client.browser_auth import BrowserAuthHandler
 from tabpfn_client.constants import (
     dedup_datasets_enabled,
-    force_refit_enabled,
     force_reupload_enabled,
+    force_async_enabled,
     TABPFN_CLIENT_MAX_THREAD_PER_UPLOAD,
     TABPFN_CLIENT_TIMEOUT,
     TABPFN_CLIENT_UPLOAD_TIMEOUT,
     TABPFN_CLIENT_API_URL,
+    TABPFN_CLIENT_POLL_INTERVAL,
+    TABPFN_CLIENT_POLL_TIMEOUT,
+    _ASYNC_MODE_ENABLED_ABOVE_SIZE_BYTES,
 )
 from tabpfn_common_utils import utils as common_utils
 from tabpfn_common_utils.utils import Singleton
@@ -48,15 +51,17 @@ from tabpfn_client.api_models import (
     PrepareTestSetUploadRequest,
     PrepareTestSetUploadResponse,
     DuplicateTestSetErrorResponse,
+    NotFoundErrorResponse,
     FileUploadInfo,
     FileInfo,
     FitRequest,
     FitResponse,
+    FitStatus,
+    FitStatusResponse,
     PredictRequest,
     PredictResponse,
     ClassifierConfig,
     RegressorConfig,
-    ErrorResponse,
     PredictionTask,
 )
 
@@ -282,7 +287,6 @@ class ServiceClient(Singleton):
         thinking_effort: ThinkingEffort | None = None,
         thinking_timeout_s: float | None = None,
         thinking_metric: str | None = None,
-        force_refit: bool = False,
         client_options: ClientOptions | None = None,
         description: str | None = None,
     ) -> UUID:
@@ -302,8 +306,6 @@ class ServiceClient(Singleton):
             `paper_version`.
         description: str, optional
             Description of the dataset and task for the server.
-        force_refit: bool, optional
-            Whether to force refit the model even if the model has already been fitted.
         client_options : ClientOptions, optional
             Client specific options (e.g. timeout, headers).
 
@@ -334,15 +336,24 @@ class ServiceClient(Singleton):
         df_X = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
         df_y = cast(pd.DataFrame, y if isinstance(y, pd.DataFrame) else pd.DataFrame(y))
 
+        async_mode = True
+
         limits = cls.get_model_limits()
         if limits is not None:
+            total_mem_usage = 0
             for name, df in [("x_train", df_X), ("y_train", df_y)]:
                 mem_usage = df.memory_usage(deep=True).sum()
+                total_mem_usage += mem_usage
                 if mem_usage > limits.dataset_max_size_bytes:
                     raise ValueError(
                         f"In-memory size of {name} ({mem_usage} bytes) exceeds "
                         f"the server limit of {limits.dataset_max_size_bytes} bytes."
                     )
+            if (
+                total_mem_usage <= _ASYNC_MODE_ENABLED_ABOVE_SIZE_BYTES
+                and not force_async_enabled()
+            ):
+                async_mode = False
 
         x_bytes, x_crc32c_hash = _serialize_to_parquet(df_X)
         y_bytes, y_crc32c_hash = _serialize_to_parquet(df_y)
@@ -412,7 +423,6 @@ class ServiceClient(Singleton):
                 train_set_upload_id=prepare_resp.train_set_upload_id,
                 task=PredictionTask(task_config.task),
                 tabpfn_systems=tabpfn_systems,
-                force_refit=force_refit or force_refit_enabled(),
                 # NOTE: Since the current shape of the fit request makes it difficult to
                 # discriminate `tabpfn_config` it is set to a generic dict.
                 # TODO: Refactor FitRequest, use tabpfn-system specific config objects
@@ -423,6 +433,7 @@ class ServiceClient(Singleton):
                 thinking_effort=thinking_effort,
                 thinking_timeout_s=thinking_timeout_s,
                 thinking_effort_metric=thinking_metric,
+                async_mode=async_mode,
             ),
             timeout=client_options.timeout,
             headers=client_options.headers,
@@ -436,7 +447,84 @@ class ServiceClient(Singleton):
             ),
         )
 
+        # In async mode the server returns immediately with status=PENDING and
+        # the outcome must be retrieved by polling GET /tabpfn/fit/{id}. The sync
+        # path can also return PENDING if the server-side blocking poll times out
+        # before the fit finishes, so branch on the returned status rather than on
+        # `async_mode` to cover both cases.
+        if fit_resp.status == FitStatus.PENDING:
+            cls._wait_for_fit(
+                fit_resp.fitted_train_set_id,
+                headers=client_options.headers,
+            )
+
         return fit_resp.fitted_train_set_id
+
+    @classmethod
+    def _wait_for_fit(
+        cls,
+        fitted_train_set_id: UUID,
+        timeout: float = TABPFN_CLIENT_POLL_TIMEOUT,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        """Poll ``GET /tabpfn/fit/{id}`` until the fit reaches a terminal state.
+
+        Returns once the fit is COMPLETED. Raises if the fit FAILED, or
+        ``TimeoutError`` if it does not reach a terminal state within ``timeout``
+        seconds. A failed fit is reported by the server as HTTP 200 with
+        ``status=failed`` (only an unknown/foreign id is a 404), so the status
+        field — not the HTTP code — is what we inspect here.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            # status == PENDING: keep polling until the deadline.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"Fit {fitted_train_set_id} did not reach a terminal state "
+                    f"within {timeout} seconds."
+                )
+
+            time.sleep(min(TABPFN_CLIENT_POLL_INTERVAL, remaining))
+
+            try:
+                res = cls._get_fit_status(fitted_train_set_id, headers=headers)
+            except (
+                httpx.ConnectError,
+                httpx.TimeoutException,
+                httpx.ReadTimeout,
+                httpx.WriteTimeout,
+                httpx.RemoteProtocolError,
+                RetryableServerError,
+            ):
+                continue
+
+            status_resp = cast(
+                FitStatusResponse,
+                cls._validate_response(
+                    res,
+                    "get_fit_status",
+                    response_models={200: FitStatusResponse},
+                ),
+            )
+            if status_resp.status == FitStatus.COMPLETED:
+                return
+            if status_resp.status == FitStatus.FAILED:
+                raise RuntimeError(
+                    f"Fit {fitted_train_set_id} failed: "
+                    f"{status_resp.error or 'no error message provided'}"
+                )
+
+    @classmethod
+    def _get_fit_status(
+        cls,
+        fitted_train_set_id: UUID,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        return cls.httpx_client.get(
+            url=f"/tabpfn/fit/{fitted_train_set_id}",
+            headers=headers,
+        )
 
     @classmethod
     @backoff.on_exception(
@@ -540,7 +628,7 @@ class ServiceClient(Singleton):
                 "prepare_test_set_upload",
                 response_models={
                     200: PrepareTestSetUploadResponse,
-                    404: ErrorResponse,
+                    404: NotFoundErrorResponse,
                     409: DuplicateTestSetErrorResponse,
                 },
                 handlers={404: cls._raise_not_found_error},
@@ -561,7 +649,6 @@ class ServiceClient(Singleton):
                 test_set_upload_id=prepare_resp.test_set_upload_id,
                 fitted_train_set_id=fitted_train_set_id,
                 task_config=task_config,
-                force_refit=force_refit_enabled(),
             ),
             timeout=client_options.timeout,
             headers=client_options.headers,
@@ -571,7 +658,7 @@ class ServiceClient(Singleton):
             cls._validate_response(
                 res,
                 "predict",
-                response_models={200: PredictResponse, 404: ErrorResponse},
+                response_models={200: PredictResponse, 404: NotFoundErrorResponse},
                 handlers={404: cls._raise_not_found_error},
             ),
         )
@@ -706,7 +793,7 @@ class ServiceClient(Singleton):
         )
 
     @staticmethod
-    def _raise_not_found_error(error_response: ErrorResponse) -> None:
+    def _raise_not_found_error(error_response: NotFoundErrorResponse) -> None:
         if error_response.error_code == "NOT_FOUND":
             raise NeedsRefittingError(error_response.message)
         raise RuntimeError(error_response.message)

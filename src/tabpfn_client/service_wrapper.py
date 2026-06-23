@@ -279,7 +279,6 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         thinking_effort: ThinkingEffort | None = None,
         thinking_timeout_s: float | None = None,
         thinking_metric: str | None = None,
-        force_refit: bool = False,
         client_options: ClientOptions | None = None,
         description: str | None = None,
     ) -> UUID:
@@ -292,7 +291,6 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             thinking_effort=thinking_effort,
             thinking_timeout_s=thinking_timeout_s,
             thinking_metric=thinking_metric,
-            force_refit=force_refit,
             client_options=client_options,
             description=description,
         )
