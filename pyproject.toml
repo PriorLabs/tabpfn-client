@@ -41,6 +41,7 @@ dependencies = [
     "tabpfn-common-utils>=0.2.10,<=0.2.19",
     "google-crc32c>=1.5.0,<=1.8.0",
     "pyarrow>=14.0.0,<=23.0.1",
+    "pydantic-settings>=2.14.2,<=2.14.2",
 ]
 
 [project.optional-dependencies]
