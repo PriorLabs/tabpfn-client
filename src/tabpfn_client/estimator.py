@@ -26,9 +26,11 @@ from tabpfn_client.client import (
     ThinkingEffort,
 )
 from tabpfn_client.config import Config, init
-from tabpfn_client.constants import URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE
-from tabpfn_client.api_models import ModelVersion
-from tabpfn_client.utils import model_limit_from_version, model_version_from_path
+from tabpfn_client.constants import (
+    ci_mode_enabled,
+    URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE,
+    ModelVersion,
+)
 from tabpfn_client.service_wrapper import InferenceClient
 from tabpfn_client.api_models import (
     RegressorTabPFNConfig,
@@ -38,7 +40,6 @@ from tabpfn_client.api_models import (
     ClassifierConfig,
     RegressorConfig,
 )
-from tabpfn_client.options import get_opts
 
 try:
     from torch import Tensor  # type: ignore
@@ -185,6 +186,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         thinking_effort: ThinkingEffort | None = None,
         thinking_timeout_s: float | None = None,
         thinking_metric: str | None = None,
+        force_refit: bool = False,
         client_options: ClientOptions | None = None,
     ):
         """Construct a TabPFN classifier.
@@ -277,6 +279,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 "roc_auc_ovr_micro", "roc_auc_ovr_weighted".
 
             Aliases "acc", "nll", "pac_score" are also accepted.
+        force_refit: bool, default=False
+            Whether to force refit the model even if the model has already been fitted.
         client_options : ClientOptions, default=None
             Client specific options (e.g. timeout, headers).
         """
@@ -295,6 +299,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.thinking_effort: ThinkingEffort | None = thinking_effort
         self.thinking_timeout_s = thinking_timeout_s
         self.thinking_metric = thinking_metric
+        self.force_refit = force_refit
         self.client_options = client_options or ClientOptions()
 
         self._last_trace_id = None
@@ -334,7 +339,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             # - The user has not explicitly set a sentry-trace header.
             # - In any case if we're going to refit.
             # - In any case if we have already called .fit() on this instance.
-            if self._fit_count > 0 or "sentry-trace" not in self.client_options.headers:
+            if (
+                self.force_refit
+                or self._fit_count > 0
+                or "sentry-trace" not in self.client_options.headers
+            ):
                 self.client_options.headers["sentry-trace"] = uuid4().hex
 
             self._last_trace_id = self.client_options.headers["sentry-trace"]
@@ -350,6 +359,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                     thinking_effort=self.thinking_effort,
                     thinking_timeout_s=self.thinking_timeout_s,
                     thinking_metric=self.thinking_metric,
+                    force_refit=self.force_refit,
                     client_options=self.client_options,
                     description=description,
                 )
@@ -440,6 +450,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                         thinking_effort=self.thinking_effort,
                         thinking_timeout_s=self.thinking_timeout_s,
                         thinking_metric=self.thinking_metric,
+                        force_refit=True,
                         client_options=self.client_options,
                         description=self._last_train_set_description,
                     )
@@ -534,6 +545,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         thinking_effort: ThinkingEffort | None = None,
         thinking_timeout_s: float | None = None,
         thinking_metric: str | None = None,
+        force_refit: bool = False,
         client_options: ClientOptions | None = None,
     ):
         """Construct a TabPFN regressor.
@@ -610,6 +622,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
             Aliases "mse", "rmse", "mae", "mape", "smape" are also
             accepted.
+        force_refit: bool, default=False
+            Whether to force refit the model even if the model has already been fitted.
         client_options : ClientOptions, default=None
             Client specific options (e.g. timeout, headers).
         """
@@ -627,6 +641,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.thinking_effort: ThinkingEffort | None = thinking_effort
         self.thinking_timeout_s = thinking_timeout_s
         self.thinking_metric = thinking_metric
+        self.force_refit = force_refit
         self.client_options = client_options or ClientOptions()
 
         self._last_trace_id = None
@@ -666,7 +681,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             # - The user has not explicitly set a sentry-trace header.
             # - In any case if we're going to refit.
             # - In any case if we have already called .fit() on this instance.
-            if self._fit_count > 0 or "sentry-trace" not in self.client_options.headers:
+            if (
+                self.force_refit
+                or self._fit_count > 0
+                or "sentry-trace" not in self.client_options.headers
+            ):
                 self.client_options.headers["sentry-trace"] = uuid4().hex
 
             self._last_trace_id = self.client_options.headers["sentry-trace"]
@@ -683,6 +702,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     thinking_effort=self.thinking_effort,
                     thinking_timeout_s=self.thinking_timeout_s,
                     thinking_metric=self.thinking_metric,
+                    force_refit=self.force_refit,
                     client_options=self.client_options,
                     description=description,
                 )
@@ -778,6 +798,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                         thinking_effort=self.thinking_effort,
                         thinking_timeout_s=self.thinking_timeout_s,
                         thinking_metric=self.thinking_metric,
+                        force_refit=True,
                         client_options=self.client_options,
                         description=self._last_train_set_description,
                     )
@@ -929,8 +950,8 @@ def validate_test_set(
     if not model_path:
         limit = limits.model_limits[limits.default_model_version]
     else:
-        model_version = model_version_from_path(model_path)
-        limit = model_limit_from_version(model_version, limits.model_limits)
+        model_version = ModelVersion.from_model_path(model_path)
+        limit = model_version.model_limit(limits.model_limits)
 
     if X.shape[0] > limit.test_set_max_rows:
         raise ValueError(
@@ -1006,7 +1027,7 @@ def _clean_text_features(X):
 
 
 def run_task(task: Callable, message: str, with_spinner: bool = True) -> Any:
-    if not with_spinner or get_opts().TABPFN_CLIENT_CI_MODE:
+    if not with_spinner or ci_mode_enabled():
         result = task()
     else:
         start = time.time()
