@@ -7,6 +7,7 @@ from pathlib import Path
 from tests.mock_tabpfn_server import with_mock_server
 from tabpfn_client.service_wrapper import UserAuthenticationClient, UserDataClient
 from tabpfn_client.client import ServiceClient
+from tabpfn_client.options import get_opts
 
 
 class TestUserAuthClient(unittest.TestCase):
@@ -129,10 +130,8 @@ class TestUserAuthClient(unittest.TestCase):
 
     @with_mock_server()
     def test_reset_cache_unsets_tabpfn_token_constant(self, mock_server):
-        import tabpfn_client.constants as constants
-
         # Ensure we take the env-token path (no cached token file).
-        with patch.object(constants, "TABPFN_TOKEN", "dummy_env_token"):
+        with patch.object(get_opts(), "TABPFN_TOKEN", "dummy_env_token"):
             # Make the token invalid so that the reset path is triggered.
             mock_server.router.get(mock_server.endpoints.protected_root.path).respond(
                 401
@@ -144,7 +143,7 @@ class TestUserAuthClient(unittest.TestCase):
 
             self.assertFalse(is_valid_token)
             self.assertIsNone(access_token)
-            self.assertIsNone(constants.TABPFN_TOKEN)
+            self.assertIsNone(get_opts().TABPFN_TOKEN)
 
     def test_reset_cache_without_token_set(self):
         # assert no exception is raised
