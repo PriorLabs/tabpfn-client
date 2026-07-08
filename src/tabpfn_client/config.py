@@ -10,7 +10,6 @@ from tabpfn_client.service_wrapper import UserAuthenticationClient
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client.prompt_agent import PromptAgent
 from tabpfn_client.ui import console, warn
-from tabpfn_client.options import reload_opts
 
 
 CONNECTION_ERROR = RuntimeError(
@@ -28,7 +27,6 @@ class Config:
 
     is_initialized = False
     use_server = False
-    token: str | None = None
 
 
 def init(use_server=True):
@@ -49,8 +47,6 @@ def init(use_server=True):
     if Config.is_initialized:
         # Only do the following if the initialization has not been done yet
         return
-
-    reload_opts()
 
     if use_server:
         try:

@@ -13,7 +13,6 @@ from tabpfn_client.client import (
     NeedsRefittingError,
     ServiceClient,
 )
-from tabpfn_client.options import get_opts
 from tabpfn_client.api_models import (
     ClassifierConfig,
     RegressorConfig,
@@ -413,7 +412,7 @@ class TestServiceClient(unittest.TestCase):
 
         with (
             patch.object(ServiceClient, "_upload_to_gcs"),
-            patch.object(get_opts(), "TABPFN_CLIENT_POLL_INTERVAL", 0),
+            patch("tabpfn_client.client.TABPFN_CLIENT_POLL_INTERVAL", 0),
         ):
             result = ServiceClient.fit(
                 self.X_train,
@@ -452,7 +451,7 @@ class TestServiceClient(unittest.TestCase):
 
         with (
             patch.object(ServiceClient, "_upload_to_gcs"),
-            patch.object(get_opts(), "TABPFN_CLIENT_POLL_INTERVAL", 0),
+            patch("tabpfn_client.client.TABPFN_CLIENT_POLL_INTERVAL", 0),
         ):
             with self.assertRaises(RuntimeError) as cm:
                 ServiceClient.fit(

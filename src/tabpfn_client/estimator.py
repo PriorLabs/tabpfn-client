@@ -26,9 +26,11 @@ from tabpfn_client.client import (
     ThinkingEffort,
 )
 from tabpfn_client.config import Config, init
-from tabpfn_client.constants import URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE
-from tabpfn_client.api_models import ModelVersion
-from tabpfn_client.utils import model_limit_from_version, model_version_from_path
+from tabpfn_client.constants import (
+    ci_mode_enabled,
+    URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE,
+    ModelVersion,
+)
 from tabpfn_client.service_wrapper import InferenceClient
 from tabpfn_client.api_models import (
     RegressorTabPFNConfig,
@@ -38,7 +40,6 @@ from tabpfn_client.api_models import (
     ClassifierConfig,
     RegressorConfig,
 )
-from tabpfn_client.options import get_opts
 
 try:
     from torch import Tensor  # type: ignore
@@ -929,8 +930,8 @@ def validate_test_set(
     if not model_path:
         limit = limits.model_limits[limits.default_model_version]
     else:
-        model_version = model_version_from_path(model_path)
-        limit = model_limit_from_version(model_version, limits.model_limits)
+        model_version = ModelVersion.from_model_path(model_path)
+        limit = model_version.model_limit(limits.model_limits)
 
     if X.shape[0] > limit.test_set_max_rows:
         raise ValueError(
@@ -1006,7 +1007,7 @@ def _clean_text_features(X):
 
 
 def run_task(task: Callable, message: str, with_spinner: bool = True) -> Any:
-    if not with_spinner or get_opts().TABPFN_CLIENT_CI_MODE:
+    if not with_spinner or ci_mode_enabled():
         result = task()
     else:
         start = time.time()
