@@ -69,8 +69,8 @@ norecursedirs = [
 
 [dependency-groups]
 dev = [
+    "respx==0.23.1",
     "pytest==9.0.3",
-    "respx==0.22.0",
     "ruff==0.15.16",
     "licensecheck==2025.1.0",
     "basedpyright~=1.32.1"
