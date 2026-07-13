@@ -79,6 +79,7 @@ class _SagemakerBase(BaseEstimator):
         s3_prefix: str = "async-io",
         async_poll_interval_s: float = 2.0,
         async_timeout_s: float = 60 * 60,
+        invocation_timeout_s: Optional[int] = None,
     ):
         self.endpoint_name = endpoint_name
         self.region_name = region_name
@@ -104,6 +105,11 @@ class _SagemakerBase(BaseEstimator):
         self.s3_prefix = s3_prefix
         self.async_poll_interval_s = async_poll_interval_s
         self.async_timeout_s = async_timeout_s
+        # Server-side cap (seconds, 1-3600) the endpoint may spend on one async
+        # request before it is failed. Left as the service default when None;
+        # raise it for long-running requests. Distinct from `async_timeout_s`,
+        # which only bounds how long the client polls for the result.
+        self.invocation_timeout_s = invocation_timeout_s
 
     @property
     def _thinking_active(self) -> bool:
@@ -263,13 +269,16 @@ class _SagemakerBase(BaseEstimator):
             Body=body_bytes,
             ContentType="application/json",
         )
-        resp = self._runtime_client().invoke_endpoint_async(
-            EndpointName=self.endpoint_name,
-            InputLocation=f"s3://{self.s3_bucket}/{input_key}",
-            ContentType="application/json",
-            Accept="application/json",
-            InferenceId=inference_id,
-        )
+        invoke_kwargs: Dict[str, Any] = {
+            "EndpointName": self.endpoint_name,
+            "InputLocation": f"s3://{self.s3_bucket}/{input_key}",
+            "ContentType": "application/json",
+            "Accept": "application/json",
+            "InferenceId": inference_id,
+        }
+        if self.invocation_timeout_s is not None:
+            invoke_kwargs["InvocationTimeoutSeconds"] = int(self.invocation_timeout_s)
+        resp = self._runtime_client().invoke_endpoint_async(**invoke_kwargs)
         out_bucket, out_key = resp["OutputLocation"].removeprefix("s3://").split("/", 1)
         fail_location = resp.get("FailureLocation")
         fail_bucket, fail_key = (None, None)
