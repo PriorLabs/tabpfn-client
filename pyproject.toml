@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tabpfn-client"
-version = "0.3.1"
+version = "0.3.3"
 requires-python = ">=3.10"
 
 description = "API access for TabPFN: Foundation model for tabular data"
@@ -69,8 +69,8 @@ norecursedirs = [
 
 [dependency-groups]
 dev = [
-    "pytest==8.4.2",
-    "respx==0.22.0",
+    "respx==0.23.1",
+    "pytest==9.0.3",
     "ruff==0.15.16",
     "licensecheck==2025.1.0",
     "basedpyright~=1.32.1"
