@@ -592,9 +592,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             mock_predict.return_value = PredictionResult(
                 y_pred=np.random.randn(20), metadata={}
             )
-            output = regressor.predict(
-                test_X, output_type="quantiles", quantiles=[0.5]
-            )
+            output = regressor.predict(test_X, output_type="quantiles", quantiles=[0.5])
 
         self.assertIsInstance(output, list)
         self.assertEqual(len(output), 1)
