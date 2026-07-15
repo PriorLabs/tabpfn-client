@@ -787,6 +787,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self._last_meta = result.metadata
 
         output = result.y_pred
+        if output_type == "quantiles" and isinstance(output, np.ndarray):
+            output = list(output)
         if output_type == "full":
             try:
                 from tabpfn.regressor import FullSupportBarDistribution  # type: ignore

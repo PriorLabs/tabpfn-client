@@ -559,6 +559,28 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             self.assertEqual(predict_params.output_type, "quantiles")
             self.assertEqual(predict_params.quantiles, quantiles)
 
+    def test_predict_quantiles_returns_list_matching_local_tabpfn(self):
+        """Server returns a stacked (n_quantiles, n_samples) array; predict()
+        normalizes it to a list of per-quantile arrays, matching local tabpfn."""
+        regressor = TabPFNRegressor()
+        regressor.fitted_ = True
+        test_X = np.random.randn(20, 5)
+        quantiles = [0.1, 0.5, 0.9]
+
+        with patch.object(InferenceClient, "predict") as mock_predict:
+            mock_predict.return_value = PredictionResult(
+                y_pred=np.random.randn(len(quantiles), 20), metadata={}
+            )
+            output = regressor.predict(
+                test_X, output_type="quantiles", quantiles=quantiles
+            )
+
+        self.assertIsInstance(output, list)
+        self.assertEqual(len(output), len(quantiles))
+        for arr in output:
+            self.assertIsInstance(arr, np.ndarray)
+            self.assertEqual(arr.shape, (20,))
+
     def test_predict_full_adds_criterion_with_optional_dependencies(self):
         regressor = TabPFNRegressor()
         regressor.fitted_ = True
