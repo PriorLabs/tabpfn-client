@@ -575,7 +575,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
                 test_X, output_type="quantiles", quantiles=quantiles
             )
 
-        self.assertIsInstance(output, list)
+        assert isinstance(output, list)
         self.assertEqual(len(output), len(quantiles))
         for arr in output:
             self.assertIsInstance(arr, np.ndarray)
@@ -594,7 +594,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             )
             output = regressor.predict(test_X, output_type="quantiles", quantiles=[0.5])
 
-        self.assertIsInstance(output, list)
+        assert isinstance(output, list)
         self.assertEqual(len(output), 1)
         self.assertIsInstance(output[0], np.ndarray)
         self.assertEqual(output[0].shape, (20,))
