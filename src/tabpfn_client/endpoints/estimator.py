@@ -15,10 +15,11 @@ otherwise no `Authorization` header is added.
 Cached predict is a per-call option: pass `model_id` to any `predict*`
 call to send `context.model_id` and omit the training data, letting the
 endpoint reuse an already-fit model. `fit()` is not required in that
-case. When the endpoint returns a `model_id` in its response, it is
-exposed as `self.model_id_` so callers can pass it forward. `model_path`
-is similarly optional and only sent when set; some deployments reject
-overrides.
+case. To make the endpoint build a reusable cache in the first place,
+set `fit_mode="fit_with_cache"` on the constructor; the endpoint then
+returns a `model_id` which is exposed as `self.model_id_` so callers
+can pass it forward. `model_path` is similarly optional and only sent
+when set; some deployments reject overrides.
 """
 
 from __future__ import annotations
@@ -38,6 +39,8 @@ def _to_jsonable(X: Any) -> list:
         return X.values.tolist()
     if isinstance(X, pd.Series):
         return X.tolist()
+    if isinstance(X, list):
+        return X
     return np.asarray(X).tolist()
 
 
@@ -52,6 +55,9 @@ class _EndpointBase(BaseEstimator):
         api_key: Optional[str] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         model_path: Optional[str] = None,
+        fit_mode: Optional[
+            Literal["fit_preprocessors", "low_memory", "fit_with_cache", "batched"]
+        ] = None,
         n_estimators: int = 8,
         softmax_temperature: float = 0.9,
         balance_probabilities: bool = False,
@@ -68,6 +74,7 @@ class _EndpointBase(BaseEstimator):
         self.api_key = api_key
         self.extra_headers = extra_headers
         self.model_path = model_path
+        self.fit_mode = fit_mode
         self.n_estimators = n_estimators
         self.softmax_temperature = softmax_temperature
         self.balance_probabilities = balance_probabilities
@@ -96,6 +103,8 @@ class _EndpointBase(BaseEstimator):
             cfg["categorical_features_indices"] = self.categorical_features_indices
         if self.model_path is not None:
             cfg["model_path"] = self.model_path
+        if self.fit_mode is not None:
+            cfg["fit_mode"] = self.fit_mode
         if self._TASK == "classification":
             cfg["balance_probabilities"] = self.balance_probabilities
         return cfg
@@ -139,6 +148,10 @@ class _EndpointBase(BaseEstimator):
             )
         self.X_train_ = X_arr
         self.y_train_ = y_arr
+        # New training data invalidates any cached model_id captured from a
+        # prior predict; otherwise `predict(X, model_id=self.model_id_)` would
+        # keep hitting the old server-side model.
+        self.model_id_ = None
         if self._TASK == "classification":
             self.classes_ = np.unique(y_arr)
         return self
