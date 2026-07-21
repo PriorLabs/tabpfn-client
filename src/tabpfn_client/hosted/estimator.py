@@ -13,9 +13,12 @@ Auth is optional: when `api_key` is set it is sent as `Bearer <api_key>`,
 otherwise no `Authorization` header is added.
 
 Cached predict is opt-in via the `model_id` constructor argument.
-When set, `predict*` sends `context.model_id` and omits the training
-data, letting the endpoint reuse an already-fit model — `fit()` is not
-required. To make the endpoint build a reusable cache in the first
+When set (and `fit()` has not been called), `predict*` sends
+`context.model_id` and omits the training data, letting the endpoint
+reuse an already-fit model. Calling `fit()` on the estimator supersedes
+the constructor `model_id` — the freshly-stored training data is
+shipped on the next `predict*`, matching sklearn's re-fit semantics.
+To make the endpoint build a reusable cache in the first
 place, set `fit_mode="fit_with_cache"`; the endpoint then returns a
 `model_id` in its response, captured on the fitted attribute
 `self.model_id_` so callers can construct a follow-up estimator with
@@ -182,19 +185,24 @@ class _HostedBase(BaseEstimator):
             "X_test": _to_jsonable(X_test),
         }
 
-        # When the constructor was given a model_id, reference the previously
-        # fitted server-side model and skip the ICL step. Otherwise the
-        # estimator must have been fit() first — ship the training data.
-        if self.model_id is not None:
-            body["context"] = {"model_id": self.model_id}
-        else:
-            check_is_fitted(self, ["X_train_", "y_train_"])
+        # Precedence: a completed fit() wins over the constructor's model_id.
+        # Rationale — if the caller ran fit(new_X, new_y) on an estimator that
+        # was constructed with model_id set, they have re-trained; the cached
+        # id is now stale relative to the new data. Falls back to the cached
+        # path only when fit() was never called.
+        has_training_data = hasattr(self, "X_train_") and hasattr(self, "y_train_")
+        if has_training_data:
             # y_train on the wire is 2D (n_samples, 1).
             y_arr = np.asarray(self.y_train_)
             if y_arr.ndim == 1:
                 y_arr = y_arr.reshape(-1, 1)
             body["X_train"] = _to_jsonable(self.X_train_)
             body["y_train"] = y_arr.tolist()
+        elif self.model_id is not None:
+            body["context"] = {"model_id": self.model_id}
+        else:
+            # Neither path available — raise the standard sklearn error.
+            check_is_fitted(self, ["X_train_", "y_train_"])
 
         resp = self._http_client().post(
             self.endpoint_url,
