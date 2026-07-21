@@ -12,14 +12,19 @@ fit runs.
 Auth is optional: when `api_key` is set it is sent as `Bearer <api_key>`,
 otherwise no `Authorization` header is added.
 
-Cached predict is a per-call option: pass `model_id` to any `predict*`
-call to send `context.model_id` and omit the training data, letting the
-endpoint reuse an already-fit model. `fit()` is not required in that
-case. To make the endpoint build a reusable cache in the first place,
-set `fit_mode="fit_with_cache"` on the constructor; the endpoint then
-returns a `model_id` which is exposed as `self.model_id_` so callers
-can pass it forward. `model_path` is similarly optional and only sent
-when set; some deployments reject overrides.
+Cached predict is opt-in via the `model_id` constructor argument.
+When set, `predict*` sends `context.model_id` and omits the training
+data, letting the endpoint reuse an already-fit model — `fit()` is not
+required. To make the endpoint build a reusable cache in the first
+place, set `fit_mode="fit_with_cache"`; the endpoint then returns a
+`model_id` in its response, captured on the fitted attribute
+`self.model_id_` so callers can construct a follow-up estimator with
+`model_id=prior.model_id_`. `model_path` is similarly optional and
+only sent when set; some deployments reject overrides.
+
+`model_id` lives on the constructor (not on `predict`) so the sklearn
+estimator contract stays intact: `predict(X)` / `predict_proba(X)` work
+with `Pipeline`, `GridSearchCV`, `cross_validate`, etc.
 """
 
 from __future__ import annotations
@@ -44,7 +49,7 @@ def _to_jsonable(X: Any) -> list:
     return np.asarray(X).tolist()
 
 
-class _EndpointBase(BaseEstimator):
+class _HostedBase(BaseEstimator):
     """Shared HTTP plumbing for the endpoint-backed TabPFN estimators."""
 
     _TASK: str = ""  # overridden by subclasses
@@ -54,6 +59,7 @@ class _EndpointBase(BaseEstimator):
         endpoint_url: str,
         api_key: Optional[str] = None,
         extra_headers: Optional[Dict[str, str]] = None,
+        model_id: Optional[str] = None,
         model_path: Optional[str] = None,
         fit_mode: Optional[
             Literal["fit_preprocessors", "low_memory", "fit_with_cache", "batched"]
@@ -73,6 +79,7 @@ class _EndpointBase(BaseEstimator):
         self.endpoint_url = endpoint_url
         self.api_key = api_key
         self.extra_headers = extra_headers
+        self.model_id = model_id
         self.model_path = model_path
         self.fit_mode = fit_mode
         self.n_estimators = n_estimators
@@ -138,7 +145,7 @@ class _EndpointBase(BaseEstimator):
         state.pop("_cached_client", None)
         return state
 
-    def fit(self, X: Any, y: Any) -> "_EndpointBase":
+    def fit(self, X: Any, y: Any) -> "_HostedBase":
         X_arr = X if isinstance(X, pd.DataFrame) else np.asarray(X)
         y_arr = y if isinstance(y, (pd.DataFrame, pd.Series)) else np.asarray(y)
         if X_arr.shape[0] != y_arr.shape[0]:
@@ -161,7 +168,6 @@ class _EndpointBase(BaseEstimator):
         X_test: Any,
         output_type: str,
         predict_params: Optional[Dict[str, Any]] = None,
-        model_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         params: Dict[str, Any] = {"output_type": output_type}
         if predict_params:
@@ -176,10 +182,11 @@ class _EndpointBase(BaseEstimator):
             "X_test": _to_jsonable(X_test),
         }
 
-        # Allow passing model_id to reference a previously fitted
-        # model and run predict by skipping the ICL step
-        if model_id is not None:
-            body["context"] = {"model_id": model_id}
+        # When the constructor was given a model_id, reference the previously
+        # fitted server-side model and skip the ICL step. Otherwise the
+        # estimator must have been fit() first — ship the training data.
+        if self.model_id is not None:
+            body["context"] = {"model_id": self.model_id}
         else:
             check_is_fitted(self, ["X_train_", "y_train_"])
             # y_train on the wire is 2D (n_samples, 1).
@@ -204,11 +211,11 @@ class _EndpointBase(BaseEstimator):
         return payload
 
 
-class TabPFNClassifier(_EndpointBase, ClassifierMixin):
+class TabPFNClassifier(_HostedBase, ClassifierMixin):
     """TabPFN classifier backed by a self-hosted inference endpoint.
 
     Example:
-        from tabpfn_client.endpoints import TabPFNClassifier
+        from tabpfn_client.hosted import TabPFNClassifier
         clf = TabPFNClassifier(
             endpoint_url="https://<your-endpoint>/predict",
             api_key="<optional-bearer-token>",
@@ -220,20 +227,20 @@ class TabPFNClassifier(_EndpointBase, ClassifierMixin):
 
     _TASK = "classification"
 
-    def predict(self, X: Any, model_id: Optional[str] = None) -> np.ndarray:
-        result = self._invoke(X, output_type="preds", model_id=model_id)
+    def predict(self, X: Any) -> np.ndarray:
+        result = self._invoke(X, output_type="preds")
         return np.asarray(result["prediction"])
 
-    def predict_proba(self, X: Any, model_id: Optional[str] = None) -> np.ndarray:
-        result = self._invoke(X, output_type="probas", model_id=model_id)
+    def predict_proba(self, X: Any) -> np.ndarray:
+        result = self._invoke(X, output_type="probas")
         return np.asarray(result["prediction"])
 
 
-class TabPFNRegressor(_EndpointBase, RegressorMixin):
+class TabPFNRegressor(_HostedBase, RegressorMixin):
     """TabPFN regressor backed by a self-hosted inference endpoint.
 
     Example:
-        from tabpfn_client.endpoints import TabPFNRegressor
+        from tabpfn_client.hosted import TabPFNRegressor
         reg = TabPFNRegressor(
             endpoint_url="https://<your-endpoint>/predict",
             api_key="<optional-bearer-token>",
@@ -250,7 +257,6 @@ class TabPFNRegressor(_EndpointBase, RegressorMixin):
         X: Any,
         output_type: str = "mean",
         quantiles: Optional[list] = None,
-        model_id: Optional[str] = None,
     ) -> np.ndarray:
         predict_params: Dict[str, Any] = {}
         if quantiles is not None:
@@ -259,6 +265,5 @@ class TabPFNRegressor(_EndpointBase, RegressorMixin):
             X,
             output_type=output_type,
             predict_params=predict_params,
-            model_id=model_id,
         )
         return np.asarray(result["prediction"])
