@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import time
+from pathlib import Path
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Literal, cast, overload
@@ -31,6 +33,7 @@ from tabpfn_client.api_models import ModelVersion
 from tabpfn_client.utils import model_limit_from_version, model_version_from_path
 from tabpfn_client.service_wrapper import InferenceClient
 from tabpfn_client.api_models import (
+    FitMode,
     RegressorTabPFNConfig,
     ClassifierTabPFNConfig,
     RegressorPredictParams,
@@ -67,6 +70,87 @@ _AUTO_MODEL_PATH_ALIASES: frozenset[str | None] = frozenset({None, "auto", "defa
 THINKING_TIMEOUT_MAX_S = 40 * 60
 
 _VALID_THINKING_EFFORT_LEVELS = frozenset({"medium", "high"})
+
+# The server's `FitMode` enum also carries internal `low_memory`/`batched`
+# values, but gapi only wires two end-to-end: `fit_preprocessors` (the stateless
+# default) and `fit_with_cache` (persist a server-side KV cache keyed by the
+# returned fitted-train-set id, so later predicts against that id are served
+# from the cache instead of re-fitting). The value is validated server-side by
+# `FitRequest._validate_fit_mode`; the client just forwards it.
+
+# Bumped when the shape of the dict produced by `save_model()` changes.
+_MODEL_HANDLE_VERSION = 1
+
+
+def _cast_fitted_id(model_id: str | UUID | None) -> UUID | None:
+    """Normalize a user-supplied model id into a UUID (or None)."""
+    if model_id is None:
+        return None
+    if isinstance(model_id, UUID):
+        return model_id
+    return UUID(str(model_id))
+
+
+def _read_model_handle(handle: dict[str, Any] | str | Path) -> dict[str, Any]:
+    """Accept either an in-memory handle dict or a path to a JSON file
+    produced by `save_model()`."""
+    if isinstance(handle, dict):
+        return handle
+    return json.loads(Path(handle).read_text())
+
+
+def _build_model_handle(
+    estimator: Any,
+    task: Literal["classification", "regression"],
+    path: str | Path | None,
+) -> dict[str, Any] | Path:
+    """Shared implementation of `save_model()` for both estimators."""
+    check_is_fitted(estimator)
+    params = estimator.get_params(deep=False)
+    # `client_options` is runtime-only (timeouts, auth/trace headers) and not
+    # JSON-serializable; drop it so the handle stays portable.
+    params.pop("client_options", None)
+    # Persist the *effective* id: a real `fit()` supersedes the constructor's
+    # `model_id`. Coerce to str for JSON.
+    params["model_id"] = str(estimator._last_fitted_train_set_id)
+    handle: dict[str, Any] = {
+        "format_version": _MODEL_HANDLE_VERSION,
+        "task": task,
+        "params": params,
+    }
+    if task == "classification":
+        classes = getattr(estimator, "classes_", None)
+        if classes is None:
+            # A bare `model_id` classifier (never fit / never load_model'd) has
+            # no class labels to persist; fail clearly instead of AttributeError.
+            raise ValueError(
+                "Cannot save a classifier without `classes_`. Fit it first, or "
+                "reconstruct it via `load_model()`."
+            )
+        handle["classes"] = classes.tolist()
+    if path is None:
+        return handle
+    out = Path(path)
+    out.write_text(json.dumps(handle, indent=2))
+    return out
+
+
+def _load_model_handle_for(
+    cls: type,
+    handle: dict[str, Any] | str | Path,
+    task: Literal["classification", "regression"],
+) -> dict[str, Any]:
+    """Read + validate a `save_model()` handle for the target estimator class."""
+    data = _read_model_handle(handle)
+    version = data.get("format_version")
+    if version != _MODEL_HANDLE_VERSION:
+        raise ValueError(
+            f"Unsupported model handle version {version!r}; "
+            f"expected {_MODEL_HANDLE_VERSION}."
+        )
+    if data.get("task") != task:
+        raise ValueError(f"Cannot load a {data.get('task')!r} model into {cls.__name__}.")
+    return data
 
 
 class TabPFNModelSelection:
@@ -179,6 +263,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         random_state: int | None = 0,
         inference_config: dict[str, Any] | None = None,
         categorical_features_indices: list[int] | None = None,
+        fit_mode: FitMode | None = None,
         # end: tabpfn_config
         paper_version: bool = False,
         thinking_mode: bool = False,
@@ -186,6 +271,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         thinking_timeout_s: float | None = None,
         thinking_metric: str | None = None,
         client_options: ClientOptions | None = None,
+        model_id: str | UUID | None = None,
     ):
         """Construct a TabPFN classifier.
 
@@ -277,8 +363,26 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 "roc_auc_ovr_micro", "roc_auc_ovr_weighted".
 
             Aliases "acc", "nll", "pac_score" are also accepted.
+        fit_mode: {"fit_preprocessors", "fit_with_cache"} or None, default=None
+            Controls what the server persists at fit time. None defers to the
+            server default, which is "fit_preprocessors".
+            "fit_preprocessors" fits only the preprocessing state, so every
+            predict re-runs the forward pass from the uploaded train set.
+            "fit_with_cache" additionally builds and persists a server-side KV
+            cache keyed by the resulting fitted-train-set id; later predicts
+            against that id (see `model_id` / `save_model` / `load_model`) are
+            served from the cache instead of re-fitting.
         client_options : ClientOptions, default=None
             Client specific options (e.g. timeout, headers).
+        model_id : str, UUID or None, default=None
+            Reference to an already-fitted train set on the server (the id
+            returned by a previous `fit()`, exposed via `save_model()`). When
+            set, the estimator is considered fitted and `predict`/`predict_proba`
+            run against that id without calling `fit()` again — this is what
+            lets a `fit_with_cache` model be reused across processes. A fresh
+            `fit()` call always supersedes it. Note that a classifier
+            constructed this way has no `classes_` unless it is restored via
+            `load_model()`.
         """
         self.model_path = model_path
         self.categorical_features_indices = categorical_features_indices
@@ -290,20 +394,33 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.inference_precision = inference_precision
         self.random_state = random_state
         self.inference_config = inference_config
+        self.fit_mode: FitMode | None = fit_mode
         self.paper_version = paper_version
         self.thinking_mode = thinking_mode
         self.thinking_effort: ThinkingEffort | None = thinking_effort
         self.thinking_timeout_s = thinking_timeout_s
         self.thinking_metric = thinking_metric
         self.client_options = client_options or ClientOptions()
+        self.model_id = model_id
 
         self._last_trace_id = None
-        self._last_fitted_train_set_id = None
+        # Seed the fitted-train-set id from `model_id` so a load-by-id estimator
+        # is immediately usable for predict (see `__sklearn_is_fitted__`).
+        self._last_fitted_train_set_id = _cast_fitted_id(model_id)
         self._last_train_X = None
         self._last_train_y = None
         self._last_meta = {}
         self._last_train_set_description = None
         self._fit_count = 0
+
+    def __sklearn_is_fitted__(self) -> bool:
+        # A real `fit()` sets both `fitted_` and `_last_fitted_train_set_id`;
+        # a load-by-id (via `model_id` / `load_model`) sets only the latter.
+        # Either signal means the estimator can serve predictions.
+        return (
+            self._last_fitted_train_set_id is not None
+            or getattr(self, "fitted_", False)
+        )
 
     def fit(
         self,
@@ -431,6 +548,17 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 except NeedsRefittingError as exc:
                     last_exc = exc
                     refit_attempts += 1
+                    if self._last_train_X is None or self._last_train_y is None:
+                        # A load-by-id estimator (constructed via `model_id` /
+                        # `load_model`) has no training data in memory to rebuild
+                        # from, so we can't transparently recover here.
+                        raise RuntimeError(
+                            "The referenced fitted model is no longer available "
+                            "on the server and this estimator has no in-memory "
+                            "training data to refit (it was created via "
+                            "`model_id` / `load_model`). Re-create it by calling "
+                            "`fit(X, y)`."
+                        ) from exc
                     self._last_fitted_train_set_id = InferenceClient.fit(
                         self._last_train_X,
                         self._last_train_y,
@@ -493,6 +621,36 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 f"{URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE}"
             )
 
+    def save_model(self, path: str | Path | None = None) -> dict[str, Any] | Path:
+        """Serialize a portable reference to the fitted (server-side) model.
+
+        The handle captures the server-side fitted-train-set id, the estimator
+        hyperparameters, and the class labels — everything `load_model()` needs
+        to reconstruct an equivalent classifier. No training data leaves the
+        client; predictions run against the model referenced by the id, so this
+        is most useful with `fit_mode="fit_with_cache"`.
+
+        Parameters
+        ----------
+        path : str, Path or None, default=None
+            If given, the handle is written to this path as JSON and the path
+            is returned. If None, the handle dict is returned directly.
+        """
+        return _build_model_handle(self, task="classification", path=path)
+
+    @classmethod
+    def load_model(cls, handle: dict[str, Any] | str | Path) -> "TabPFNClassifier":
+        """Reconstruct a classifier from a `save_model()` handle (dict or path).
+
+        The resulting estimator is already fitted (it references the server-side
+        model by id) and restores `classes_`, so it can `predict` without
+        calling `fit()` again.
+        """
+        data = _load_model_handle_for(cls, handle, task="classification")
+        est = cls(**data["params"])
+        est.classes_ = np.asarray(data["classes"])
+        return est
+
 
 class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
@@ -528,6 +686,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         random_state: int | None = 0,
         inference_config: dict[str, Any] | None = None,
         categorical_features_indices: list[int] | None = None,
+        fit_mode: FitMode | None = None,
         # end: tabpfn_config
         paper_version: bool = False,
         thinking_mode: bool = False,
@@ -535,6 +694,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         thinking_timeout_s: float | None = None,
         thinking_metric: str | None = None,
         client_options: ClientOptions | None = None,
+        model_id: str | UUID | None = None,
     ):
         """Construct a TabPFN regressor.
 
@@ -610,8 +770,24 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
             Aliases "mse", "rmse", "mae", "mape", "smape" are also
             accepted.
+        fit_mode: {"fit_preprocessors", "fit_with_cache"} or None, default=None
+            Controls what the server persists at fit time. None defers to the
+            server default, which is "fit_preprocessors".
+            "fit_preprocessors" fits only the preprocessing state, so every
+            predict re-runs the forward pass from the uploaded train set.
+            "fit_with_cache" additionally builds and persists a server-side KV
+            cache keyed by the resulting fitted-train-set id; later predicts
+            against that id (see `model_id` / `save_model` / `load_model`) are
+            served from the cache instead of re-fitting.
         client_options : ClientOptions, default=None
             Client specific options (e.g. timeout, headers).
+        model_id : str, UUID or None, default=None
+            Reference to an already-fitted train set on the server (the id
+            returned by a previous `fit()`, exposed via `save_model()`). When
+            set, the estimator is considered fitted and `predict` runs against
+            that id without calling `fit()` again — this is what lets a
+            `fit_with_cache` model be reused across processes. A fresh `fit()`
+            call always supersedes it.
         """
         self.model_path = model_path
         self.categorical_features_indices = categorical_features_indices
@@ -622,20 +798,33 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.inference_precision = inference_precision
         self.random_state = random_state
         self.inference_config = inference_config
+        self.fit_mode: FitMode | None = fit_mode
         self.paper_version = paper_version
         self.thinking_mode = thinking_mode
         self.thinking_effort: ThinkingEffort | None = thinking_effort
         self.thinking_timeout_s = thinking_timeout_s
         self.thinking_metric = thinking_metric
         self.client_options = client_options or ClientOptions()
+        self.model_id = model_id
 
         self._last_trace_id = None
-        self._last_fitted_train_set_id = None
+        # Seed the fitted-train-set id from `model_id` so a load-by-id estimator
+        # is immediately usable for predict (see `__sklearn_is_fitted__`).
+        self._last_fitted_train_set_id = _cast_fitted_id(model_id)
         self._last_train_X = None
         self._last_train_y = None
         self._last_meta = {}
         self._last_train_set_description = None
         self._fit_count = 0
+
+    def __sklearn_is_fitted__(self) -> bool:
+        # A real `fit()` sets both `fitted_` and `_last_fitted_train_set_id`;
+        # a load-by-id (via `model_id` / `load_model`) sets only the latter.
+        # Either signal means the estimator can serve predictions.
+        return (
+            self._last_fitted_train_set_id is not None
+            or getattr(self, "fitted_", False)
+        )
 
     def fit(
         self,
@@ -769,6 +958,17 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                 except NeedsRefittingError as exc:
                     last_exc = exc
                     refit_attempts += 1
+                    if self._last_train_X is None or self._last_train_y is None:
+                        # A load-by-id estimator (constructed via `model_id` /
+                        # `load_model`) has no training data in memory to rebuild
+                        # from, so we can't transparently recover here.
+                        raise RuntimeError(
+                            "The referenced fitted model is no longer available "
+                            "on the server and this estimator has no in-memory "
+                            "training data to refit (it was created via "
+                            "`model_id` / `load_model`). Re-create it by calling "
+                            "`fit(X, y)`."
+                        ) from exc
                     self._last_fitted_train_set_id = InferenceClient.fit(
                         self._last_train_X,
                         self._last_train_y,
@@ -829,6 +1029,33 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         y_ = column_or_1d(y, warn=True)
         if sum(pd.isnull(y_)) > 0:
             raise ValueError("Input y contains NaN.")
+
+    def save_model(self, path: str | Path | None = None) -> dict[str, Any] | Path:
+        """Serialize a portable reference to the fitted (server-side) model.
+
+        The handle captures the server-side fitted-train-set id and the
+        estimator hyperparameters — everything `load_model()` needs to
+        reconstruct an equivalent regressor. No training data leaves the
+        client; predictions run against the model referenced by the id, so this
+        is most useful with `fit_mode="fit_with_cache"`.
+
+        Parameters
+        ----------
+        path : str, Path or None, default=None
+            If given, the handle is written to this path as JSON and the path
+            is returned. If None, the handle dict is returned directly.
+        """
+        return _build_model_handle(self, task="regression", path=path)
+
+    @classmethod
+    def load_model(cls, handle: dict[str, Any] | str | Path) -> "TabPFNRegressor":
+        """Reconstruct a regressor from a `save_model()` handle (dict or path).
+
+        The resulting estimator is already fitted (it references the server-side
+        model by id), so it can `predict` without calling `fit()` again.
+        """
+        data = _load_model_handle_for(cls, handle, task="regression")
+        return cls(**data["params"])
 
 
 def _is_thinking_supported_model_path(model_path: str | None) -> bool:
