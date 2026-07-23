@@ -99,11 +99,19 @@ def _resolve_train_set_id(estimator: Any) -> UUID | None:
     a resolver instead of syncing state at both mutation sites means `fit()`
     never has to mutate `self.model_id`, so `get_params()` / `clone()` stay
     sklearn-correct.
+
+    Returns None if `model_id` is set but not a valid UUID — sklearn's
+    convention is that `__init__` does no validation, so bad ids must not
+    crash `__sklearn_is_fitted__`. The estimator degrades to "not fitted"
+    and `predict` surfaces the standard `NotFittedError`.
     """
     fitted = getattr(estimator, "fitted_train_set_id_", None)
     if fitted is not None:
         return fitted
-    return _cast_fitted_id(estimator.model_id)
+    try:
+        return _cast_fitted_id(estimator.model_id)
+    except (ValueError, TypeError):
+        return None
 
 
 def _read_model_handle(handle: dict[str, Any] | str | Path) -> dict[str, Any]:

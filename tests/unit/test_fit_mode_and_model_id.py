@@ -54,11 +54,12 @@ class TestFitMode(unittest.TestCase):
 
     def test_fit_mode_forwarded_on_predict_task_config(self):
         reg = TabPFNRegressor(fit_mode="fit_with_cache", model_id=_MODEL_ID)
-        with patch.object(ServiceClient, "get_model_limits", return_value=None):
-            with patch.object(
-                InferenceClient, "predict", return_value=_regressor_prediction()
-            ) as mock_predict:
-                reg.predict(np.random.randn(4, 3))
+        with patch("tabpfn_client.estimator.init"):
+            with patch.object(ServiceClient, "get_model_limits", return_value=None):
+                with patch.object(
+                    InferenceClient, "predict", return_value=_regressor_prediction()
+                ) as mock_predict:
+                    reg.predict(np.random.randn(4, 3))
         task_config = mock_predict.call_args[1]["task_config"]
         dumped = task_config.tabpfn_config.model_dump(mode="json", exclude_none=True)
         self.assertEqual(dumped.get("fit_mode"), "fit_with_cache")
@@ -74,12 +75,13 @@ class TestModelIdConstructor(unittest.TestCase):
 
     def test_predict_uses_model_id_without_fitting(self):
         reg = TabPFNRegressor(model_id=_MODEL_ID)
-        with patch.object(ServiceClient, "get_model_limits", return_value=None):
-            with patch.object(InferenceClient, "fit") as mock_fit:
-                with patch.object(
-                    InferenceClient, "predict", return_value=_regressor_prediction()
-                ) as mock_predict:
-                    reg.predict(np.random.randn(4, 3))
+        with patch("tabpfn_client.estimator.init"):
+            with patch.object(ServiceClient, "get_model_limits", return_value=None):
+                with patch.object(InferenceClient, "fit") as mock_fit:
+                    with patch.object(
+                        InferenceClient, "predict", return_value=_regressor_prediction()
+                    ) as mock_predict:
+                        reg.predict(np.random.randn(4, 3))
         mock_fit.assert_not_called()
         self.assertEqual(
             mock_predict.call_args[1]["fitted_train_set_id"], UUID(_MODEL_ID)
@@ -163,13 +165,14 @@ class TestSaveLoadModel(unittest.TestCase):
 class TestRefitGuard(unittest.TestCase):
     def test_load_by_id_cannot_auto_refit(self):
         reg = TabPFNRegressor(model_id=_MODEL_ID)  # no in-memory train data
-        with patch.object(ServiceClient, "get_model_limits", return_value=None):
-            with patch.object(InferenceClient, "fit") as mock_fit:
-                with patch.object(
-                    InferenceClient, "predict", side_effect=NeedsRefittingError()
-                ):
-                    with self.assertRaises(RuntimeError) as ctx:
-                        reg.predict(np.random.randn(4, 3))
+        with patch("tabpfn_client.estimator.init"):
+            with patch.object(ServiceClient, "get_model_limits", return_value=None):
+                with patch.object(InferenceClient, "fit") as mock_fit:
+                    with patch.object(
+                        InferenceClient, "predict", side_effect=NeedsRefittingError()
+                    ):
+                        with self.assertRaises(RuntimeError) as ctx:
+                            reg.predict(np.random.randn(4, 3))
         self.assertIn("no in-memory", str(ctx.exception).lower())
         mock_fit.assert_not_called()
 
@@ -195,6 +198,19 @@ class TestSklearnCompatibility(unittest.TestCase):
                 _resolve_train_set_id(cloned), UUID(_MODEL_ID), Est.__name__
             )
             self.assertTrue(cloned.__sklearn_is_fitted__(), Est.__name__)
+
+    def test_invalid_model_id_reports_unfitted_not_crash(self):
+        # Constructor stores `model_id` verbatim (sklearn convention: no
+        # validation in __init__). A bad id must not crash sklearn's
+        # fittedness check — it should degrade to "not fitted".
+        from sklearn.exceptions import NotFittedError
+        from sklearn.utils.validation import check_is_fitted
+
+        for Est in (TabPFNClassifier, TabPFNRegressor):
+            est = Est(model_id="not-a-uuid")
+            self.assertFalse(est.__sklearn_is_fitted__(), Est.__name__)
+            with self.assertRaises(NotFittedError):
+                check_is_fitted(est)
 
     def test_predict_triggers_init_from_cold_state(self):
         # A fresh process that only calls `load_model(...).predict(...)` never
