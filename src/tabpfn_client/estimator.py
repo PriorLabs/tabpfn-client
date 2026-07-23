@@ -172,7 +172,9 @@ def _load_model_handle_for(
             f"expected {_MODEL_HANDLE_VERSION}."
         )
     if data.get("task") != task:
-        raise ValueError(f"Cannot load a {data.get('task')!r} model into {cls.__name__}.")
+        raise ValueError(
+            f"Cannot load a {data.get('task')!r} model into {cls.__name__}."
+        )
     return data
 
 
@@ -436,9 +438,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     def __sklearn_is_fitted__(self) -> bool:
         # `fitted_` is a legacy fittedness flag some tests set directly; it is
         # kept as a fallback so those tests keep passing.
-        return (
-            _resolve_train_set_id(self) is not None
-            or getattr(self, "fitted_", False)
+        return _resolve_train_set_id(self) is not None or getattr(
+            self, "fitted_", False
         )
 
     def fit(
@@ -645,6 +646,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 f"{URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE}"
             )
 
+    @overload
+    def save_model(self, path: None = None) -> dict[str, Any]: ...
+    @overload
+    def save_model(self, path: str | Path) -> Path: ...
     def save_model(self, path: str | Path | None = None) -> dict[str, Any] | Path:
         """Serialize a portable reference to the fitted (server-side) model.
 
@@ -841,9 +846,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
     def __sklearn_is_fitted__(self) -> bool:
         # `fitted_` is a legacy fittedness flag some tests set directly; it is
         # kept as a fallback so those tests keep passing.
-        return (
-            _resolve_train_set_id(self) is not None
-            or getattr(self, "fitted_", False)
+        return _resolve_train_set_id(self) is not None or getattr(
+            self, "fitted_", False
         )
 
     def fit(
@@ -1055,6 +1059,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         if sum(pd.isnull(y_)) > 0:
             raise ValueError("Input y contains NaN.")
 
+    @overload
+    def save_model(self, path: None = None) -> dict[str, Any]: ...
+    @overload
+    def save_model(self, path: str | Path) -> Path: ...
     def save_model(self, path: str | Path | None = None) -> dict[str, Any] | Path:
         """Serialize a portable reference to the fitted (server-side) model.
 

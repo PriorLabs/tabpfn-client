@@ -17,6 +17,7 @@ from uuid import UUID
 
 import numpy as np
 
+from tabpfn_client.api_models import FitMode
 from tabpfn_client.client import NeedsRefittingError, PredictionResult, ServiceClient
 from tabpfn_client.estimator import (
     TabPFNClassifier,
@@ -32,10 +33,6 @@ def _regressor_prediction() -> PredictionResult:
     return PredictionResult(y_pred={"mean": np.zeros(4)}, metadata={})
 
 
-def _classifier_prediction() -> PredictionResult:
-    return PredictionResult(y_pred=np.zeros(4), metadata={})
-
-
 class TestFitMode(unittest.TestCase):
     def test_default_omits_fit_mode_on_wire(self):
         # Default is None, so nothing is sent and the server applies its own
@@ -48,12 +45,12 @@ class TestFitMode(unittest.TestCase):
 
     def test_fit_with_cache_reaches_wire_config(self):
         for Est in (TabPFNClassifier, TabPFNRegressor):
-            cfg = Est(fit_mode="fit_with_cache")._get_tabpfn_config()
+            cfg = Est(fit_mode=FitMode.FIT_WITH_CACHE)._get_tabpfn_config()
             dumped = cfg.model_dump(mode="json", exclude_none=True)
             self.assertEqual(dumped.get("fit_mode"), "fit_with_cache", Est.__name__)
 
     def test_fit_mode_forwarded_on_predict_task_config(self):
-        reg = TabPFNRegressor(fit_mode="fit_with_cache", model_id=_MODEL_ID)
+        reg = TabPFNRegressor(fit_mode=FitMode.FIT_WITH_CACHE, model_id=_MODEL_ID)
         with patch("tabpfn_client.estimator.init"):
             with patch.object(ServiceClient, "get_model_limits", return_value=None):
                 with patch.object(
