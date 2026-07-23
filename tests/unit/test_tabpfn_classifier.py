@@ -498,7 +498,7 @@ class TestTabPFNClassifierInference(unittest.TestCase):
 
         # Skip fitting
         classifier.fitted_ = True
-        classifier._last_fitted_train_set_id = UUID(
+        classifier.fitted_train_set_id_ = UUID(
             "00000000-0000-0000-0000-000000000000"
         )
 

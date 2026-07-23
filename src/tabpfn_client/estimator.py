@@ -91,6 +91,21 @@ def _cast_fitted_id(model_id: str | UUID | None) -> UUID | None:
     return UUID(str(model_id))
 
 
+def _resolve_train_set_id(estimator: Any) -> UUID | None:
+    """Resolve the server-side fitted-train-set id an estimator should predict against.
+
+    A real `fit()` sets `fitted_train_set_id_` and always wins; otherwise fall
+    back to the constructor's `model_id` (the load-by-id path). Keeping this as
+    a resolver instead of syncing state at both mutation sites means `fit()`
+    never has to mutate `self.model_id`, so `get_params()` / `clone()` stay
+    sklearn-correct.
+    """
+    fitted = getattr(estimator, "fitted_train_set_id_", None)
+    if fitted is not None:
+        return fitted
+    return _cast_fitted_id(estimator.model_id)
+
+
 def _read_model_handle(handle: dict[str, Any] | str | Path) -> dict[str, Any]:
     """Accept either an in-memory handle dict or a path to a JSON file
     produced by `save_model()`."""
@@ -112,7 +127,7 @@ def _build_model_handle(
     params.pop("client_options", None)
     # Persist the *effective* id: a real `fit()` supersedes the constructor's
     # `model_id`. Coerce to str for JSON.
-    params["model_id"] = str(estimator._last_fitted_train_set_id)
+    params["model_id"] = str(_resolve_train_set_id(estimator))
     handle: dict[str, Any] = {
         "format_version": _MODEL_HANDLE_VERSION,
         "task": task,
@@ -404,9 +419,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.model_id = model_id
 
         self._last_trace_id = None
-        # Seed the fitted-train-set id from `model_id` so a load-by-id estimator
-        # is immediately usable for predict (see `__sklearn_is_fitted__`).
-        self._last_fitted_train_set_id = _cast_fitted_id(model_id)
         self._last_train_X = None
         self._last_train_y = None
         self._last_meta = {}
@@ -414,11 +426,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self._fit_count = 0
 
     def __sklearn_is_fitted__(self) -> bool:
-        # A real `fit()` sets both `fitted_` and `_last_fitted_train_set_id`;
-        # a load-by-id (via `model_id` / `load_model`) sets only the latter.
-        # Either signal means the estimator can serve predictions.
+        # `fitted_` is a legacy fittedness flag some tests set directly; it is
+        # kept as a fallback so those tests keep passing.
         return (
-            self._last_fitted_train_set_id is not None
+            _resolve_train_set_id(self) is not None
             or getattr(self, "fitted_", False)
         )
 
@@ -471,7 +482,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                     description=description,
                 )
 
-            self._last_fitted_train_set_id = cast(UUID, run_task(fit_task, "Fitting"))
+            self.fitted_train_set_id_ = cast(UUID, run_task(fit_task, "Fitting"))
             self._last_train_X = X_clean
             self._last_train_y = y
             self.fitted_ = True
@@ -513,6 +524,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         # we capture the original user-provided values.
         predict_params = self._get_predict_params(locals())
 
+        # A load-by-id estimator (via `model_id` / `load_model`) can reach
+        # `predict` without ever calling `fit()`, so `init()` (which authorizes
+        # the HTTP client) must run here too. It short-circuits after the first
+        # successful call.
+        init()
         check_is_fitted(self)
 
         tabpfn_config = self._get_tabpfn_config()
@@ -541,7 +557,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 try:
                     return InferenceClient.predict(
                         X_clean,
-                        fitted_train_set_id=cast(UUID, self._last_fitted_train_set_id),
+                        fitted_train_set_id=cast(UUID, _resolve_train_set_id(self)),
                         task_config=task_config,
                         client_options=self.client_options,
                     )
@@ -559,7 +575,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                             "`model_id` / `load_model`). Re-create it by calling "
                             "`fit(X, y)`."
                         ) from exc
-                    self._last_fitted_train_set_id = InferenceClient.fit(
+                    self.fitted_train_set_id_ = InferenceClient.fit(
                         self._last_train_X,
                         self._last_train_y,
                         task_config=task_config,
@@ -808,9 +824,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.model_id = model_id
 
         self._last_trace_id = None
-        # Seed the fitted-train-set id from `model_id` so a load-by-id estimator
-        # is immediately usable for predict (see `__sklearn_is_fitted__`).
-        self._last_fitted_train_set_id = _cast_fitted_id(model_id)
         self._last_train_X = None
         self._last_train_y = None
         self._last_meta = {}
@@ -818,11 +831,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self._fit_count = 0
 
     def __sklearn_is_fitted__(self) -> bool:
-        # A real `fit()` sets both `fitted_` and `_last_fitted_train_set_id`;
-        # a load-by-id (via `model_id` / `load_model`) sets only the latter.
-        # Either signal means the estimator can serve predictions.
+        # `fitted_` is a legacy fittedness flag some tests set directly; it is
+        # kept as a fallback so those tests keep passing.
         return (
-            self._last_fitted_train_set_id is not None
+            _resolve_train_set_id(self) is not None
             or getattr(self, "fitted_", False)
         )
 
@@ -876,7 +888,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                     description=description,
                 )
 
-            self._last_fitted_train_set_id = cast(UUID, run_task(fit_task, "Fitting"))
+            self.fitted_train_set_id_ = cast(UUID, run_task(fit_task, "Fitting"))
             self._last_train_X = X_clean
             self._last_train_y = y
             self.fitted_ = True
@@ -923,6 +935,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         # we capture the original user-provided values.
         predict_params = self._get_predict_params(locals())
 
+        # A load-by-id estimator (via `model_id` / `load_model`) can reach
+        # `predict` without ever calling `fit()`, so `init()` (which authorizes
+        # the HTTP client) must run here too. It short-circuits after the first
+        # successful call.
+        init()
         check_is_fitted(self)
 
         tabpfn_config = self._get_tabpfn_config()
@@ -951,7 +968,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                 try:
                     return InferenceClient.predict(
                         X_clean,
-                        fitted_train_set_id=cast(UUID, self._last_fitted_train_set_id),
+                        fitted_train_set_id=cast(UUID, _resolve_train_set_id(self)),
                         task_config=task_config,
                         client_options=self.client_options,
                     )
@@ -969,7 +986,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                             "`model_id` / `load_model`). Re-create it by calling "
                             "`fit(X, y)`."
                         ) from exc
-                    self._last_fitted_train_set_id = InferenceClient.fit(
+                    self.fitted_train_set_id_ = InferenceClient.fit(
                         self._last_train_X,
                         self._last_train_y,
                         task_config=task_config,

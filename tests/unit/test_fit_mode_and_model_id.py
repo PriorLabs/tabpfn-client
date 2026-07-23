@@ -18,7 +18,11 @@ from uuid import UUID
 import numpy as np
 
 from tabpfn_client.client import NeedsRefittingError, PredictionResult, ServiceClient
-from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
+from tabpfn_client.estimator import (
+    TabPFNClassifier,
+    TabPFNRegressor,
+    _resolve_train_set_id,
+)
 from tabpfn_client.service_wrapper import InferenceClient
 
 _MODEL_ID = "00000000-0000-0000-0000-000000000abc"
@@ -65,7 +69,7 @@ class TestModelIdConstructor(unittest.TestCase):
         for Est in (TabPFNClassifier, TabPFNRegressor):
             est = Est(model_id=_MODEL_ID)
             self.assertTrue(est.__sklearn_is_fitted__(), Est.__name__)
-            self.assertEqual(est._last_fitted_train_set_id, UUID(_MODEL_ID))
+            self.assertEqual(_resolve_train_set_id(est), UUID(_MODEL_ID))
             self.assertFalse(Est().__sklearn_is_fitted__(), Est.__name__)
 
     def test_predict_uses_model_id_without_fitting(self):
@@ -83,7 +87,7 @@ class TestModelIdConstructor(unittest.TestCase):
 
     def test_model_id_accepts_uuid_and_str(self):
         self.assertEqual(
-            TabPFNRegressor(model_id=UUID(_MODEL_ID))._last_fitted_train_set_id,
+            _resolve_train_set_id(TabPFNRegressor(model_id=UUID(_MODEL_ID))),
             UUID(_MODEL_ID),
         )
 
@@ -98,7 +102,7 @@ class TestSaveLoadModel(unittest.TestCase):
 
         loaded = TabPFNRegressor.load_model(handle)
         self.assertTrue(loaded.__sklearn_is_fitted__())
-        self.assertEqual(loaded._last_fitted_train_set_id, UUID(_MODEL_ID))
+        self.assertEqual(_resolve_train_set_id(loaded), UUID(_MODEL_ID))
         self.assertEqual(loaded.get_params()["n_estimators"], 4)
 
     def test_classifier_round_trip_restores_classes(self):
@@ -119,14 +123,14 @@ class TestSaveLoadModel(unittest.TestCase):
             self.assertEqual(Path(returned), path)
             self.assertTrue(path.exists())
             loaded = TabPFNRegressor.load_model(path)
-        self.assertEqual(loaded._last_fitted_train_set_id, UUID(_MODEL_ID))
+        self.assertEqual(_resolve_train_set_id(loaded), UUID(_MODEL_ID))
 
     def test_effective_id_beats_constructor_model_id(self):
         # A real fit supersedes the constructor's model_id; save_model must
         # persist the effective (post-fit) id, not the original.
         reg = TabPFNRegressor(model_id=_MODEL_ID)
         new_id = "00000000-0000-0000-0000-000000000fff"
-        reg._last_fitted_train_set_id = UUID(new_id)
+        reg.fitted_train_set_id_ = UUID(new_id)
         self.assertEqual(reg.save_model()["params"]["model_id"], new_id)
 
     def test_load_model_task_mismatch_raises(self):
@@ -168,6 +172,42 @@ class TestRefitGuard(unittest.TestCase):
                         reg.predict(np.random.randn(4, 3))
         self.assertIn("no in-memory", str(ctx.exception).lower())
         mock_fit.assert_not_called()
+
+
+class TestSklearnCompatibility(unittest.TestCase):
+    def test_clone_preserves_model_id_and_stays_fitted(self):
+        # `clone` calls `get_params()` and re-instantiates. `model_id` is a
+        # constructor param, so the clone must keep it (and thus still be
+        # considered fitted for the load-by-id path) — this covers the
+        # get_params/clone desync surfaced by cursor.
+        from sklearn.base import clone
+
+        from typing import Any, cast as _cast
+
+        for Est in (TabPFNClassifier, TabPFNRegressor):
+            original = Est(model_id=_MODEL_ID)
+            # `clone`'s overloaded return over a `type[C] | type[R]` union
+            # confuses pyright; runtime type is Est, but we cast to Any to
+            # avoid re-typing at every call site below.
+            cloned = _cast(Any, clone(original))
+            self.assertEqual(cloned.get_params()["model_id"], _MODEL_ID, Est.__name__)
+            self.assertEqual(
+                _resolve_train_set_id(cloned), UUID(_MODEL_ID), Est.__name__
+            )
+            self.assertTrue(cloned.__sklearn_is_fitted__(), Est.__name__)
+
+    def test_predict_triggers_init_from_cold_state(self):
+        # A fresh process that only calls `load_model(...).predict(...)` never
+        # touches `fit()`, so `_predict` itself must call `init()` to authorize
+        # the HTTP client — otherwise the main cross-process reuse path 401s.
+        reg = TabPFNRegressor(model_id=_MODEL_ID)
+        with patch("tabpfn_client.estimator.init") as mock_init:
+            with patch.object(ServiceClient, "get_model_limits", return_value=None):
+                with patch.object(
+                    InferenceClient, "predict", return_value=_regressor_prediction()
+                ):
+                    reg.predict(np.random.randn(4, 3))
+        mock_init.assert_called()
 
 
 if __name__ == "__main__":
