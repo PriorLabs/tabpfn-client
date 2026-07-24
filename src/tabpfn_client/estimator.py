@@ -71,12 +71,10 @@ THINKING_TIMEOUT_MAX_S = 40 * 60
 
 _VALID_THINKING_EFFORT_LEVELS = frozenset({"medium", "high"})
 
-# The server's `FitMode` enum also carries internal `low_memory`/`batched`
-# values, but gapi only wires two end-to-end: `fit_preprocessors` (the stateless
-# default) and `fit_with_cache` (persist a server-side KV cache keyed by the
-# returned fitted-train-set id, so later predicts against that id are served
-# from the cache instead of re-fitting). The value is validated server-side by
-# `FitRequest._validate_fit_mode`; the client just forwards it.
+# `FitMode` exposes only the two values gapi wires end-to-end:
+# `fit_preprocessors` (the stateless default) and `fit_with_cache` (persist a
+# server-side KV cache keyed by the returned fitted-train-set id, so later
+# predicts against that id are served from the cache instead of re-fitting).
 
 # Bumped when the shape of the dict produced by `save_model()` changes.
 _MODEL_HANDLE_VERSION = 1

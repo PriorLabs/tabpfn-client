@@ -53,10 +53,11 @@ class ClassifierPredictParams(BaseModel):
 
 
 class FitMode(str, Enum):
-    LOW_MEMORY = "low_memory"
+    # Only the two values that gapi wires end-to-end. The server-side enum
+    # also has internal `low_memory` / `batched` modes, but those are not
+    # accepted by the public API — see `FitRequest._validate_fit_mode`.
     FIT_PREPROCESSORS = "fit_preprocessors"
     FIT_WITH_CACHE = "fit_with_cache"
-    BATCHED = "batched"
 
 
 class ClassifierTabPFNConfig(BaseModel):
