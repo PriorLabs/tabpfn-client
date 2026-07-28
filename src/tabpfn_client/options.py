@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings
 from enum import Enum
 
 
-class FitMode(Enum):
+class FitCallMode(Enum):
     AUTO = "auto"
     SYNC = "sync"
     ASYNC = "async"
@@ -20,8 +20,7 @@ class Options(BaseSettings):
     TABPFN_CLIENT_POLL_INTERVAL: float = 5.0
     TABPFN_CLIENT_POLL_TIMEOUT: float = 7200.0  # 2 hours
     TABPFN_CLIENT_CI_MODE: bool = False
-    TABPFN_CLIENT_FIT_MODE: FitMode = FitMode.AUTO
-    TABPFN_CLIENT_FORCE_ASYNC: bool = False
+    TABPFN_CLIENT_FIT_CALL_MODE: FitCallMode = FitCallMode.AUTO
     TABPFN_CLIENT_FORCE_REUPLOAD: bool = False
     TABPFN_CLIENT_DEDUP_DATASETS: bool = True
 

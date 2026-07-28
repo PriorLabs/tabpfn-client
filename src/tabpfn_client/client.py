@@ -53,7 +53,7 @@ from tabpfn_client.api_models import (
     RegressorConfig,
     PredictionTask,
 )
-from tabpfn_client.options import get_opts, FitMode
+from tabpfn_client.options import get_opts, FitCallMode
 
 logger = logging.getLogger(__name__)
 
@@ -319,26 +319,32 @@ class ServiceClient(Singleton):
         df_X = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
         df_y = cast(pd.DataFrame, y if isinstance(y, pd.DataFrame) else pd.DataFrame(y))
 
-        match get_opts().TABPFN_CLIENT_FIT_MODE:
-            case FitMode.SYNC:
+        total_mem_usage = None
+        limits = cls.get_model_limits()
+
+        if limits is not None:
+            total_mem_usage = 0
+            for name, df in [("x_train", df_X), ("y_train", df_y)]:
+                mem_usage = df.memory_usage(deep=True).sum()
+                total_mem_usage += mem_usage
+                if mem_usage > limits.dataset_max_size_bytes:
+                    raise ValueError(
+                        f"In-memory size of {name} ({mem_usage} bytes) exceeds "
+                        f"the server limit of {limits.dataset_max_size_bytes} bytes."
+                    )
+
+        match get_opts().TABPFN_CLIENT_FIT_CALL_MODE:
+            case FitCallMode.SYNC:
                 async_mode = False
-            case FitMode.ASYNC:
+            case FitCallMode.ASYNC:
                 async_mode = True
-            case FitMode.AUTO:
+            case FitCallMode.AUTO:
                 async_mode = True
-                limits = cls.get_model_limits()
-                if limits is not None:
-                    total_mem_usage = 0
-                    for name, df in [("x_train", df_X), ("y_train", df_y)]:
-                        mem_usage = df.memory_usage(deep=True).sum()
-                        total_mem_usage += mem_usage
-                        if mem_usage > limits.dataset_max_size_bytes:
-                            raise ValueError(
-                                f"In-memory size of {name} ({mem_usage} bytes) exceeds "
-                                f"the server limit of {limits.dataset_max_size_bytes} bytes."
-                            )
-                    if total_mem_usage <= ASYNC_MODE_ENABLED_ABOVE_SIZE_BYTES:
-                        async_mode = False
+                if (
+                    total_mem_usage is not None
+                    and total_mem_usage <= ASYNC_MODE_ENABLED_ABOVE_SIZE_BYTES
+                ):
+                    async_mode = False
 
         x_bytes, x_crc32c_hash = _serialize_to_parquet(df_X)
         y_bytes, y_crc32c_hash = _serialize_to_parquet(df_y)
