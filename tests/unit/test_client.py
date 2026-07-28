@@ -120,7 +120,7 @@ class TestServiceClient(unittest.TestCase):
         self, mock_server
     ):
         mock_server.router.get(mock_server.endpoints.root.path).respond(
-            426, json={"detail": "Client version too old. ..."}
+            426, json={"message": "Client version too old. ..."}
         )
         with self.assertRaises(RuntimeError) as cm:
             ServiceClient.try_connection()
@@ -282,13 +282,13 @@ class TestServiceClient(unittest.TestCase):
         response = Mock()
 
         response.status_code = 426
-        response.json.return_value = {"detail": "Client version too old."}
+        response.json.return_value = {"message": "Client version too old."}
         with self.assertRaises(RuntimeError) as cm:
             ServiceClient._validate_response(response, "test")
         self.assertEqual(str(cm.exception), "Client version too old.")
 
         response.status_code = 400
-        response.json.return_value = {"detail": "Some other error"}
+        response.json.return_value = {"message": "Some other error"}
         with self.assertRaises(RuntimeError) as cm:
             ServiceClient._validate_response(response, "test")
         self.assertTrue(str(cm.exception).startswith("Fail to call test"))
@@ -314,33 +314,28 @@ class TestServiceClient(unittest.TestCase):
         self.assertIn("streamed", str(cm.exception))
         self.assertIn("500 rows", str(cm.exception))
 
-    def test_validate_response_streamed_error_falls_back_to_detail(self):
+    def test_validate_response_streamed_error_without_message_uses_reason_phrase(self):
         from tabpfn_client.api_models import FitResponse
 
-        response = Mock()
-        response.status_code = 200
-        response.is_closed = True
-        response.json.return_value = {
-            "_streamed_error": True,
-            "detail": "fallback detail field",
-        }
         with self.assertRaises(RuntimeError) as cm:
             ServiceClient._validate_response(
-                response, "fit", response_models={200: FitResponse}
+                self._http_response(200, json={"_streamed_error": True}),
+                "fit",
+                response_models={200: FitResponse},
             )
-        self.assertIn("fallback detail field", str(cm.exception))
+        self.assertEqual(str(cm.exception), "Fail to call fit with error: streamed, OK")
 
     def test_check_version(self):
         response = Mock()
         response.status_code = 426
-        response.json.return_value = {"detail": "Client version too old."}
+        response.json.return_value = {"message": "Client version too old."}
         with self.assertRaises(RuntimeError) as cm:
             ServiceClient._check_version(response)
         self.assertEqual(str(cm.exception), "Client version too old.")
 
         # Any status other than 426 is the caller's business.
         response.status_code = 400
-        response.json.return_value = {"detail": "Some other error"}
+        response.json.return_value = {"message": "Some other error"}
         self.assertIsNone(ServiceClient._check_version(response))
 
     # -- Tests pinning the _validate_response contract. --

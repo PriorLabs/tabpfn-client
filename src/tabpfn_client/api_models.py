@@ -117,10 +117,8 @@ class ModelLimit(BaseModel):
     max_classes: int
     max_cols: int
     test_set_max_rows_w_full_regression_output: int
+    predict_row_pairs_budget: int
     test_set_max_cells: int
-    # Optional until all deployed servers send it; estimator.py falls back to
-    # its local default when absent.
-    predict_row_pairs_budget: int | None = None
 
 
 class ModelVersion(str, Enum):
@@ -194,7 +192,6 @@ class DuplicateTestSetErrorResponse(BaseModel):
     message: str
     error_code: str = "DUPLICATE_TEST_SET_UPLOAD"
     trace_id: UUID | None = None
-    detail: str | None = None
     test_set_upload_id: UUID
 
 
@@ -202,7 +199,6 @@ class DuplicateTrainSetErrorResponse(BaseModel):
     message: str
     error_code: str = "DUPLICATE_TRAIN_SET_UPLOAD"
     trace_id: UUID | None = None
-    detail: str | None = None
     train_set_upload_id: UUID
 
 
@@ -229,7 +225,7 @@ class FitRequest(BaseModel):
     )
     async_mode: bool | None = Field(
         default=None,
-        description="Submit the fit and return immediately with status=pending; poll GET /tabpfn/fit/{fitted_train_set_id} for the outcome. Defaults to the blocking behaviour.",
+        description="Submit the fit and return immediately with status=pending; poll GET /fit/{fitted_train_set_id} for the outcome. Defaults to the blocking behaviour.",
     )
 
 
@@ -242,6 +238,7 @@ class FitStatusResponse(BaseModel):
     fitted_train_set_id: UUID
     status: Annotated[FitStatus | UnknownEnum, Field(union_mode="left_to_right")]
     error: str | None = None
+    error_code: str | None = None
 
 
 class GetModelLimitsResponse(BaseModel):
@@ -257,7 +254,6 @@ class NotFoundErrorResponse(BaseModel):
     message: str
     error_code: str = "NOT_FOUND"
     trace_id: UUID | None = None
-    detail: str | None = None
 
 
 class PredictRequest(BaseModel):

@@ -799,17 +799,22 @@ class ServiceClient(Singleton):
         warnings.warn(msg, DeprecationWarning, stacklevel=4)
 
     @staticmethod
-    def _read_json_body(response: httpx.Response) -> dict[str, Any]:
-        """Return the response body as a dict; any non-object body gives {}."""
+    def _read_json_body(response: httpx.Response) -> tuple[dict[str, Any], str]:
+        """Read the body ({} unless it is a JSON object) and a display message
+        drawn from it, falling back to the HTTP reason phrase or raw text."""
+        body: dict[str, Any] = {}
         try:
             # Streaming responses must be read explicitly to prevent
             # httpx.ResponseNotRead errors.
             if not response.is_closed:
                 response.read()
-            body = response.json()
+            parsed = response.json()
+            if isinstance(parsed, dict):
+                body = parsed
         except json.JSONDecodeError:
-            return {}
-        return body if isinstance(body, dict) else {}
+            pass
+        message = body.get("message") or response.reason_phrase or response.text
+        return body, message
 
     @staticmethod
     def _check_version(response: httpx.Response) -> None:
@@ -822,8 +827,8 @@ class ServiceClient(Singleton):
         """
         ServiceClient._warn_if_deprecated(response)
         if response.status_code == 426:
-            body = ServiceClient._read_json_body(response)
-            raise RuntimeError(body.get("message") or body.get("detail", ""))
+            _, message = ServiceClient._read_json_body(response)
+            raise RuntimeError(message)
 
     @staticmethod
     def _validate_response(
@@ -840,7 +845,7 @@ class ServiceClient(Singleton):
         if status_code == 200 and not response_models:
             return None
 
-        body = ServiceClient._read_json_body(response)
+        body, message = ServiceClient._read_json_body(response)
 
         # Streamed-error envelope: long-running endpoints (e.g. /tabpfn/fit with
         # thinking mode) return a chunked 200 response, and on mid-stream failure
@@ -848,9 +853,6 @@ class ServiceClient(Singleton):
         # body. Without this short-circuit, the schema validation below turns it
         # into a misleading pydantic error that buries the real message.
         if body.get("_streamed_error"):
-            message = (
-                body.get("message") or body.get("detail", "") or response.reason_phrase
-            )
             raise RuntimeError(
                 f"Fail to call {method_name} with error: streamed, {message}"
             )
@@ -873,11 +875,6 @@ class ServiceClient(Singleton):
                 ) from e
 
         # Failures without expected schema
-        message = (
-            body.get("message")
-            or response.reason_phrase
-            or response.text
-        )
         error_message = f"Fail to call {method_name}: [HTTP {status_code}] {message}."
         if trace_id := body.get("trace_id"):
             error_message += f" Report trace ID: {trace_id}."
