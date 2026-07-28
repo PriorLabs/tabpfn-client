@@ -53,7 +53,7 @@ from tabpfn_client.api_models import (
     RegressorConfig,
     PredictionTask,
 )
-from tabpfn_client.options import get_opts
+from tabpfn_client.options import get_opts, FitMode
 
 logger = logging.getLogger(__name__)
 
@@ -319,24 +319,26 @@ class ServiceClient(Singleton):
         df_X = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
         df_y = cast(pd.DataFrame, y if isinstance(y, pd.DataFrame) else pd.DataFrame(y))
 
-        async_mode = True
-
-        limits = cls.get_model_limits()
-        if limits is not None:
-            total_mem_usage = 0
-            for name, df in [("x_train", df_X), ("y_train", df_y)]:
-                mem_usage = df.memory_usage(deep=True).sum()
-                total_mem_usage += mem_usage
-                if mem_usage > limits.dataset_max_size_bytes:
-                    raise ValueError(
-                        f"In-memory size of {name} ({mem_usage} bytes) exceeds "
-                        f"the server limit of {limits.dataset_max_size_bytes} bytes."
-                    )
-            if (
-                total_mem_usage <= ASYNC_MODE_ENABLED_ABOVE_SIZE_BYTES
-                and not get_opts().TABPFN_CLIENT_FORCE_ASYNC
-            ):
+        match get_opts().TABPFN_CLIENT_FIT_MODE:
+            case FitMode.SYNC:
                 async_mode = False
+            case FitMode.ASYNC:
+                async_mode = True
+            case FitMode.AUTO:
+                async_mode = True
+                limits = cls.get_model_limits()
+                if limits is not None:
+                    total_mem_usage = 0
+                    for name, df in [("x_train", df_X), ("y_train", df_y)]:
+                        mem_usage = df.memory_usage(deep=True).sum()
+                        total_mem_usage += mem_usage
+                        if mem_usage > limits.dataset_max_size_bytes:
+                            raise ValueError(
+                                f"In-memory size of {name} ({mem_usage} bytes) exceeds "
+                                f"the server limit of {limits.dataset_max_size_bytes} bytes."
+                            )
+                    if total_mem_usage <= ASYNC_MODE_ENABLED_ABOVE_SIZE_BYTES:
+                        async_mode = False
 
         x_bytes, x_crc32c_hash = _serialize_to_parquet(df_X)
         y_bytes, y_crc32c_hash = _serialize_to_parquet(df_y)
@@ -802,20 +804,30 @@ class ServiceClient(Singleton):
         response_models: dict[int, type[BaseModel]] | None = None,
     ) -> BaseModel | None:
         ServiceClient._warn_if_deprecated(response)
+        status = response.status_code
 
-        if response.status_code == 200 and response_models is None:
-            return
+        # Success with no expected schema: return without touching the body so
+        # streaming responses (e.g. download) stay unread.
+        if status == 200 and response_models is None:
+            return None
 
-        # Read response.
-        load = {}
+        # Read the body. Registered response models and server errors carry a
+        # JSON object; anything else is treated as an empty body.
+        body: dict[str, Any] = {}
         try:
-            # This if clause is necessary for streaming responses (e.g. download) to
-            # prevent httpx.ResponseNotRead error.
+            # Streaming responses must be read explicitly to prevent
+            # httpx.ResponseNotRead errors.
             if not response.is_closed:
                 response.read()
-            load = response.json()
+            parsed_json = response.json()
+            if isinstance(parsed_json, dict):
+                body = parsed_json
         except json.JSONDecodeError as e:
             logging.info(f"Failed to parse JSON from response in {method_name}: {e}")
+
+        message = (
+            body.get("message") or body.get("detail", "") or response.reason_phrase
+        )
 
         # Streamed-error envelope: long-running endpoints (e.g. /tabpfn/fit with
         # thinking mode) return a chunked 200 response, and on mid-stream failure
@@ -823,124 +835,61 @@ class ServiceClient(Singleton):
         # body. Without this short-circuit, the success-schema validation below
         # turns that into a misleading pydantic `Field required` error and the
         # real message is buried inside `input_value`.
-        if isinstance(load, dict) and load.get("_streamed_error"):
-            message = (
-                load.get("message") or load.get("detail", "") or response.reason_phrase
-            )
+        if body.get("_streamed_error"):
             logger.info(
                 f"Fail to call {method_name}, streamed error on status "
-                f"{response.status_code}: {message}"
+                f"{status}: {message}"
             )
             raise RuntimeError(
                 f"Fail to call {method_name} with error: streamed, {message}"
             )
 
-        # Check if the server requires a newer client version.
-        if response.status_code == 426:
-            logger.info(
-                f"Fail to call {method_name}, response status: {response.status_code}"
-            )
-            raise RuntimeError(load.get("message") or load.get("detail", ""))
+        # The server requires a newer client version.
+        if status == 426:
+            logger.info(f"Fail to call {method_name}, response status: {status}")
+            raise RuntimeError(body.get("message") or body.get("detail", ""))
 
-        # Inform about user errors, unless the caller only wants a version
-        # check or a response_model is registered for this status code.
-        if (
-            400 <= response.status_code < 500
-            and not only_version_check
-            and not (response_models and response.status_code in response_models)
-        ):
-            logger.info(
-                f"Fail to call {method_name}, response status: {response.status_code}"
-            )
-            message = (
-                load.get("message") or load.get("detail", "") or response.reason_phrase
-            )
-            status_code = response.status_code
-            raise RuntimeError(
-                f"Fail to call {method_name} with error: {status_code}, {message}"
-            )
+        # Version-check-only callers inspect the status code themselves; every
+        # error other than the ones above is ignored.
+        if only_version_check:
+            return None
 
-        if response_models is not None and response.status_code == 200:
-            if 200 not in response_models:
+        if response_models is not None:
+            if status == 200 and 200 not in response_models:
                 raise RuntimeError(
                     f"Fail to call {method_name} with no response model configured for status 200"
                 )
-
-        if response_models is not None and response.status_code in response_models:
-            if load is None and response.status_code == 200:
-                raise RuntimeError(
-                    f"Fail to call {method_name} with invalid JSON response"
-                )
-
-            if load is not None:
+            if status in response_models:
                 try:
-                    parsed_response = response_models[
-                        response.status_code
-                    ].model_validate(load)
+                    return response_models[status].model_validate(body)
                 except ValidationError as e:
-                    if response.status_code == 200:
+                    if status == 200:
                         raise RuntimeError(
                             f"Fail to call {method_name} with invalid response schema: {e}"
                         ) from e
+                    # An error response that does not match its registered
+                    # schema: raise from the status code instead.
                     response.raise_for_status()
-                else:
-                    return parsed_response
 
-        if response.status_code == 200:
-            return
-
-        # If we not only want to check the version compatibility, also raise other errors.
-        if not only_version_check:
-            # Treat selected errors as retryable.
-            if response.status_code in {408, 502, 503, 504}:
-                error_msg = (
-                    f"Fail to call {method_name} with error: {response.status_code}, reason: "
-                    f"{response.reason_phrase} and text: {response.text}"
-                )
-                raise RetryableServerError(error_msg)
-            if load is not None:
-                message = (
-                    load.get("message")
-                    or load.get("detail", "")
-                    or response.reason_phrase
-                )
-                trace_id = load.get("trace_id")
-                status_code = response.status_code
-                raise RuntimeError(
-                    f"Fail to call {method_name} with error: {status_code}, {message} {trace_id=}"
-                )
-            logger.error(
-                f"Fail to call {method_name}, response status: {response.status_code}"
-            )
-            try:
-                if (
-                    len(
-                        reponse_split_up := response.text.split(
-                            "The following exception has occurred:"
-                        )
-                    )
-                    > 1
-                ):
-                    relevant_reponse_text = reponse_split_up[1].split(
-                        "debug_error_string"
-                    )[0]
-                    if "ValueError" in relevant_reponse_text:
-                        # Extract the ValueError message
-                        value_error_msg = relevant_reponse_text.split(
-                            "ValueError. Arguments: ("
-                        )[1].split(",)")[0]
-                        # Remove extra quotes and spaces
-                        value_error_msg = value_error_msg.strip("'")
-                        # Raise the ValueError with the extracted message
-                        raise ValueError(value_error_msg)
-                    raise RuntimeError(relevant_reponse_text)
-            except Exception as e:
-                if isinstance(e, (ValueError, RuntimeError)):
-                    raise e
+        # Everything below is an error response without a registered model.
+        if 400 <= status < 500:
+            logger.info(f"Fail to call {method_name}, response status: {status}")
             raise RuntimeError(
-                f"Fail to call {method_name} with error: {response.status_code}, reason: "
+                f"Fail to call {method_name} with error: {status}, {message}"
+            )
+
+        # Treat selected errors as retryable. (408 never reaches this check:
+        # the 4xx handling above catches it first.)
+        if status in {408, 502, 503, 504}:
+            raise RetryableServerError(
+                f"Fail to call {method_name} with error: {status}, reason: "
                 f"{response.reason_phrase} and text: {response.text}"
             )
+
+        trace_id = body.get("trace_id")
+        raise RuntimeError(
+            f"Fail to call {method_name} with error: {status}, {message} {trace_id=}"
+        )
 
     @classmethod
     def try_connection(cls) -> bool:

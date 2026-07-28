@@ -4,17 +4,21 @@ from typing import Any, cast
 from uuid import UUID
 from unittest.mock import Mock, patch
 
+import httpx
 import numpy as np
 from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
 
 from tabpfn_client.client import (
     GetModelLimitsResponse,
+    RetryableServerError,
     ServiceClient,
 )
 from tabpfn_client.options import get_opts
 from tabpfn_client.api_models import (
     ClassifierConfig,
+    DuplicateTrainSetErrorResponse,
+    FitResponse,
     RegressorConfig,
     RegressorOutputType,
     RegressorPredictParams,
@@ -337,6 +341,122 @@ class TestServiceClient(unittest.TestCase):
         response.status_code = 400
         response.json.return_value = {"detail": "Some other error"}
         r = ServiceClient._validate_response(response, "test", only_version_check=True)
+        self.assertIsNone(r)
+
+    # -- Characterization tests pinning the _validate_response contract. --
+
+    @staticmethod
+    def _http_response(status_code: int, **kwargs) -> httpx.Response:
+        return httpx.Response(
+            status_code,
+            request=httpx.Request("POST", "http://testserver/test"),
+            **kwargs,
+        )
+
+    def test_validate_response_retryable_statuses_raise_retryable_error(self):
+        for status in (502, 503, 504):
+            with self.assertRaises(RetryableServerError) as cm:
+                ServiceClient._validate_response(self._http_response(status), "test")
+            self.assertIn(f"Fail to call test with error: {status}", str(cm.exception))
+
+    def test_validate_response_408_raises_plain_runtime_error(self):
+        # 408 sits in the retryable set but the generic 4xx handling catches it
+        # first, so it is not retried.
+        with self.assertRaises(RuntimeError) as cm:
+            ServiceClient._validate_response(
+                self._http_response(408, json={"detail": "request timed out"}),
+                "test",
+            )
+        self.assertNotIsInstance(cm.exception, RetryableServerError)
+        self.assertEqual(
+            str(cm.exception), "Fail to call test with error: 408, request timed out"
+        )
+
+    def test_validate_response_5xx_includes_trace_id(self):
+        with self.assertRaises(RuntimeError) as cm:
+            ServiceClient._validate_response(
+                self._http_response(
+                    500, json={"message": "boom", "trace_id": "abc-123"}
+                ),
+                "test",
+            )
+        self.assertIn("Fail to call test with error: 500, boom", str(cm.exception))
+        self.assertIn("trace_id='abc-123'", str(cm.exception))
+
+    def test_validate_response_5xx_with_non_json_body(self):
+        with self.assertRaises(RuntimeError) as cm:
+            ServiceClient._validate_response(
+                self._http_response(500, text="<html>oops</html>"), "test"
+            )
+        self.assertIn(
+            "Fail to call test with error: 500, Internal Server Error",
+            str(cm.exception),
+        )
+        self.assertIn("trace_id=None", str(cm.exception))
+
+    def test_validate_response_4xx_message_falls_back_to_reason_phrase(self):
+        with self.assertRaises(RuntimeError) as cm:
+            ServiceClient._validate_response(self._http_response(403), "test")
+        self.assertEqual(
+            str(cm.exception), "Fail to call test with error: 403, Forbidden"
+        )
+
+    def test_validate_response_registered_error_model_is_returned(self):
+        # Statuses with a registered response model (e.g. the 409 dedup path)
+        # are returned to the caller instead of raising.
+        body = {
+            "message": "duplicate train set",
+            "train_set_upload_id": "00000000-0000-0000-0000-000000000001",
+        }
+        parsed = ServiceClient._validate_response(
+            self._http_response(409, json=body),
+            "test",
+            response_models={
+                200: FitResponse,
+                409: DuplicateTrainSetErrorResponse,
+            },
+        )
+        self.assertIsInstance(parsed, DuplicateTrainSetErrorResponse)
+        assert isinstance(parsed, DuplicateTrainSetErrorResponse)
+        self.assertEqual(parsed.message, "duplicate train set")
+
+    def test_validate_response_registered_error_model_invalid_body_raises_status_error(
+        self,
+    ):
+        with self.assertRaises(httpx.HTTPStatusError):
+            ServiceClient._validate_response(
+                self._http_response(409, json={"unexpected": "shape"}),
+                "test",
+                response_models={
+                    200: FitResponse,
+                    409: DuplicateTrainSetErrorResponse,
+                },
+            )
+
+    def test_validate_response_200_with_invalid_schema_raises(self):
+        with self.assertRaises(RuntimeError) as cm:
+            ServiceClient._validate_response(
+                self._http_response(200, json={"unexpected": "shape"}),
+                "test",
+                response_models={200: FitResponse},
+            )
+        self.assertIn("invalid response schema", str(cm.exception))
+
+    def test_validate_response_200_missing_from_response_models_raises(self):
+        with self.assertRaises(RuntimeError) as cm:
+            ServiceClient._validate_response(
+                self._http_response(200, json={}),
+                "test",
+                response_models={409: DuplicateTrainSetErrorResponse},
+            )
+        self.assertIn("no response model configured for status 200", str(cm.exception))
+
+    def test_validate_response_only_version_check_ignores_server_errors(self):
+        r = ServiceClient._validate_response(
+            self._http_response(500, json={"message": "boom"}),
+            "test",
+            only_version_check=True,
+        )
         self.assertIsNone(r)
 
     @with_mock_server()
