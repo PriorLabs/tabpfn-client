@@ -381,7 +381,7 @@ class ServiceClient(Singleton):
         )
 
         if isinstance(prepare_resp, DuplicateTrainSetErrorResponse):
-            logger.warning(prepare_resp.message)
+            logger.warning("Train set already exists, skipping upload.")
         else:
             with ThreadPoolExecutor(max_workers=2) as pool:
                 futures = [
@@ -620,7 +620,7 @@ class ServiceClient(Singleton):
         )
 
         if isinstance(prepare_resp, DuplicateTestSetErrorResponse):
-            logger.warning(prepare_resp.message)
+            logger.warning("Test set already exists, skipping upload.")
         else:
             cls._upload_to_gcs(
                 "x_test",
@@ -867,12 +867,13 @@ class ServiceClient(Singleton):
 
         body, message = ServiceClient._read_json_body(response)
 
-        # Streaming errors (future-proofing), should come before the success check.
+        # Streaming errors, should come before the success check.
         if body.get("_streamed_error"):
             raise RuntimeError(
                 f"Fail to call {method_name} with error: streamed, {message}"
             )
 
+        # Success with expected schema.
         if is_success:
             return success_model.model_validate(body)
 
