@@ -40,7 +40,6 @@ from tabpfn_client.api_models import (
     PrepareTestSetUploadRequest,
     PrepareTestSetUploadResponse,
     DuplicateTestSetErrorResponse,
-    NotFoundErrorResponse,
     FileUploadInfo,
     FileInfo,
     FitRequest,
@@ -619,7 +618,6 @@ class ServiceClient(Singleton):
                 "prepare_test_set_upload",
                 response_models={
                     200: PrepareTestSetUploadResponse,
-                    404: NotFoundErrorResponse,
                     409: DuplicateTestSetErrorResponse,
                 },
             ),
@@ -648,11 +646,9 @@ class ServiceClient(Singleton):
             cls._validate_response(
                 res,
                 "predict",
-                response_models={200: PredictResponse, 404: NotFoundErrorResponse},
+                response_models={200: PredictResponse},
             ),
         )
-
-        # TODO(simo): raise RuntimeError on 404?
 
         prediction = predict_resp.prediction
 
@@ -803,99 +799,93 @@ class ServiceClient(Singleton):
         warnings.warn(msg, DeprecationWarning, stacklevel=4)
 
     @staticmethod
-    def _validate_response(
-        response: httpx.Response,
-        method_name: str,
-        only_version_check: bool = False,
-        response_models: dict[int, type[BaseModel]] | None = None,
-    ) -> BaseModel | None:
-        ServiceClient._warn_if_deprecated(response)
-        status = response.status_code
-
-        # Success with no expected schema: return without touching the body so
-        # streaming responses (e.g. download) stay unread.
-        if status == 200 and response_models is None:
-            return None
-
-        # Read the body. Registered response models and server errors carry a
-        # JSON object; anything else is treated as an empty body.
-        body: dict[str, Any] = {}
+    def _read_json_body(response: httpx.Response) -> dict[str, Any]:
+        """Return the response body as a dict; any non-object body gives {}."""
         try:
             # Streaming responses must be read explicitly to prevent
             # httpx.ResponseNotRead errors.
             if not response.is_closed:
                 response.read()
-            parsed_json = response.json()
-            if isinstance(parsed_json, dict):
-                body = parsed_json
-        except json.JSONDecodeError as e:
-            logging.info(f"Failed to parse JSON from response in {method_name}: {e}")
+            body = response.json()
+        except json.JSONDecodeError:
+            return {}
+        return body if isinstance(body, dict) else {}
 
-        message = (
-            body.get("message") or body.get("detail", "") or response.reason_phrase
-        )
+    @staticmethod
+    def _check_version(response: httpx.Response) -> None:
+        """Warn if the endpoint is deprecated and raise if the server requires
+        a newer client version (HTTP 426).
+
+        Auth/onboarding callers use this instead of ``_validate_response``:
+        they inspect the status code and body themselves to turn failures into
+        user-facing messages, so nothing but the version gate may raise.
+        """
+        ServiceClient._warn_if_deprecated(response)
+        if response.status_code == 426:
+            body = ServiceClient._read_json_body(response)
+            raise RuntimeError(body.get("message") or body.get("detail", ""))
+
+    @staticmethod
+    def _validate_response(
+        response: httpx.Response,
+        method_name: str,
+        response_models: dict[int, type[BaseModel]] | None = None,
+    ) -> BaseModel | None:
+        response_models = response_models or {}
+        status_code = response.status_code
+
+        ServiceClient._check_version(response)
+
+        # Nothing to do, success with no expected schema
+        if status_code == 200 and not response_models:
+            return None
+
+        body = ServiceClient._read_json_body(response)
 
         # Streamed-error envelope: long-running endpoints (e.g. /tabpfn/fit with
         # thinking mode) return a chunked 200 response, and on mid-stream failure
         # the server emits `{"_streamed_error": True, "message": "..."}` as the
-        # body. Without this short-circuit, the success-schema validation below
-        # turns that into a misleading pydantic `Field required` error and the
-        # real message is buried inside `input_value`.
+        # body. Without this short-circuit, the schema validation below turns it
+        # into a misleading pydantic error that buries the real message.
         if body.get("_streamed_error"):
-            logger.info(
-                f"Fail to call {method_name}, streamed error on status "
-                f"{status}: {message}"
+            message = (
+                body.get("message") or body.get("detail", "") or response.reason_phrase
             )
             raise RuntimeError(
                 f"Fail to call {method_name} with error: streamed, {message}"
             )
 
-        # The server requires a newer client version.
-        if status == 426:
-            logger.info(f"Fail to call {method_name}, response status: {status}")
-            raise RuntimeError(body.get("message") or body.get("detail", ""))
-
-        # Version-check-only callers inspect the status code themselves; every
-        # error other than the ones above is ignored.
-        if only_version_check:
-            return None
-
-        if response_models is not None:
-            if status == 200 and 200 not in response_models:
-                raise RuntimeError(
-                    f"Fail to call {method_name} with no response model configured for status 200"
-                )
-            if status in response_models:
-                try:
-                    return response_models[status].model_validate(body)
-                except ValidationError as e:
-                    if status == 200:
-                        raise RuntimeError(
-                            f"Fail to call {method_name} with invalid response schema: {e}"
-                        ) from e
-                    # An error response that does not match its registered
-                    # schema: raise from the status code instead.
-                    response.raise_for_status()
-
-        # Everything below is an error response without a registered model.
-        if 400 <= status < 500:
-            logger.info(f"Fail to call {method_name}, response status: {status}")
+        if status_code == 200 and 200 not in response_models:
             raise RuntimeError(
-                f"Fail to call {method_name} with error: {status}, {message}"
+                f"Fail to call {method_name} with no response model configured for status 200"
             )
 
-        # Treat selected errors as retryable. (408 never reaches this check:
-        # the 4xx handling above catches it first.)
-        if status in {408, 502, 503, 504}:
-            raise RetryableServerError(
-                f"Fail to call {method_name} with error: {status}, reason: "
-                f"{response.reason_phrase} and text: {response.text}"
-            )
+        # Handle cases with expected schema
+        if status_code in response_models:
+            try:
+                return response_models[status_code].model_validate(body)
+            except ValidationError as e:
+                # Failures not matching expected schema
+                response.raise_for_status()
+                # Success not matching expected schema
+                raise RuntimeError(
+                    f"Fail to call {method_name} with invalid response schema: {e}"
+                ) from e
 
-        trace_id = body.get("trace_id")
-        raise RuntimeError(
-            f"Fail to call {method_name} with error: {status}, {message} {trace_id=}"
+        # Failures without expected schema
+        message = (
+            body.get("message")
+            or response.reason_phrase
+            or response.text
         )
+        error_message = f"Fail to call {method_name}: [HTTP {status_code}] {message}."
+        if trace_id := body.get("trace_id"):
+            error_message += f" Report trace ID: {trace_id}."
+
+        if status_code in {408, 502, 503, 504}:
+            raise RetryableServerError(error_message)
+
+        raise RuntimeError(error_message)
 
     @classmethod
     def try_connection(cls) -> bool:
@@ -905,7 +895,7 @@ class ServiceClient(Singleton):
         found_valid_connection = False
         try:
             response = cls.httpx_client.get(cls.server_endpoints.root.path)
-            cls._validate_response(response, "try_connection", only_version_check=True)
+            cls._check_version(response)
             if response.status_code == 200:
                 found_valid_connection = True
 
@@ -927,9 +917,7 @@ class ServiceClient(Singleton):
             headers={"Authorization": f"Bearer {access_token}"},
         )
 
-        cls._validate_response(
-            response, "is_auth_token_outdated", only_version_check=True
-        )
+        cls._check_version(response)
         if response.status_code == 200:
             is_authenticated = True
         elif response.status_code == 403:
@@ -957,7 +945,7 @@ class ServiceClient(Singleton):
             cls.server_endpoints.validate_email.path, params={"email": email}
         )
 
-        cls._validate_response(response, "validate_email", only_version_check=True)
+        cls._check_version(response)
         if response.status_code == 200:
             is_valid = True
             message = ""
@@ -1006,7 +994,7 @@ class ServiceClient(Singleton):
             },
         )
 
-        cls._validate_response(response, "register", only_version_check=True)
+        cls._check_version(response)
         if response.status_code == 200:
             is_created = True
             message = response.json()["message"]
@@ -1039,7 +1027,7 @@ class ServiceClient(Singleton):
             cls.server_endpoints.verify_email.path,
             params={"token": token, "access_token": access_token},
         )
-        cls._validate_response(response, "verify_email", only_version_check=True)
+        cls._check_version(response)
         if response.status_code == 200:
             is_verified = True
             message = response.json()["message"]
@@ -1080,7 +1068,7 @@ class ServiceClient(Singleton):
             data=common_utils.to_oauth_request_form(email, password),
         )
 
-        cls._validate_response(response, "login", only_version_check=True)
+        cls._check_version(response)
         if response.status_code == 200:
             access_token = response.json()["access_token"]
             session_id = response.cookies.get("session_id")
@@ -1114,7 +1102,7 @@ class ServiceClient(Singleton):
         response = cls.httpx_client.get(
             cls.server_endpoints.password_policy.path,
         )
-        cls._validate_response(response, "get_password_policy", only_version_check=True)
+        cls._check_version(response)
 
         return response.json()["requirements"]
 
@@ -1161,9 +1149,7 @@ class ServiceClient(Singleton):
             cls.server_endpoints.retrieve_greeting_messages.path
         )
 
-        cls._validate_response(
-            response, "retrieve_greeting_messages", only_version_check=True
-        )
+        cls._check_version(response)
         if response.status_code != 200:
             return []
 

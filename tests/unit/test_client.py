@@ -330,20 +330,20 @@ class TestServiceClient(unittest.TestCase):
             )
         self.assertIn("fallback detail field", str(cm.exception))
 
-    def test_validate_response_only_version_check(self):
+    def test_check_version(self):
         response = Mock()
         response.status_code = 426
         response.json.return_value = {"detail": "Client version too old."}
         with self.assertRaises(RuntimeError) as cm:
-            ServiceClient._validate_response(response, "test", only_version_check=True)
+            ServiceClient._check_version(response)
         self.assertEqual(str(cm.exception), "Client version too old.")
 
+        # Any status other than 426 is the caller's business.
         response.status_code = 400
         response.json.return_value = {"detail": "Some other error"}
-        r = ServiceClient._validate_response(response, "test", only_version_check=True)
-        self.assertIsNone(r)
+        self.assertIsNone(ServiceClient._check_version(response))
 
-    # -- Characterization tests pinning the _validate_response contract. --
+    # -- Tests pinning the _validate_response contract. --
 
     @staticmethod
     def _http_response(status_code: int, **kwargs) -> httpx.Response:
@@ -354,25 +354,12 @@ class TestServiceClient(unittest.TestCase):
         )
 
     def test_validate_response_retryable_statuses_raise_retryable_error(self):
-        for status in (502, 503, 504):
+        for status in (408, 502, 503, 504):
             with self.assertRaises(RetryableServerError) as cm:
                 ServiceClient._validate_response(self._http_response(status), "test")
-            self.assertIn(f"Fail to call test with error: {status}", str(cm.exception))
+            self.assertIn(f"[HTTP {status}]", str(cm.exception))
 
-    def test_validate_response_408_raises_plain_runtime_error(self):
-        # 408 sits in the retryable set but the generic 4xx handling catches it
-        # first, so it is not retried.
-        with self.assertRaises(RuntimeError) as cm:
-            ServiceClient._validate_response(
-                self._http_response(408, json={"detail": "request timed out"}),
-                "test",
-            )
-        self.assertNotIsInstance(cm.exception, RetryableServerError)
-        self.assertEqual(
-            str(cm.exception), "Fail to call test with error: 408, request timed out"
-        )
-
-    def test_validate_response_5xx_includes_trace_id(self):
+    def test_validate_response_error_includes_trace_id(self):
         with self.assertRaises(RuntimeError) as cm:
             ServiceClient._validate_response(
                 self._http_response(
@@ -380,26 +367,24 @@ class TestServiceClient(unittest.TestCase):
                 ),
                 "test",
             )
-        self.assertIn("Fail to call test with error: 500, boom", str(cm.exception))
-        self.assertIn("trace_id='abc-123'", str(cm.exception))
+        self.assertEqual(
+            str(cm.exception),
+            "Fail to call test: [HTTP 500] boom. Report trace ID: abc-123.",
+        )
 
     def test_validate_response_5xx_with_non_json_body(self):
         with self.assertRaises(RuntimeError) as cm:
             ServiceClient._validate_response(
                 self._http_response(500, text="<html>oops</html>"), "test"
             )
-        self.assertIn(
-            "Fail to call test with error: 500, Internal Server Error",
-            str(cm.exception),
+        self.assertEqual(
+            str(cm.exception), "Fail to call test: [HTTP 500] Internal Server Error."
         )
-        self.assertIn("trace_id=None", str(cm.exception))
 
     def test_validate_response_4xx_message_falls_back_to_reason_phrase(self):
         with self.assertRaises(RuntimeError) as cm:
             ServiceClient._validate_response(self._http_response(403), "test")
-        self.assertEqual(
-            str(cm.exception), "Fail to call test with error: 403, Forbidden"
-        )
+        self.assertEqual(str(cm.exception), "Fail to call test: [HTTP 403] Forbidden.")
 
     def test_validate_response_registered_error_model_is_returned(self):
         # Statuses with a registered response model (e.g. the 409 dedup path)
@@ -451,11 +436,9 @@ class TestServiceClient(unittest.TestCase):
             )
         self.assertIn("no response model configured for status 200", str(cm.exception))
 
-    def test_validate_response_only_version_check_ignores_server_errors(self):
-        r = ServiceClient._validate_response(
-            self._http_response(500, json={"message": "boom"}),
-            "test",
-            only_version_check=True,
+    def test_check_version_ignores_server_errors(self):
+        r = ServiceClient._check_version(
+            self._http_response(500, json={"message": "boom"})
         )
         self.assertIsNone(r)
 
