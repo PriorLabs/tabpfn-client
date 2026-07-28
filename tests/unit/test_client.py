@@ -10,7 +10,6 @@ from sklearn.model_selection import train_test_split
 
 from tabpfn_client.client import (
     GetModelLimitsResponse,
-    NeedsRefittingError,
     ServiceClient,
 )
 from tabpfn_client.options import get_opts
@@ -499,26 +498,6 @@ class TestServiceClient(unittest.TestCase):
         self.assertTrue(np.array_equal(pred_1.y_pred, pred_2.y_pred))
         self.assertEqual(prepare_route.call_count, 2)
         self.assertEqual(predict_route.call_count, 2)
-
-    @with_mock_server()
-    def test_predict_with_missing_fitted_train_set_raises_needs_refitting(
-        self, mock_server
-    ):
-        mock_server.router.post("/tabpfn/prepare_test_set_upload").respond(
-            404,
-            json={
-                "message": "fitted train set missing",
-                "error_code": "NOT_FOUND",
-                "trace_id": "00000000-0000-0000-0000-0000000000aa",
-            },
-        )
-
-        with self.assertRaises(NeedsRefittingError):
-            ServiceClient.predict(
-                fitted_train_set_id=UUID("00000000-0000-0000-0000-000000000002"),
-                x_test=self.X_test,
-                task_config=ClassifierConfig(),
-            )
 
     def test_get_model_limits_uses_cache(self):
         ServiceClient._model_limits = None

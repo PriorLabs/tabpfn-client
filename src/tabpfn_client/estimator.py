@@ -22,7 +22,6 @@ from tabpfn_client.client import (
     ServiceClient,
     ClientOptions,
     PredictionResult,
-    NeedsRefittingError,
     ThinkingEffort,
 )
 from tabpfn_client.config import Config, init
@@ -428,35 +427,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             self.client_options.headers["sentry-trace"] = self._last_trace_id
 
         def predict_task() -> PredictionResult:
-            last_exc = None
-            refit_attempts = 0
-            while True:
-                if refit_attempts > 1:
-                    raise RuntimeError(
-                        "Failed to predict after refitting"
-                    ) from last_exc
-                try:
-                    return InferenceClient.predict(
-                        X_clean,
-                        fitted_train_set_id=cast(UUID, self._last_fitted_train_set_id),
-                        task_config=task_config,
-                        client_options=self.client_options,
-                    )
-                except NeedsRefittingError as exc:
-                    last_exc = exc
-                    refit_attempts += 1
-                    self._last_fitted_train_set_id = InferenceClient.fit(
-                        self._last_train_X,
-                        self._last_train_y,
-                        task_config=task_config,
-                        paper_version=self.paper_version,
-                        thinking_mode=self.thinking_mode,
-                        thinking_effort=self.thinking_effort,
-                        thinking_timeout_s=self.thinking_timeout_s,
-                        thinking_metric=self.thinking_metric,
-                        client_options=self.client_options,
-                        description=self._last_train_set_description,
-                    )
+            return InferenceClient.predict(
+                X_clean,
+                fitted_train_set_id=cast(UUID, self._last_fitted_train_set_id),
+                task_config=task_config,
+                client_options=self.client_options,
+            )
 
         result = run_task(predict_task, "Predicting")
         # Unpack and store metadata
@@ -773,35 +749,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             self.client_options.headers["sentry-trace"] = self._last_trace_id
 
         def predict_task() -> PredictionResult:
-            last_exc = None
-            refit_attempts = 0
-            while True:
-                if refit_attempts > 1:
-                    raise RuntimeError(
-                        "Failed to predict after refitting"
-                    ) from last_exc
-                try:
-                    return InferenceClient.predict(
-                        X_clean,
-                        fitted_train_set_id=cast(UUID, self._last_fitted_train_set_id),
-                        task_config=task_config,
-                        client_options=self.client_options,
-                    )
-                except NeedsRefittingError as exc:
-                    last_exc = exc
-                    refit_attempts += 1
-                    self._last_fitted_train_set_id = InferenceClient.fit(
-                        self._last_train_X,
-                        self._last_train_y,
-                        task_config=task_config,
-                        paper_version=self.paper_version,
-                        thinking_mode=self.thinking_mode,
-                        thinking_effort=self.thinking_effort,
-                        thinking_timeout_s=self.thinking_timeout_s,
-                        thinking_metric=self.thinking_metric,
-                        client_options=self.client_options,
-                        description=self._last_train_set_description,
-                    )
+            return InferenceClient.predict(
+                X_clean,
+                fitted_train_set_id=cast(UUID, self._last_fitted_train_set_id),
+                task_config=task_config,
+                client_options=self.client_options,
+            )
 
         result = run_task(predict_task, "Predicting")
         # Unpack and store metadata

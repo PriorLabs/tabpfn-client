@@ -155,14 +155,6 @@ def _serialize_to_parquet(df: pd.DataFrame) -> tuple[bytes, str]:
     return parquet_bytes, crc32c_b64
 
 
-class NeedsRefittingError(Exception):
-    """
-    Exception raised when the server is not able to predict given the current state.
-    """
-
-    pass
-
-
 ThinkingEffort = Literal["medium", "high"]
 
 
@@ -622,7 +614,6 @@ class ServiceClient(Singleton):
                     404: NotFoundErrorResponse,
                     409: DuplicateTestSetErrorResponse,
                 },
-                handlers={404: cls._raise_not_found_error},
             ),
         )
 
@@ -650,9 +641,10 @@ class ServiceClient(Singleton):
                 res,
                 "predict",
                 response_models={200: PredictResponse, 404: NotFoundErrorResponse},
-                handlers={404: cls._raise_not_found_error},
             ),
         )
+
+        # TODO(simo): raise RuntimeError on 404
 
         prediction = predict_resp.prediction
 
@@ -782,12 +774,6 @@ class ServiceClient(Singleton):
             f"GCS upload permanently failed for dataset {dataset} at chunk {chunk_index}: "
             f"{resp.status_code} {resp.text}"
         )
-
-    @staticmethod
-    def _raise_not_found_error(error_response: NotFoundErrorResponse) -> None:
-        if error_response.error_code == "NOT_FOUND":
-            raise NeedsRefittingError(error_response.message)
-        raise RuntimeError(error_response.message)
 
     @staticmethod
     def _warn_if_deprecated(response: httpx.Response) -> None:
