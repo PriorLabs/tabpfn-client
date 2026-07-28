@@ -19,7 +19,7 @@ import time
 import traceback
 import warnings
 from pydantic import BaseModel, ValidationError
-from typing import Any, cast, Literal, Mapping, Union
+from typing import Any, cast, Literal, Mapping, NoReturn, Union
 
 import google_crc32c
 
@@ -375,10 +375,8 @@ class ServiceClient(Singleton):
             cls._validate_response(
                 res,
                 "prepare_train_set_upload",
-                response_models={
-                    200: PrepareTrainSetUploadResponse,
-                    409: DuplicateTrainSetErrorResponse,
-                },
+                success_model=PrepareTrainSetUploadResponse,
+                error_models={409: DuplicateTrainSetErrorResponse},
             ),
         )
 
@@ -433,7 +431,7 @@ class ServiceClient(Singleton):
             cls._validate_response(
                 res,
                 "fit",
-                response_models={200: FitResponse},
+                success_model=FitResponse,
             ),
         )
 
@@ -494,7 +492,7 @@ class ServiceClient(Singleton):
                 cls._validate_response(
                     res,
                     "get_fit_status",
-                    response_models={200: FitStatusResponse},
+                    success_model=FitStatusResponse,
                 ),
             )
             if status_resp.status == FitStatus.COMPLETED:
@@ -616,10 +614,8 @@ class ServiceClient(Singleton):
             cls._validate_response(
                 res,
                 "prepare_test_set_upload",
-                response_models={
-                    200: PrepareTestSetUploadResponse,
-                    409: DuplicateTestSetErrorResponse,
-                },
+                success_model=PrepareTestSetUploadResponse,
+                error_models={409: DuplicateTestSetErrorResponse},
             ),
         )
 
@@ -646,7 +642,7 @@ class ServiceClient(Singleton):
             cls._validate_response(
                 res,
                 "predict",
-                response_models={200: PredictResponse},
+                success_model=PredictResponse,
             ),
         )
 
@@ -820,10 +816,6 @@ class ServiceClient(Singleton):
     def _check_version(response: httpx.Response) -> None:
         """Warn if the endpoint is deprecated and raise if the server requires
         a newer client version (HTTP 426).
-
-        Auth/onboarding callers use this instead of ``_validate_response``:
-        they inspect the status code and body themselves to turn failures into
-        user-facing messages, so nothing but the version gate may raise.
         """
         ServiceClient._warn_if_deprecated(response)
         if response.status_code == 426:
@@ -831,58 +823,68 @@ class ServiceClient(Singleton):
             raise RuntimeError(message)
 
     @staticmethod
+    def _raise_http_error(
+        response: httpx.Response, method_name: str, body: dict[str, Any], message: str
+    ) -> NoReturn:
+        error_message = (
+            f"Fail to call {method_name}: [HTTP {response.status_code}] {message}."
+        )
+        if trace_id := body.get("trace_id"):
+            error_message += f" Report trace ID: {trace_id}."
+
+        if response.status_code in {408, 502, 503, 504}:
+            raise RetryableServerError(error_message)
+
+        raise RuntimeError(error_message)
+
+    @staticmethod
+    def _raise_on_error(response: httpx.Response, method_name: str) -> None:
+        """Raise for 4xx/5xx responses; no-op otherwise.
+
+        For callers that expect no payload. The body is only read on errors,
+        so streaming success responses stay unread. Callers that expect a
+        payload use ``_validate_response`` instead.
+        """
+        ServiceClient._check_version(response)
+        if not (400 <= response.status_code < 600):
+            return
+        body, message = ServiceClient._read_json_body(response)
+        ServiceClient._raise_http_error(response, method_name, body, message)
+
+    @staticmethod
     def _validate_response(
         response: httpx.Response,
         method_name: str,
-        response_models: dict[int, type[BaseModel]] | None = None,
-    ) -> BaseModel | None:
-        response_models = response_models or {}
-        status_code = response.status_code
+        success_model: type[BaseModel],
+        error_models: dict[int, type[BaseModel]] | None = None,
+    ) -> BaseModel:
+        error_models = error_models or {}
 
         ServiceClient._check_version(response)
 
-        # Nothing to do, success with no expected schema
-        if status_code == 200 and not response_models:
-            return None
+        status_code = response.status_code
+        is_success = not (400 <= status_code < 600)
 
         body, message = ServiceClient._read_json_body(response)
 
-        # Streamed-error envelope: long-running endpoints (e.g. /tabpfn/fit with
-        # thinking mode) return a chunked 200 response, and on mid-stream failure
-        # the server emits `{"_streamed_error": True, "message": "..."}` as the
-        # body. Without this short-circuit, the schema validation below turns it
-        # into a misleading pydantic error that buries the real message.
+        # Streaming errors (future-proofing), should come before the success check.
         if body.get("_streamed_error"):
             raise RuntimeError(
                 f"Fail to call {method_name} with error: streamed, {message}"
             )
 
-        if status_code == 200 and 200 not in response_models:
-            raise RuntimeError(
-                f"Fail to call {method_name} with no response model configured for status 200"
-            )
+        if is_success:
+            return success_model.model_validate(body)
 
-        # Handle cases with expected schema
-        if status_code in response_models:
+        # Errors with expected schema.
+        if error_model := error_models.get(status_code):
             try:
-                return response_models[status_code].model_validate(body)
-            except ValidationError as e:
-                # Failures not matching expected schema
-                response.raise_for_status()
-                # Success not matching expected schema
-                raise RuntimeError(
-                    f"Fail to call {method_name} with invalid response schema: {e}"
-                ) from e
+                return error_model.model_validate(body)
+            except ValidationError:
+                pass
 
-        # Failures without expected schema
-        error_message = f"Fail to call {method_name}: [HTTP {status_code}] {message}."
-        if trace_id := body.get("trace_id"):
-            error_message += f" Report trace ID: {trace_id}."
-
-        if status_code in {408, 502, 503, 504}:
-            raise RetryableServerError(error_message)
-
-        raise RuntimeError(error_message)
+        # Errors without expected schema.
+        ServiceClient._raise_http_error(response, method_name, body, message)
 
     @classmethod
     def try_connection(cls) -> bool:
@@ -1166,7 +1168,7 @@ class ServiceClient(Singleton):
         response = cls.httpx_client.get(
             cls.server_endpoints.get_data_summary.path,
         )
-        cls._validate_response(response, "get_data_summary")
+        cls._raise_on_error(response, "get_data_summary")
 
         return response.json()
 
@@ -1193,7 +1195,7 @@ class ServiceClient(Singleton):
                 "Prior-Client-Version": get_client_version(),
             },
         ) as response:
-            cls._validate_response(response, "download_all_data")
+            cls._raise_on_error(response, "download_all_data")
 
             filename = response.headers["Content-Disposition"].split("filename=")[1]
             save_path = Path(save_dir) / filename
@@ -1225,7 +1227,7 @@ class ServiceClient(Singleton):
             params={"dataset_uid": dataset_uid},
         )
 
-        cls._validate_response(response, "delete_dataset")
+        cls._raise_on_error(response, "delete_dataset")
 
         return response.json()["deleted_dataset_uids"]
 
@@ -1243,7 +1245,7 @@ class ServiceClient(Singleton):
             cls.server_endpoints.delete_all_datasets.path,
         )
 
-        cls._validate_response(response, "delete_all_datasets")
+        cls._raise_on_error(response, "delete_all_datasets")
 
         return response.json()["deleted_dataset_uids"]
 
@@ -1253,7 +1255,7 @@ class ServiceClient(Singleton):
             cls.server_endpoints.delete_user_account.path,
         )
 
-        cls._validate_response(response, "delete_user_account")
+        cls._raise_on_error(response, "delete_user_account")
 
     @classmethod
     def try_browser_login(cls) -> tuple[bool, str]:
@@ -1280,7 +1282,7 @@ class ServiceClient(Singleton):
             cls.server_endpoints.get_api_usage.path,
             headers={"Authorization": f"Bearer {access_token}"},
         )
-        cls._validate_response(response, "get_api_usage")
+        cls._raise_on_error(response, "get_api_usage")
 
         response = response.json()
 
