@@ -20,14 +20,14 @@ from tests.mock_tabpfn_server import with_mock_server
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client import config
 from tabpfn_client.client import (
-    GetModelLimitsResponse,
+    GetApiSettingsResponse,
     PredictionResult,
     ServiceClient,
 )
 from tabpfn_client.api_models import ClassifierTabPFNConfig
 
 
-def _model_limits_payload(
+def _api_settings_payload(
     max_cells=100_000_000,
     max_cols=2_000,
     max_size_bytes=100_000_000,
@@ -52,6 +52,11 @@ def _model_limits_payload(
         "max_model_limit": model_limit,
         "model_limits": {"v2.5": model_limit},
         "dataset_max_size_bytes": max_size_bytes,
+        "async_settings": {
+            "use_above_trainset_size_bytes": 50 * 1024 * 1024,
+            "poll_timeout_secs": 7200.0,
+            "poll_interval_secs": 5.0,
+        },
     }
 
 
@@ -62,7 +67,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         # set up dummy data
         reset()
         ServiceClient.reset_authorization()
-        ServiceClient._model_limits = None
+        ServiceClient._api_settings = None
         X, y = load_breast_cancer(return_X_y=True)
         self.X_train, self.X_test, self.y_train, self.y_test = cast(
             "tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]",
@@ -70,7 +75,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         )
 
     def tearDown(self):
-        ServiceClient._model_limits = None
+        ServiceClient._api_settings = None
         # remove cache dir
         shutil.rmtree(CACHE_DIR, ignore_errors=True)
 
@@ -118,9 +123,9 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_model_limits").respond(
+        mock_server.router.get("/tabpfn/get_api_settings").respond(
             200,
-            json=_model_limits_payload(),
+            json=_api_settings_payload(),
         )
 
         mock_predict_response = [1, 0, 1]
@@ -163,9 +168,9 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_model_limits").respond(
+        mock_server.router.get("/tabpfn/get_api_settings").respond(
             200,
-            json=_model_limits_payload(),
+            json=_api_settings_payload(),
         )
 
         # create dummy token file
@@ -208,9 +213,9 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_model_limits").respond(
+        mock_server.router.get("/tabpfn/get_api_settings").respond(
             200,
-            json=_model_limits_payload(),
+            json=_api_settings_payload(),
         )
         init(use_server=True)
 
@@ -297,9 +302,9 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_model_limits").respond(
+        mock_server.router.get("/tabpfn/get_api_settings").respond(
             200,
-            json=_model_limits_payload(),
+            json=_api_settings_payload(),
         )
 
         mock_server.router.post(mock_server.endpoints.predict.path).respond(
@@ -409,14 +414,14 @@ class TestTabPFNClassifierInference(unittest.TestCase):
     def setUp(self):
         # skip init
         config.Config.is_initialized = True
-        ServiceClient._model_limits = GetModelLimitsResponse(
-            **_model_limits_payload(max_cells=100_000)
+        ServiceClient._api_settings = GetApiSettingsResponse(
+            **_api_settings_payload(max_cells=100_000)
         )
-        ServiceClient._model_limits_ts = time.monotonic()
+        ServiceClient._api_settings_ts = time.monotonic()
 
     def tearDown(self):
-        ServiceClient._model_limits = None
-        ServiceClient._model_limits_ts = 0.0
+        ServiceClient._api_settings = None
+        ServiceClient._api_settings_ts = 0.0
         # undo setUp
         config.reset()
 

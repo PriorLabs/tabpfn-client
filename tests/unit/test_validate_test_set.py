@@ -4,7 +4,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from tabpfn_client.api_models import GetModelLimitsResponse
+from tabpfn_client.api_models import GetApiSettingsResponse
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.estimator import validate_test_set
 
@@ -15,7 +15,7 @@ DEFAULT_BUDGET = 250_000 * 1_000_000
 def _limits(
     test_set_max_rows: int = 1_000_000,
     predict_row_pairs_budget: int = DEFAULT_BUDGET,
-) -> GetModelLimitsResponse:
+) -> GetApiSettingsResponse:
     model_limit: dict[str, Any] = {
         "train_set_max_rows": 1_000_000,
         "train_set_max_cells": 100_000_000,
@@ -26,12 +26,17 @@ def _limits(
         "max_classes": 10,
     }
     model_limit["predict_row_pairs_budget"] = predict_row_pairs_budget
-    return GetModelLimitsResponse.model_validate(
+    return GetApiSettingsResponse.model_validate(
         {
             "default_model_version": "v3",
             "max_model_limit": model_limit,
             "model_limits": {"v3": model_limit},
             "dataset_max_size_bytes": 100_000_000,
+            "async_settings": {
+                "use_above_trainset_size_bytes": 50 * 1024 * 1024,
+                "poll_timeout_secs": 7200.0,
+                "poll_interval_secs": 5.0,
+            },
         }
     )
 
@@ -43,10 +48,10 @@ def _X(n_rows: int) -> np.ndarray:
 def _validate(
     n_test_rows: int,
     train_rows: int | None = None,
-    limits: GetModelLimitsResponse | None = None,
+    limits: GetApiSettingsResponse | None = None,
 ):
     with patch.object(
-        ServiceClient, "get_model_limits", return_value=limits or _limits()
+        ServiceClient, "get_api_settings", return_value=limits or _limits()
     ):
         validate_test_set(_X(n_test_rows), None, train_rows=train_rows)
 
@@ -81,5 +86,5 @@ def test_smaller_budget_shrinks_adaptive_limit():
 
 
 def test_no_limits_available_skips_validation():
-    with patch.object(ServiceClient, "get_model_limits", return_value=None):
+    with patch.object(ServiceClient, "get_api_settings", return_value=None):
         validate_test_set(_X(2_000_000), None, train_rows=1_000_000)

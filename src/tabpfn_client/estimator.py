@@ -456,13 +456,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.classes_ = np.unique(y_)
 
         # TODO: these things should ideally be shared with the local package
-        limits = ServiceClient.get_model_limits()
-        if limits is None:
+        api_settings = ServiceClient.get_api_settings()
+        if api_settings is None:
             return
 
         # We use the most permissive limit across all models as at fit time we
         # don't yet know yet which model will be used.
-        limit = limits.max_model_limit
+        limit = api_settings.max_model_limit
 
         if len(self.classes_) > limit.max_classes:
             raise ValueError(
@@ -852,13 +852,13 @@ def validate_train_set(
         if X.shape[0] != y.shape[0]:
             raise ValueError("X and y must have the same number of samples")
 
-    limits = ServiceClient.get_model_limits()
-    if limits is None:
+    api_settings = ServiceClient.get_api_settings()
+    if api_settings is None:
         return
 
     # We don't yet know which model will be used, so we use the most permissive limit
     # across all models.
-    limit = limits.max_model_limit
+    limit = api_settings.max_model_limit
 
     if X.shape[0] > limit.train_set_max_rows:
         raise ValueError(
@@ -883,15 +883,15 @@ def validate_test_set(
 ):
     """Check the integrity of the test data."""
 
-    limits = ServiceClient.get_model_limits()
-    if limits is None:
+    api_settings = ServiceClient.get_api_settings()
+    if api_settings is None:
         return
 
     if not model_path:
-        limit = limits.model_limits[limits.default_model_version]
+        limit = api_settings.model_limits[api_settings.default_model_version]
     else:
         model_version = model_version_from_path(model_path)
-        limit = model_limit_from_version(model_version, limits.model_limits)
+        limit = model_limit_from_version(model_version, api_settings.model_limits)
 
     max_rows = limit.test_set_max_rows
     if train_rows:

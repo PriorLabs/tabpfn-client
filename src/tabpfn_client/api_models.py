@@ -41,6 +41,12 @@ class UnknownEnum(str):
         return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
+class AsyncSettings(BaseModel):
+    use_above_trainset_size_bytes: int
+    poll_timeout_secs: float
+    poll_interval_secs: float
+
+
 class ClassifierOutputType(str, Enum):
     PROBAS = "probas"
     PREDS = "preds"
@@ -241,13 +247,14 @@ class FitStatusResponse(BaseModel):
     error_code: str | None = None
 
 
-class GetModelLimitsResponse(BaseModel):
+class GetApiSettingsResponse(BaseModel):
     default_model_version: Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")]
     max_model_limit: ModelLimit
     model_limits: dict[
         Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")], ModelLimit
     ]
     dataset_max_size_bytes: int
+    async_settings: AsyncSettings
 
 
 class NotFoundErrorResponse(BaseModel):

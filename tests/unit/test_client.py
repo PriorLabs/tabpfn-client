@@ -11,7 +11,7 @@ from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
 
 from tabpfn_client.client import (
-    GetModelLimitsResponse,
+    GetApiSettingsResponse,
     RetryableServerError,
     ServiceClient,
 )
@@ -27,7 +27,7 @@ from tabpfn_client.api_models import (
 from tests.mock_tabpfn_server import with_mock_server
 
 
-def _model_limits_payload(
+def _api_settings_payload(
     max_cells=100_000_000,
     max_cols=2_000,
     max_size_bytes=100_000_000,
@@ -52,6 +52,11 @@ def _model_limits_payload(
         "max_model_limit": model_limit,
         "model_limits": {"v2.5": model_limit},
         "dataset_max_size_bytes": max_size_bytes,
+        "async_settings": {
+            "use_above_trainset_size_bytes": 50 * 1024 * 1024,
+            "poll_timeout_secs": 7200.0,
+            "poll_interval_secs": 5.0,
+        },
     }
 
 
@@ -64,15 +69,15 @@ class TestServiceClient(unittest.TestCase):
         )
 
         ServiceClient.reset_authorization()
-        ServiceClient._model_limits = GetModelLimitsResponse(
-            **_model_limits_payload(),
+        ServiceClient._api_settings = GetApiSettingsResponse(
+            **_api_settings_payload(),
         )
-        ServiceClient._model_limits_ts = time.monotonic()
+        ServiceClient._api_settings_ts = time.monotonic()
 
     def tearDown(self):
         ServiceClient.reset_authorization()
-        ServiceClient._model_limits = None
-        ServiceClient._model_limits_ts = 0.0
+        ServiceClient._api_settings = None
+        ServiceClient._api_settings_ts = 0.0
 
     @staticmethod
     def _upload_info(url: str) -> dict:
@@ -502,7 +507,7 @@ class TestServiceClient(unittest.TestCase):
 
         with (
             patch.object(ServiceClient, "_upload_to_gcs"),
-            patch.object(get_opts(), "TABPFN_CLIENT_POLL_INTERVAL", 0),
+            patch.object(get_opts(), "TABPFN_CLIENT_ASYNC_POLL_INTERVAL", 0),
         ):
             result = ServiceClient.fit(
                 self.X_train,
@@ -541,7 +546,7 @@ class TestServiceClient(unittest.TestCase):
 
         with (
             patch.object(ServiceClient, "_upload_to_gcs"),
-            patch.object(get_opts(), "TABPFN_CLIENT_POLL_INTERVAL", 0),
+            patch.object(get_opts(), "TABPFN_CLIENT_ASYNC_POLL_INTERVAL", 0),
         ):
             with self.assertRaises(RuntimeError) as cm:
                 ServiceClient.fit(
@@ -589,13 +594,13 @@ class TestServiceClient(unittest.TestCase):
         self.assertEqual(prepare_route.call_count, 2)
         self.assertEqual(predict_route.call_count, 2)
 
-    def test_get_model_limits_uses_cache(self):
-        ServiceClient._model_limits = None
-        ServiceClient._model_limits_ts = 0.0
+    def test_get_api_settings_uses_cache(self):
+        ServiceClient._api_settings = None
+        ServiceClient._api_settings_ts = 0.0
 
         response = Mock()
         response.raise_for_status = Mock()
-        response.json.return_value = _model_limits_payload(
+        response.json.return_value = _api_settings_payload(
             max_cells=123,
             max_cols=12,
             max_size_bytes=456,
@@ -605,30 +610,30 @@ class TestServiceClient(unittest.TestCase):
         with patch.object(
             ServiceClient.httpx_client, "get", return_value=response
         ) as m:
-            first = ServiceClient.get_model_limits()
-            second = ServiceClient.get_model_limits()
+            first = ServiceClient.get_api_settings()
+            second = ServiceClient.get_api_settings()
 
         assert first is not None
         self.assertEqual(first.dataset_max_size_bytes, 456)
         self.assertIs(first, second)
         self.assertEqual(m.call_count, 1)
 
-    def test_get_model_limits_returns_stale_value_on_failure(self):
-        stale = GetModelLimitsResponse(
-            **_model_limits_payload(
+    def test_get_api_settings_returns_stale_value_on_failure(self):
+        stale = GetApiSettingsResponse(
+            **_api_settings_payload(
                 max_cells=100,
                 max_cols=20,
                 max_size_bytes=300,
                 max_classes=4,
             ),
         )
-        ServiceClient._model_limits = stale
-        ServiceClient._model_limits_ts = time.monotonic() - 1_900
+        ServiceClient._api_settings = stale
+        ServiceClient._api_settings_ts = time.monotonic() - 1_900
 
         with patch.object(
             ServiceClient.httpx_client, "get", side_effect=RuntimeError("boom")
         ):
-            result = ServiceClient.get_model_limits()
+            result = ServiceClient.get_api_settings()
 
         self.assertIs(result, stale)
 
@@ -636,8 +641,8 @@ class TestServiceClient(unittest.TestCase):
 class TestServiceClientPredictionNormalization(unittest.TestCase):
     def tearDown(self):
         ServiceClient.reset_authorization()
-        ServiceClient._model_limits = None
-        ServiceClient._model_limits_ts = 0.0
+        ServiceClient._api_settings = None
+        ServiceClient._api_settings_ts = 0.0
 
     @staticmethod
     def _upload_info(url: str) -> dict:
@@ -684,7 +689,7 @@ class TestServiceClientPredictionNormalization(unittest.TestCase):
             ),
         )
 
-        with patch.object(ServiceClient, "get_model_limits", return_value=None):
+        with patch.object(ServiceClient, "get_api_settings", return_value=None):
             with patch.object(ServiceClient, "_upload_to_gcs"):
                 pred = ServiceClient.predict(
                     fitted_train_set_id=UUID("00000000-0000-0000-0000-000000000002"),

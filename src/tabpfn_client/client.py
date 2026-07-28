@@ -29,11 +29,10 @@ import backoff
 import httpx
 from omegaconf import DictConfig, OmegaConf
 from tabpfn_client.browser_auth import BrowserAuthHandler
-from tabpfn_client.constants import ASYNC_MODE_ENABLED_ABOVE_SIZE_BYTES
 from tabpfn_common_utils import utils as common_utils
 from tabpfn_common_utils.utils import Singleton
 from tabpfn_client.api_models import (
-    GetModelLimitsResponse,
+    GetApiSettingsResponse,
     PrepareTrainSetUploadRequest,
     PrepareTrainSetUploadResponse,
     DuplicateTrainSetErrorResponse,
@@ -216,34 +215,34 @@ class ServiceClient(Singleton):
         follow_redirects=True,
     )
     _access_token: str | None = None
-    _model_limits: GetModelLimitsResponse | None = None
-    _model_limits_ts: float = 0.0
+    _api_settings: GetApiSettingsResponse | None = None
+    _api_settings_ts: float = 0.0
 
     @classmethod
     def get_access_token(cls):
         return cls._access_token
 
     @classmethod
-    def get_model_limits(cls) -> GetModelLimitsResponse | None:
+    def get_api_settings(cls) -> GetApiSettingsResponse | None:
         """Fetch and cache dataset limits. The cache expires after 1 hour.
 
         Not thread-safe, but concurrent calls are benign: duplicates fetch the
         same data and the reference assignment is atomic under the GIL."""
         ttl = 3600.0  # 1 hour
         if (
-            cls._model_limits is not None
-            and (time.monotonic() - cls._model_limits_ts) < ttl
+            cls._api_settings is not None
+            and (time.monotonic() - cls._api_settings_ts) < ttl
         ):
-            return cls._model_limits
+            return cls._api_settings
         try:
-            response = cls.httpx_client.get("/tabpfn/get_model_limits")
+            response = cls.httpx_client.get("/tabpfn/get_api_settings")
             response.raise_for_status()
-            cls._model_limits = GetModelLimitsResponse.model_validate(response.json())
-            cls._model_limits_ts = time.monotonic()
-            return cls._model_limits
+            cls._api_settings = GetApiSettingsResponse.model_validate(response.json())
+            cls._api_settings_ts = time.monotonic()
+            return cls._api_settings
         except Exception:
-            logger.debug("Failed to fetch model limits", exc_info=True)
-            return cls._model_limits  # return stale value if available
+            logger.debug("Failed to fetch API settings", exc_info=True)
+            return cls._api_settings  # return stale value if available
 
     @classmethod
     def authorize(cls, access_token: str):
@@ -319,17 +318,17 @@ class ServiceClient(Singleton):
         df_y = cast(pd.DataFrame, y if isinstance(y, pd.DataFrame) else pd.DataFrame(y))
 
         total_mem_usage = None
-        limits = cls.get_model_limits()
+        api_settings = cls.get_api_settings()
 
-        if limits is not None:
+        if api_settings is not None:
             total_mem_usage = 0
             for name, df in [("x_train", df_X), ("y_train", df_y)]:
                 mem_usage = df.memory_usage(deep=True).sum()
                 total_mem_usage += mem_usage
-                if mem_usage > limits.dataset_max_size_bytes:
+                if mem_usage > api_settings.dataset_max_size_bytes:
                     raise ValueError(
                         f"In-memory size of {name} ({mem_usage} bytes) exceeds "
-                        f"the server limit of {limits.dataset_max_size_bytes} bytes."
+                        f"the server limit of {api_settings.dataset_max_size_bytes} bytes."
                     )
 
         match get_opts().TABPFN_CLIENT_FIT_CALL_MODE:
@@ -339,9 +338,12 @@ class ServiceClient(Singleton):
                 async_mode = True
             case FitCallMode.AUTO:
                 async_mode = True
+                trainset_size_threshold = (
+                    get_opts().TABPFN_CLIENT_ASYNC_USE_ABOVE_TRAINSET_SIZE
+                )
                 if (
                     total_mem_usage is not None
-                    and total_mem_usage <= ASYNC_MODE_ENABLED_ABOVE_SIZE_BYTES
+                    and total_mem_usage <= trainset_size_threshold
                 ):
                     async_mode = False
 
@@ -452,7 +454,7 @@ class ServiceClient(Singleton):
     def _wait_for_fit(
         cls,
         fitted_train_set_id: UUID,
-        timeout: float = get_opts().TABPFN_CLIENT_POLL_TIMEOUT,
+        timeout: float = get_opts().TABPFN_CLIENT_ASYNC_POLL_TIMEOUT,
         headers: dict[str, str] | None = None,
     ) -> None:
         """Poll ``GET /tabpfn/fit/{id}`` until the fit reaches a terminal state.
@@ -473,7 +475,7 @@ class ServiceClient(Singleton):
                     f"within {timeout} seconds."
                 )
 
-            time.sleep(min(get_opts().TABPFN_CLIENT_POLL_INTERVAL, remaining))
+            time.sleep(min(get_opts().TABPFN_CLIENT_ASYNC_POLL_INTERVAL, remaining))
 
             try:
                 res = cls._get_fit_status(fitted_train_set_id, headers=headers)
@@ -579,13 +581,13 @@ class ServiceClient(Singleton):
 
         df_x_test = x_test if isinstance(x_test, pd.DataFrame) else pd.DataFrame(x_test)
 
-        limits = cls.get_model_limits()
-        if limits is not None:
+        api_settings = cls.get_api_settings()
+        if api_settings is not None:
             mem_usage = df_x_test.memory_usage(deep=True).sum()
-            if mem_usage > limits.dataset_max_size_bytes:
+            if mem_usage > api_settings.dataset_max_size_bytes:
                 raise ValueError(
                     f"In-memory size of x_test ({mem_usage} bytes) exceeds "
-                    f"the server limit of {limits.dataset_max_size_bytes} bytes."
+                    f"the server limit of {api_settings.dataset_max_size_bytes} bytes."
                 )
 
         x_test_bytes, x_test_crc32c_hash = _serialize_to_parquet(df_x_test)
@@ -809,7 +811,12 @@ class ServiceClient(Singleton):
                 body = parsed
         except json.JSONDecodeError:
             pass
-        message = body.get("message") or response.reason_phrase or response.text
+        message = (
+            body.get("message")
+            or body.get("detail")  # defensive, starlette standard error format
+            or response.reason_phrase
+            or response.text
+        )
         return body, message
 
     @staticmethod
