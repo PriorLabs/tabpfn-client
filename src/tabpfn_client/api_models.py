@@ -225,10 +225,6 @@ class FitRequest(BaseModel):
     ) = None
     thinking_timeout_s: float | None = None
     thinking_effort_metric: str | None = None
-    force_refit: bool | None = Field(
-        default=None,
-        description="Deprecated, ignored: every fit creates a fresh fitted train set and runs unconditionally. Reuse fits by keeping the fitted_train_set_id (estimator save_model/load_model).",
-    )
     async_mode: bool | None = Field(
         default=None,
         description="Submit the fit and return immediately with status=pending; poll GET /fit/{fitted_train_set_id} for the outcome. Defaults to the blocking behaviour.",
@@ -267,10 +263,6 @@ class PredictRequest(BaseModel):
     test_set_upload_id: UUID
     fitted_train_set_id: UUID
     task_config: TaskConfig
-    force_refit: bool | None = Field(
-        default=None,
-        description="Whether to force the fitting of the test set even if a fittedtest set and transform states already exist.",
-    )
 
 
 class PredictResponse(BaseModel):

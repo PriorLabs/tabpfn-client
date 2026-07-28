@@ -12,6 +12,7 @@ from sklearn.model_selection import train_test_split
 
 from tabpfn_client.client import (
     GetApiSettingsResponse,
+    ResolvedAsyncSettings,
     RetryableServerError,
     ServiceClient,
 )
@@ -58,6 +59,14 @@ def _api_settings_payload(
             "poll_interval_secs": 5.0,
         },
     }
+
+
+def _fast_poll_settings() -> ResolvedAsyncSettings:
+    return ResolvedAsyncSettings(
+        use_above_trainset_size_bytes=50 * 1024 * 1024,
+        poll_timeout_secs=7200.0,
+        poll_interval_secs=0,
+    )
 
 
 class TestServiceClient(unittest.TestCase):
@@ -507,7 +516,11 @@ class TestServiceClient(unittest.TestCase):
 
         with (
             patch.object(ServiceClient, "_upload_to_gcs"),
-            patch.object(get_opts(), "TABPFN_CLIENT_ASYNC_POLL_INTERVAL", 0),
+            patch.object(
+                ServiceClient,
+                "_resolve_async_settings",
+                return_value=_fast_poll_settings(),
+            ),
         ):
             result = ServiceClient.fit(
                 self.X_train,
@@ -546,7 +559,11 @@ class TestServiceClient(unittest.TestCase):
 
         with (
             patch.object(ServiceClient, "_upload_to_gcs"),
-            patch.object(get_opts(), "TABPFN_CLIENT_ASYNC_POLL_INTERVAL", 0),
+            patch.object(
+                ServiceClient,
+                "_resolve_async_settings",
+                return_value=_fast_poll_settings(),
+            ),
         ):
             with self.assertRaises(RuntimeError) as cm:
                 ServiceClient.fit(
@@ -593,6 +610,36 @@ class TestServiceClient(unittest.TestCase):
         self.assertTrue(np.array_equal(pred_1.y_pred, pred_2.y_pred))
         self.assertEqual(prepare_route.call_count, 2)
         self.assertEqual(predict_route.call_count, 2)
+
+    def test_resolve_async_settings_precedence(self):
+        # Environment > server default > client default.
+        opts = get_opts()
+        opts.model_fields_set.discard("TABPFN_CLIENT_ASYNC_POLL_INTERVAL")
+        payload = _api_settings_payload()
+        payload["async_settings"]["poll_interval_secs"] = 2.5
+        ServiceClient._api_settings = GetApiSettingsResponse(**payload)
+
+        # The server value beats the client default (5.0).
+        self.assertEqual(
+            ServiceClient._resolve_async_settings().poll_interval_secs, 2.5
+        )
+
+        # An explicitly set option beats the server value.
+        original = opts.TABPFN_CLIENT_ASYNC_POLL_INTERVAL
+        opts.TABPFN_CLIENT_ASYNC_POLL_INTERVAL = 1.5  # marks the field as set
+        try:
+            self.assertEqual(
+                ServiceClient._resolve_async_settings().poll_interval_secs, 1.5
+            )
+        finally:
+            opts.TABPFN_CLIENT_ASYNC_POLL_INTERVAL = original
+            opts.model_fields_set.discard("TABPFN_CLIENT_ASYNC_POLL_INTERVAL")
+
+        # The client default applies when the server is unreachable.
+        with patch.object(ServiceClient, "get_api_settings", return_value=None):
+            self.assertEqual(
+                ServiceClient._resolve_async_settings().poll_interval_secs, 5.0
+            )
 
     def test_get_api_settings_uses_cache(self):
         ServiceClient._api_settings = None

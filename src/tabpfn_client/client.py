@@ -182,6 +182,13 @@ class PredictionResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class ResolvedAsyncSettings:
+    use_above_trainset_size_bytes: int
+    poll_timeout_secs: float
+    poll_interval_secs: float
+
+
 class ServiceClient(Singleton):
     """
     Singleton class for handling communication with the server.
@@ -243,6 +250,40 @@ class ServiceClient(Singleton):
         except Exception:
             logger.debug("Failed to fetch API settings", exc_info=True)
             return cls._api_settings  # return stale value if available
+
+    @classmethod
+    def _resolve_async_settings(cls) -> ResolvedAsyncSettings:
+        """Resolve the async-fit settings: environment > server default > client default.
+
+        An option explicitly set via the environment wins; otherwise the
+        server-sent value applies; the client default is the fallback when the
+        server is unreachable.
+        """
+        opts = get_opts()
+        api_settings = cls.get_api_settings()
+        server = api_settings.async_settings if api_settings is not None else None
+
+        def resolve(opt_name: str, server_value: Any) -> Any:
+            if opt_name in opts.model_fields_set:
+                return getattr(opts, opt_name)
+            if server_value is not None:
+                return server_value
+            return getattr(opts, opt_name)
+
+        return ResolvedAsyncSettings(
+            use_above_trainset_size_bytes=resolve(
+                "TABPFN_CLIENT_ASYNC_USE_ABOVE_TRAINSET_SIZE",
+                server.use_above_trainset_size_bytes if server else None,
+            ),
+            poll_timeout_secs=resolve(
+                "TABPFN_CLIENT_ASYNC_POLL_TIMEOUT",
+                server.poll_timeout_secs if server else None,
+            ),
+            poll_interval_secs=resolve(
+                "TABPFN_CLIENT_ASYNC_POLL_INTERVAL",
+                server.poll_interval_secs if server else None,
+            ),
+        )
 
     @classmethod
     def authorize(cls, access_token: str):
@@ -339,7 +380,7 @@ class ServiceClient(Singleton):
             case FitCallMode.AUTO:
                 async_mode = True
                 trainset_size_threshold = (
-                    get_opts().TABPFN_CLIENT_ASYNC_USE_ABOVE_TRAINSET_SIZE
+                    cls._resolve_async_settings().use_above_trainset_size_bytes
                 )
                 if (
                     total_mem_usage is not None
@@ -454,17 +495,22 @@ class ServiceClient(Singleton):
     def _wait_for_fit(
         cls,
         fitted_train_set_id: UUID,
-        timeout: float = get_opts().TABPFN_CLIENT_ASYNC_POLL_TIMEOUT,
+        timeout: float | None = None,
         headers: dict[str, str] | None = None,
     ) -> None:
         """Poll ``GET /tabpfn/fit/{id}`` until the fit reaches a terminal state.
 
         Returns once the fit is COMPLETED. Raises if the fit FAILED, or
         ``TimeoutError`` if it does not reach a terminal state within ``timeout``
-        seconds. A failed fit is reported by the server as HTTP 200 with
-        ``status=failed`` (only an unknown/foreign id is a 404), so the status
-        field — not the HTTP code — is what we inspect here.
+        seconds (the resolved poll timeout when omitted). A failed fit is
+        reported by the server as HTTP 200 with ``status=failed`` (only an
+        unknown/foreign id is a 404), so the status field — not the HTTP code —
+        is what we inspect here.
         """
+        async_settings = cls._resolve_async_settings()
+        if timeout is None:
+            timeout = async_settings.poll_timeout_secs
+
         deadline = time.monotonic() + timeout
         while True:
             # status == PENDING: keep polling until the deadline.
@@ -475,7 +521,7 @@ class ServiceClient(Singleton):
                     f"within {timeout} seconds."
                 )
 
-            time.sleep(min(get_opts().TABPFN_CLIENT_ASYNC_POLL_INTERVAL, remaining))
+            time.sleep(min(async_settings.poll_interval_secs, remaining))
 
             try:
                 res = cls._get_fit_status(fitted_train_set_id, headers=headers)
