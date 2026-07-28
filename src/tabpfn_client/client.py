@@ -19,7 +19,7 @@ import time
 import traceback
 import warnings
 from pydantic import BaseModel, ValidationError
-from typing import Any, Callable, cast, Literal, Mapping, Union
+from typing import Any, cast, Literal, Mapping, Union
 
 import google_crc32c
 
@@ -644,7 +644,7 @@ class ServiceClient(Singleton):
             ),
         )
 
-        # TODO(simo): raise RuntimeError on 404
+        # TODO(simo): raise RuntimeError on 404?
 
         prediction = predict_resp.prediction
 
@@ -800,7 +800,6 @@ class ServiceClient(Singleton):
         method_name: str,
         only_version_check: bool = False,
         response_models: dict[int, type[BaseModel]] | None = None,
-        handlers: dict[int, Callable[[Any], Any]] | None = None,
     ) -> BaseModel | None:
         ServiceClient._warn_if_deprecated(response)
 
@@ -885,8 +884,6 @@ class ServiceClient(Singleton):
                         ) from e
                     response.raise_for_status()
                 else:
-                    if handlers is not None and response.status_code in handlers:
-                        handlers[response.status_code](parsed_response)
                     return parsed_response
 
         if response.status_code == 200:

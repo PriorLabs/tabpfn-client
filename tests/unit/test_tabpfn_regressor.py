@@ -606,7 +606,6 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             "00000000-0000-0000-0000-000000000000"
         )
         regressor._last_train_X = np.random.randn(5, 2)
-        regressor._last_train_y = np.random.randn(5)
 
         test_X = np.random.randn(3, 2)
         dummy_output = {"borders": [0.0, 1.0], "mean": np.random.randn(3)}
@@ -655,7 +654,6 @@ class TestTabPFNRegressorInference(unittest.TestCase):
             "00000000-0000-0000-0000-000000000000"
         )
         regressor._last_train_X = np.random.randn(5, 2)
-        regressor._last_train_y = np.random.randn(5)
 
         test_X = np.random.randn(3, 2)
         dummy_output = {"borders": [0.0, 1.0], "mean": np.random.randn(3)}

@@ -306,9 +306,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self._last_trace_id = None
         self._last_fitted_train_set_id = None
         self._last_train_X = None
-        self._last_train_y = None
         self._last_meta = {}
-        self._last_train_set_description = None
         self._fit_count = 0
 
     def fit(
@@ -344,7 +342,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 self.client_options.headers["sentry-trace"] = uuid4().hex
 
             self._last_trace_id = self.client_options.headers["sentry-trace"]
-            self._last_train_set_description = description
 
             def fit_task() -> UUID:
                 return InferenceClient.fit(
@@ -362,7 +359,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
             self._last_fitted_train_set_id = cast(UUID, run_task(fit_task, "Fitting"))
             self._last_train_X = X_clean
-            self._last_train_y = y
             self.fitted_ = True
             self._fit_count += 1
         else:
@@ -622,9 +618,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self._last_trace_id = None
         self._last_fitted_train_set_id = None
         self._last_train_X = None
-        self._last_train_y = None
         self._last_meta = {}
-        self._last_train_set_description = None
         self._fit_count = 0
 
     def fit(
@@ -661,8 +655,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
             self._last_trace_id = self.client_options.headers["sentry-trace"]
 
-            self._last_train_set_description = description
-
             def fit_task() -> UUID:
                 return InferenceClient.fit(
                     X_clean,
@@ -679,7 +671,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
             self._last_fitted_train_set_id = cast(UUID, run_task(fit_task, "Fitting"))
             self._last_train_X = X_clean
-            self._last_train_y = y
             self.fitted_ = True
             self._fit_count += 1
         else:
