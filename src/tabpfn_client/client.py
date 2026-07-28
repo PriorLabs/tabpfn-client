@@ -951,7 +951,7 @@ class ServiceClient(Singleton):
             message = ""
         else:
             is_valid = False
-            message = response.json()["detail"]
+            message = response.json()["message"]
 
         return is_valid, message
 
@@ -1000,7 +1000,7 @@ class ServiceClient(Singleton):
             message = response.json()["message"]
         else:
             is_created = False
-            message = response.json()["detail"]
+            message = response.json()["message"]
 
         access_token = response.json()["token"] if is_created else None
         return is_created, message, access_token
@@ -1033,7 +1033,7 @@ class ServiceClient(Singleton):
             message = response.json()["message"]
         else:
             is_verified = False
-            message = response.json()["detail"]
+            message = response.json()["message"]
 
         return is_verified, message
 
@@ -1078,7 +1078,7 @@ class ServiceClient(Singleton):
             message = "Email not verified"
         else:
             try:
-                message = response.json()["detail"]
+                message = response.json()["message"]
             except (json.JSONDecodeError, KeyError):
                 message = (
                     response.text
@@ -1120,7 +1120,7 @@ class ServiceClient(Singleton):
             message = response.json()["message"]
         else:
             sent = False
-            message = response.json()["detail"]
+            message = response.json()["message"]
         return sent, message
 
     @classmethod
@@ -1137,7 +1137,7 @@ class ServiceClient(Singleton):
             message = response.json()["message"]
         else:
             sent = False
-            message = response.json()["detail"]
+            message = response.json()["message"]
         return sent, message
 
     @classmethod

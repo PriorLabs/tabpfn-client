@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 import httpx
 import numpy as np
+from pydantic import ValidationError
 from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
 
@@ -44,6 +45,7 @@ def _model_limits_payload(
         "test_set_max_rows_w_full_regression_output": max_rows,
         "max_cols": max_cols,
         "max_classes": max_classes,
+        "predict_row_pairs_budget": 250_000 * 1_000_000,
     }
     return {
         "default_model_version": "v2.5",
@@ -136,7 +138,7 @@ class TestServiceClient(unittest.TestCase):
     @with_mock_server()
     def test_validate_email_invalid(self, mock_server):
         mock_server.router.post(mock_server.endpoints.validate_email.path).respond(
-            401, json={"detail": "dummy_message"}
+            401, json={"message": "dummy_message"}
         )
         self.assertEqual(
             ServiceClient.validate_email("dummy_email"),
@@ -167,7 +169,7 @@ class TestServiceClient(unittest.TestCase):
     @with_mock_server()
     def test_register_user_with_invalid_email(self, mock_server):
         mock_server.router.post(mock_server.endpoints.register.path).respond(
-            401, json={"detail": "dummy_message", "token": None}
+            401, json={"message": "dummy_message", "token": None}
         )
         self.assertEqual(
             ServiceClient.register(
@@ -272,11 +274,14 @@ class TestServiceClient(unittest.TestCase):
         self.assertEqual(pred.metadata["task"], "classification")
         self.assertEqual(mock_upload.call_count, 3)
 
-    def test_validate_response_no_error(self):
+    def test_raise_on_error_no_op_on_success(self):
         response = Mock()
         response.status_code = 200
-        r = ServiceClient._validate_response(response, "test")
-        self.assertIsNone(r)
+        self.assertIsNone(ServiceClient._raise_on_error(response, "test"))
+        # The body must stay untouched on success so streaming responses
+        # (e.g. download) remain unread.
+        response.read.assert_not_called()
+        response.json.assert_not_called()
 
     def test_validate_response(self):
         response = Mock()
@@ -284,13 +289,17 @@ class TestServiceClient(unittest.TestCase):
         response.status_code = 426
         response.json.return_value = {"message": "Client version too old."}
         with self.assertRaises(RuntimeError) as cm:
-            ServiceClient._validate_response(response, "test")
+            ServiceClient._validate_response(
+                response, "test", success_model=FitResponse
+            )
         self.assertEqual(str(cm.exception), "Client version too old.")
 
         response.status_code = 400
         response.json.return_value = {"message": "Some other error"}
         with self.assertRaises(RuntimeError) as cm:
-            ServiceClient._validate_response(response, "test")
+            ServiceClient._validate_response(
+                response, "test", success_model=FitResponse
+            )
         self.assertTrue(str(cm.exception).startswith("Fail to call test"))
 
     def test_validate_response_streamed_error_envelope(self):
@@ -298,8 +307,6 @@ class TestServiceClient(unittest.TestCase):
         # {"_streamed_error": True, "message": "..."} when the fit fails
         # mid-stream. The handler must surface the message, not let the
         # success-schema validation turn it into a misleading pydantic error.
-        from tabpfn_client.api_models import FitResponse
-
         response = Mock()
         response.status_code = 200
         response.is_closed = True
@@ -308,20 +315,16 @@ class TestServiceClient(unittest.TestCase):
             "message": "thinking fits require at least 500 rows of training data; got 225.",
         }
         with self.assertRaises(RuntimeError) as cm:
-            ServiceClient._validate_response(
-                response, "fit", response_models={200: FitResponse}
-            )
+            ServiceClient._validate_response(response, "fit", success_model=FitResponse)
         self.assertIn("streamed", str(cm.exception))
         self.assertIn("500 rows", str(cm.exception))
 
     def test_validate_response_streamed_error_without_message_uses_reason_phrase(self):
-        from tabpfn_client.api_models import FitResponse
-
         with self.assertRaises(RuntimeError) as cm:
             ServiceClient._validate_response(
                 self._http_response(200, json={"_streamed_error": True}),
                 "fit",
-                response_models={200: FitResponse},
+                success_model=FitResponse,
             )
         self.assertEqual(str(cm.exception), "Fail to call fit with error: streamed, OK")
 
@@ -348,15 +351,15 @@ class TestServiceClient(unittest.TestCase):
             **kwargs,
         )
 
-    def test_validate_response_retryable_statuses_raise_retryable_error(self):
+    def test_raise_on_error_retryable_statuses_raise_retryable_error(self):
         for status in (408, 502, 503, 504):
             with self.assertRaises(RetryableServerError) as cm:
-                ServiceClient._validate_response(self._http_response(status), "test")
+                ServiceClient._raise_on_error(self._http_response(status), "test")
             self.assertIn(f"[HTTP {status}]", str(cm.exception))
 
-    def test_validate_response_error_includes_trace_id(self):
+    def test_raise_on_error_includes_trace_id(self):
         with self.assertRaises(RuntimeError) as cm:
-            ServiceClient._validate_response(
+            ServiceClient._raise_on_error(
                 self._http_response(
                     500, json={"message": "boom", "trace_id": "abc-123"}
                 ),
@@ -367,22 +370,22 @@ class TestServiceClient(unittest.TestCase):
             "Fail to call test: [HTTP 500] boom. Report trace ID: abc-123.",
         )
 
-    def test_validate_response_5xx_with_non_json_body(self):
+    def test_raise_on_error_5xx_with_non_json_body(self):
         with self.assertRaises(RuntimeError) as cm:
-            ServiceClient._validate_response(
+            ServiceClient._raise_on_error(
                 self._http_response(500, text="<html>oops</html>"), "test"
             )
         self.assertEqual(
             str(cm.exception), "Fail to call test: [HTTP 500] Internal Server Error."
         )
 
-    def test_validate_response_4xx_message_falls_back_to_reason_phrase(self):
+    def test_raise_on_error_message_falls_back_to_reason_phrase(self):
         with self.assertRaises(RuntimeError) as cm:
-            ServiceClient._validate_response(self._http_response(403), "test")
+            ServiceClient._raise_on_error(self._http_response(403), "test")
         self.assertEqual(str(cm.exception), "Fail to call test: [HTTP 403] Forbidden.")
 
     def test_validate_response_registered_error_model_is_returned(self):
-        # Statuses with a registered response model (e.g. the 409 dedup path)
+        # Statuses with a registered error model (e.g. the 409 dedup path)
         # are returned to the caller instead of raising.
         body = {
             "message": "duplicate train set",
@@ -391,45 +394,34 @@ class TestServiceClient(unittest.TestCase):
         parsed = ServiceClient._validate_response(
             self._http_response(409, json=body),
             "test",
-            response_models={
-                200: FitResponse,
-                409: DuplicateTrainSetErrorResponse,
-            },
+            success_model=FitResponse,
+            error_models={409: DuplicateTrainSetErrorResponse},
         )
         self.assertIsInstance(parsed, DuplicateTrainSetErrorResponse)
         assert isinstance(parsed, DuplicateTrainSetErrorResponse)
         self.assertEqual(parsed.message, "duplicate train set")
 
-    def test_validate_response_registered_error_model_invalid_body_raises_status_error(
+    def test_validate_response_error_model_invalid_body_falls_back_to_generic_error(
         self,
     ):
-        with self.assertRaises(httpx.HTTPStatusError):
+        with self.assertRaises(RuntimeError) as cm:
             ServiceClient._validate_response(
                 self._http_response(409, json={"unexpected": "shape"}),
                 "test",
-                response_models={
-                    200: FitResponse,
-                    409: DuplicateTrainSetErrorResponse,
-                },
+                success_model=FitResponse,
+                error_models={409: DuplicateTrainSetErrorResponse},
             )
+        self.assertIn("[HTTP 409]", str(cm.exception))
 
-    def test_validate_response_200_with_invalid_schema_raises(self):
-        with self.assertRaises(RuntimeError) as cm:
+    def test_validate_response_success_with_invalid_schema_raises(self):
+        # A success body that does not match the success model surfaces the
+        # pydantic error as-is.
+        with self.assertRaises(ValidationError):
             ServiceClient._validate_response(
                 self._http_response(200, json={"unexpected": "shape"}),
                 "test",
-                response_models={200: FitResponse},
+                success_model=FitResponse,
             )
-        self.assertIn("invalid response schema", str(cm.exception))
-
-    def test_validate_response_200_missing_from_response_models_raises(self):
-        with self.assertRaises(RuntimeError) as cm:
-            ServiceClient._validate_response(
-                self._http_response(200, json={}),
-                "test",
-                response_models={409: DuplicateTrainSetErrorResponse},
-            )
-        self.assertIn("no response model configured for status 200", str(cm.exception))
 
     def test_check_version_ignores_server_errors(self):
         r = ServiceClient._check_version(

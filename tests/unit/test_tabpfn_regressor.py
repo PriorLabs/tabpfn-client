@@ -46,6 +46,7 @@ def _model_limits_payload(
         "test_set_max_rows_w_full_regression_output": max_rows,
         "max_cols": max_cols,
         "max_classes": max_classes,
+        "predict_row_pairs_budget": 250_000 * 1_000_000,
     }
     return {
         "default_model_version": "v2.5",
