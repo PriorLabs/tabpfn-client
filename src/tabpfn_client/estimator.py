@@ -8,7 +8,7 @@ import sys
 import time
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Literal, cast, overload
+from typing import Any, Callable, ClassVar, Literal, cast, overload
 from typing_extensions import Self
 from uuid import UUID
 
@@ -22,7 +22,6 @@ from tabpfn_client.client import (
     ServiceClient,
     ClientOptions,
     PredictionResult,
-    ThinkingEffort,
 )
 from tabpfn_client.config import Config, init
 from tabpfn_client.constants import URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE
@@ -36,7 +35,13 @@ from tabpfn_client.api_models import (
     ClassifierPredictParams,
     ClassifierConfig,
     RegressorConfig,
+    ThinkingConfig,
+    PredictionTask,
+    ClassifierThinkingConfig,
+    RegressorThinkingConfig,
+    ThinkingEffort,
 )
+from tabpfn_client.models import ApiCallMode
 from tabpfn_client.options import get_opts
 
 try:
@@ -63,16 +68,14 @@ DEFAULT_V3_MODEL_PATH = "v3_default"
 # (matches the OSS tabpfn package); "default" is a backward-compatible alias.
 _AUTO_MODEL_PATH_ALIASES: frozenset[str | None] = frozenset({None, "auto", "default"})
 
-THINKING_TIMEOUT_MAX_S = 40 * 60
-
-_VALID_THINKING_EFFORT_LEVELS = frozenset({"medium", "high"})
-
 
 class TabPFNModelSelection:
     """Base class for TabPFN model selection and path handling."""
 
     _AVAILABLE_MODELS: list[str] = []
     _VALID_TASKS = {"classification", "regression"}
+    # Each concrete estimator must declare the prediction task it serves.
+    _TASK: ClassVar[PredictionTask]
 
     @classmethod
     def list_available_models(cls) -> list[str]:
@@ -132,8 +135,6 @@ class TabPFNModelSelection:
             options["model_path"] = DEFAULT_V2_6_MODEL_PATH
         elif version == ModelVersion.V3:
             options["model_path"] = DEFAULT_V3_MODEL_PATH
-        else:
-            raise ValueError(f"Unknown version: {version}")
 
         options.update(overrides)
 
@@ -164,6 +165,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         "vutqq28w",
         "znskzxi4",
     ]
+    _TASK = PredictionTask.CLASSIFICATION
 
     def __init__(
         self,
@@ -184,6 +186,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         thinking_effort: ThinkingEffort | None = None,
         thinking_timeout_s: float | None = None,
         thinking_metric: str | None = None,
+        fit_call_mode: ApiCallMode = ApiCallMode.AUTO,
         client_options: ClientOptions | None = None,
     ):
         """Construct a TabPFN classifier.
@@ -243,18 +246,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
-        thinking_mode: bool, default=False
-            If True, spend extra fit-time compute for higher precision.
-            Equivalent to passing `thinking_effort="medium"` — setting any
-            `thinking_effort` value also enables thinking, so this flag is
-            optional when you've set the level explicitly.
-        thinking_effort: {"medium", "high"} or None, default=None
-            Effort level for thinking mode. When set, thinking is enabled
-            (you don't also need `thinking_mode=True`). When None and
-            `thinking_mode=True`, defaults to "medium".
-        thinking_timeout_s: float or None, default=None
-            Budget for the fit, in seconds. Only consulted when thinking is
-            enabled. Capped at 2400.
+        thinking_config: ThinkingConfig | None, default=None
+            The configuration for the thinking mode.
+        # XXX
         thinking_metric: str or None, default=None
             Optimization metric for the fit. Only consulted when thinking
             is enabled.
@@ -276,6 +270,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 "roc_auc_ovr_micro", "roc_auc_ovr_weighted".
 
             Aliases "acc", "nll", "pac_score" are also accepted.
+        fit_call_mode: FitCallMode, default=FitCallMode.AUTO
+            The mode to use for calling the fit method.
+            - AUTO: Automatically determine the best mode based on the size of the training set.
+            - SYNC: Call the fit method synchronously.
+            - ASYNC: Call the fit method asynchronously.
         client_options : ClientOptions, default=None
             Client specific options (e.g. timeout, headers).
         """
@@ -289,11 +288,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.inference_precision = inference_precision
         self.random_state = random_state
         self.inference_config = inference_config
+        # XXX resolver
         self.paper_version = paper_version
         self.thinking_mode = thinking_mode
-        self.thinking_effort: ThinkingEffort | None = thinking_effort
+        self.thinking_effort = thinking_effort
         self.thinking_timeout_s = thinking_timeout_s
         self.thinking_metric = thinking_metric
+        self.fit_call_mode = fit_call_mode
         self.client_options = client_options or ClientOptions()
 
         self._last_trace_id = None
@@ -310,21 +311,20 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     ):
         # assert init() is called
         init()
-
         tabpfn_config = self._get_tabpfn_config()
 
-        task_config = ClassifierConfig(tabpfn_config=tabpfn_config)
-
         validate_train_set(X, y)
-        validate_thinking_mode(
-            self.thinking_mode,
-            self.thinking_effort,
-            self.thinking_timeout_s,
-            self.thinking_metric,
-            self.model_path,
-        )
         X_clean = _clean_text_features(X)
         self._validate_targets_and_classes(y)
+
+        tabpfn_systems = resolve_tabpfn_systems(self.paper_version, self.thinking_mode)
+        thinking_config = resolve_thinking_config(
+            thinking_mode=self.thinking_mode,
+            thinking_effort=self.thinking_effort,
+            thinking_timeout_s=self.thinking_timeout_s,
+            thinking_metric=self.thinking_metric,
+            tabpfn_config=tabpfn_config,
+        )
 
         if Config.use_server:
             # Create a new sentry trace at every fit, provided that:
@@ -340,12 +340,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 return InferenceClient.fit(
                     X_clean,
                     y,
-                    task_config=task_config,
-                    paper_version=self.paper_version,
-                    thinking_mode=self.thinking_mode,
-                    thinking_effort=self.thinking_effort,
-                    thinking_timeout_s=self.thinking_timeout_s,
-                    thinking_metric=self.thinking_metric,
+                    task=self._TASK,
+                    tabpfn_systems=tabpfn_systems,
+                    thinking_config=thinking_config,
+                    call_mode=self.fit_call_mode,
                     client_options=self.client_options,
                     description=description,
                 )
@@ -494,6 +492,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         "09gpqh39",
         "wyl4o83o",
     ]
+    _TASK = PredictionTask.REGRESSION
 
     def __init__(
         self,
@@ -513,6 +512,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         thinking_effort: ThinkingEffort | None = None,
         thinking_timeout_s: float | None = None,
         thinking_metric: str | None = None,
+        fit_call_mode: ApiCallMode = ApiCallMode.AUTO,
         client_options: ClientOptions | None = None,
     ):
         """Construct a TabPFN regressor.
@@ -589,6 +589,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
             Aliases "mse", "rmse", "mae", "mape", "smape" are also
             accepted.
+        fit_call_mode: FitCallMode, default=FitCallMode.AUTO
+            The mode to use for calling the fit method.
+            - AUTO: Automatically determine the best mode based on the size of the training set.
+            - SYNC: Call the fit method synchronously.
+            - ASYNC: Call the fit method asynchronously.
         client_options : ClientOptions, default=None
             Client specific options (e.g. timeout, headers).
         """
@@ -603,9 +608,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.inference_config = inference_config
         self.paper_version = paper_version
         self.thinking_mode = thinking_mode
-        self.thinking_effort: ThinkingEffort | None = thinking_effort
+        self.thinking_effort = thinking_effort
         self.thinking_timeout_s = thinking_timeout_s
         self.thinking_metric = thinking_metric
+        self.fit_call_mode = fit_call_mode
         self.client_options = client_options or ClientOptions()
 
         self._last_trace_id = None
@@ -624,17 +630,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         init()
 
         tabpfn_config = self._get_tabpfn_config()
-
         task_config = RegressorConfig(tabpfn_config=tabpfn_config)
 
         validate_train_set(X, y)
-        validate_thinking_mode(
-            self.thinking_mode,
-            self.thinking_effort,
-            self.thinking_timeout_s,
-            self.thinking_metric,
-            self.model_path,
-        )
         self._validate_targets(y)
         X_clean = _clean_text_features(X)
 
@@ -787,59 +785,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         y_ = column_or_1d(y, warn=True)
         if sum(pd.isnull(y_)) > 0:
             raise ValueError("Input y contains NaN.")
-
-
-def _is_thinking_supported_model_path(model_path: str | None) -> bool:
-    """Thinking is server-side supported only for v3 models (or the auto sentinel,
-    which lets the server pick — currently a v3 model)."""
-    if model_path in _AUTO_MODEL_PATH_ALIASES:
-        return True
-    # `None` is an auto alias handled above, so the remainder is a concrete path.
-    assert model_path is not None
-    return V_3_IDENTIFIER in model_path
-
-
-def validate_thinking_mode(
-    thinking_mode: bool,
-    thinking_effort: ThinkingEffort | None,
-    thinking_timeout_s: float | None,
-    thinking_metric: str | None,
-    model_path: str | None,
-) -> None:
-    if (
-        thinking_effort is not None
-        and thinking_effort not in _VALID_THINKING_EFFORT_LEVELS
-    ):
-        raise ValueError(
-            f"thinking_effort must be one of "
-            f"{sorted(_VALID_THINKING_EFFORT_LEVELS)}, got {thinking_effort!r}."
-        )
-    # Setting `thinking_effort` is itself a way to enable thinking, so the
-    # effective state is "either flag set". Knobs that only make sense when
-    # thinking is on are rejected only when neither is set.
-    thinking_enabled = thinking_mode or thinking_effort is not None
-    if not thinking_enabled and (
-        thinking_timeout_s is not None or thinking_metric is not None
-    ):
-        raise ValueError(
-            "thinking_timeout_s and thinking_metric are only "
-            "consulted when thinking is enabled; pass `thinking_mode=True` "
-            "or `thinking_effort=...` to use them."
-        )
-    if thinking_timeout_s is not None and thinking_timeout_s > THINKING_TIMEOUT_MAX_S:
-        raise ValueError(
-            f"thinking_timeout_s ({thinking_timeout_s}) exceeds the "
-            f"maximum allowed of {THINKING_TIMEOUT_MAX_S} seconds "
-            f"({THINKING_TIMEOUT_MAX_S // 60} minutes)."
-        )
-    # Server silently no-ops thinking on non-v3 models, so users can pay for a
-    # request expecting a thinking fit and get a plain one back. Reject upfront.
-    if thinking_enabled and not _is_thinking_supported_model_path(model_path):
-        raise ValueError(
-            f"Thinking mode is only supported on v3 models, got "
-            f"model_path={model_path!r}. Either leave model_path at its "
-            f"default ('auto') or set it to a v3 model (e.g. 'v3_default')."
-        )
 
 
 def validate_train_set(
@@ -997,3 +942,42 @@ def run_task(task: Callable, message: str, with_spinner: bool = True) -> Any:
         sys.stdout.write(f"\r{minutes:02d}:{seconds:02d} {message}... Done!\n")
         sys.stdout.flush()
     return result
+
+
+def resolve_tabpfn_systems(paper_version: bool, thinking_mode: bool) -> list[str]:
+    if paper_version and thinking_mode:
+        raise ValueError(
+            "Paper version and thinking mode cannot be enabled at the same time"
+        )
+    if paper_version:
+        return []
+    if thinking_mode:
+        return ["preprocessing", "text", "thinking"]
+    return ["preprocessing", "text"]
+
+
+def resolve_thinking_config(
+    *,
+    thinking_mode: bool,
+    thinking_effort: str | None = None,
+    thinking_timeout_s: float | None = None,
+    thinking_metric: str | None = None,
+    tabpfn_config: ClassifierTabPFNConfig | RegressorTabPFNConfig,
+) -> ThinkingConfig | None:
+    if thinking_mode:
+        match tabpfn_config:
+            case ClassifierTabPFNConfig():
+                return ClassifierThinkingConfig(
+                    effort=thinking_effort,
+                    timeout_secs=thinking_timeout_s,
+                    metric=thinking_metric,
+                    tabpfn_config=tabpfn_config,
+                )
+            case RegressorTabPFNConfig():
+                return RegressorThinkingConfig(
+                    effort=thinking_effort,
+                    timeout_secs=thinking_timeout_s,
+                    metric=thinking_metric,
+                    tabpfn_config=tabpfn_config,
+                )
+    return None

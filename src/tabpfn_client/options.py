@@ -2,13 +2,6 @@
 #  Licensed under the Apache License, Version 2.0
 
 from pydantic_settings import BaseSettings
-from enum import Enum
-
-
-class FitCallMode(Enum):
-    AUTO = "auto"
-    SYNC = "sync"
-    ASYNC = "async"
 
 
 class Options(BaseSettings):
@@ -18,7 +11,6 @@ class Options(BaseSettings):
     TABPFN_CLIENT_TIMEOUT: float = 900.0
     TABPFN_CLIENT_UPLOAD_TIMEOUT: float = 7200.0  # 2 hours
     TABPFN_CLIENT_CI_MODE: bool = False
-    TABPFN_CLIENT_FIT_CALL_MODE: FitCallMode = FitCallMode.AUTO
     TABPFN_CLIENT_FORCE_REUPLOAD: bool = False
     TABPFN_CLIENT_DEDUP_DATASETS: bool = True
 

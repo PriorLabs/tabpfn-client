@@ -89,6 +89,17 @@ class ClassifierMetadata(BaseModel):
     tabpfn_config: ClassifierTabPFNConfig
 
 
+ThinkingEffort = Literal["medium", "high"]
+
+
+class ClassifierThinkingConfig(BaseModel):
+    effort: Annotated[Literal["medium", "high"] | str, Field(union_mode="left_to_right")] | None = None
+    timeout_secs: float | None = None
+    metric: str | None = None
+    task: Literal["classification"] = "classification"
+    tabpfn_config: ClassifierTabPFNConfig = Field(default_factory=ClassifierTabPFNConfig)
+
+
 class FileInfo(BaseModel):
     format: Annotated[Literal["csv", "parquet"] | str, Field(union_mode="left_to_right")]
     hash: str | None = Field(
@@ -185,6 +196,14 @@ class RegressorMetadata(BaseModel):
     tabpfn_config: RegressorTabPFNConfig
 
 
+class RegressorThinkingConfig(BaseModel):
+    effort: Annotated[Literal["medium", "high"] | str, Field(union_mode="left_to_right")] | None = None
+    timeout_secs: float | None = None
+    metric: str | None = None
+    task: Literal["regression"] = "regression"
+    tabpfn_config: RegressorTabPFNConfig = Field(default_factory=RegressorTabPFNConfig)
+
+
 Prediction = Union[list[Any], list[list[Any]], dict[str, Union[list[Any], list[list[Any]]]]]
 
 
@@ -192,6 +211,11 @@ Metadata = Annotated[Union[ClassifierMetadata, RegressorMetadata], Field(discrim
 
 
 TaskConfig = Annotated[Union[ClassifierConfig, RegressorConfig], Field(discriminator="task")]
+
+
+ThinkingConfig = Annotated[
+    Union[RegressorThinkingConfig, ClassifierThinkingConfig], Field(discriminator="task")
+]
 
 
 class DuplicateTestSetErrorResponse(BaseModel):
@@ -219,16 +243,7 @@ class FitRequest(BaseModel):
         ]
         | None
     ) = None
-    tabpfn_config: dict[str, Any] | None = None
-    thinking_effort: (
-        Annotated[Literal["medium", "high"] | str, Field(union_mode="left_to_right")] | None
-    ) = None
-    thinking_timeout_s: float | None = None
-    thinking_effort_metric: str | None = None
-    async_mode: bool | None = Field(
-        default=None,
-        description="Submit the fit and return immediately with status=pending; poll GET /fit/{fitted_train_set_id} for the outcome. Defaults to the blocking behaviour.",
-    )
+    thinking_config: ThinkingConfig | None = None
 
 
 class FitResponse(BaseModel):
@@ -236,14 +251,19 @@ class FitResponse(BaseModel):
     status: Annotated[FitStatus | UnknownEnum, Field(union_mode="left_to_right")]
 
 
-class FitStatusResponse(BaseModel):
+class GetFitStatusRequest(BaseModel):
+    fitted_train_set_id: UUID
+
+
+class GetFitStatusResponse(BaseModel):
     fitted_train_set_id: UUID
     status: Annotated[FitStatus | UnknownEnum, Field(union_mode="left_to_right")]
+    retry_in_secs: float | None = None
     error: str | None = None
     error_code: str | None = None
 
 
-class GetApiSettingsResponse(BaseModel):
+class GetSettingsResponse(BaseModel):
     default_model_version: Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")]
     max_model_limit: ModelLimit
     model_limits: dict[
@@ -298,3 +318,21 @@ class PrepareTrainSetUploadResponse(BaseModel):
     train_set_upload_id: UUID
     x_train_info: FileUploadInfo
     y_train_info: FileUploadInfo
+
+
+class SubmitFitJobRequest(BaseModel):
+    train_set_upload_id: UUID
+    task: Annotated[PredictionTask | UnknownEnum, Field(union_mode="left_to_right")]
+    tabpfn_systems: (
+        list[
+            Annotated[
+                Literal["preprocessing", "text", "thinking"] | str, Field(union_mode="left_to_right")
+            ]
+        ]
+        | None
+    ) = None
+    thinking_config: ThinkingConfig | None = None
+
+
+class SubmitFitJobResponse(BaseModel):
+    fitted_train_set_id: UUID

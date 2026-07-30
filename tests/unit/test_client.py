@@ -11,7 +11,7 @@ from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
 
 from tabpfn_client.client import (
-    GetApiSettingsResponse,
+    GetSettingsResponse,
     ResolvedAsyncSettings,
     RetryableServerError,
     ServiceClient,
@@ -78,7 +78,7 @@ class TestServiceClient(unittest.TestCase):
         )
 
         ServiceClient.reset_authorization()
-        ServiceClient._api_settings = GetApiSettingsResponse(
+        ServiceClient._api_settings = GetSettingsResponse(
             **_api_settings_payload(),
         )
         ServiceClient._api_settings_ts = time.monotonic()
@@ -617,7 +617,7 @@ class TestServiceClient(unittest.TestCase):
         opts.model_fields_set.discard("TABPFN_CLIENT_ASYNC_POLL_INTERVAL")
         payload = _api_settings_payload()
         payload["async_settings"]["poll_interval_secs"] = 2.5
-        ServiceClient._api_settings = GetApiSettingsResponse(**payload)
+        ServiceClient._api_settings = GetSettingsResponse(**payload)
 
         # The server value beats the client default (5.0).
         self.assertEqual(
@@ -666,7 +666,7 @@ class TestServiceClient(unittest.TestCase):
         self.assertEqual(m.call_count, 1)
 
     def test_get_api_settings_returns_stale_value_on_failure(self):
-        stale = GetApiSettingsResponse(
+        stale = GetSettingsResponse(
             **_api_settings_payload(
                 max_cells=100,
                 max_cols=20,

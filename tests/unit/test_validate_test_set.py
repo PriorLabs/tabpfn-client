@@ -4,7 +4,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from tabpfn_client.api_models import GetApiSettingsResponse
+from tabpfn_client.api_models import GetSettingsResponse
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.estimator import validate_test_set
 
@@ -15,7 +15,7 @@ DEFAULT_BUDGET = 250_000 * 1_000_000
 def _limits(
     test_set_max_rows: int = 1_000_000,
     predict_row_pairs_budget: int = DEFAULT_BUDGET,
-) -> GetApiSettingsResponse:
+) -> GetSettingsResponse:
     model_limit: dict[str, Any] = {
         "train_set_max_rows": 1_000_000,
         "train_set_max_cells": 100_000_000,
@@ -26,7 +26,7 @@ def _limits(
         "max_classes": 10,
     }
     model_limit["predict_row_pairs_budget"] = predict_row_pairs_budget
-    return GetApiSettingsResponse.model_validate(
+    return GetSettingsResponse.model_validate(
         {
             "default_model_version": "v3",
             "max_model_limit": model_limit,
@@ -48,7 +48,7 @@ def _X(n_rows: int) -> np.ndarray:
 def _validate(
     n_test_rows: int,
     train_rows: int | None = None,
-    limits: GetApiSettingsResponse | None = None,
+    limits: GetSettingsResponse | None = None,
 ):
     with patch.object(
         ServiceClient, "get_api_settings", return_value=limits or _limits()

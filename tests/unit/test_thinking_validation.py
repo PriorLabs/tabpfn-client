@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from tabpfn_client.estimator import (
-    THINKING_TIMEOUT_MAX_S,
+    THINKING_TIMEOUT_MAX_S,  # XXX
     validate_thinking_mode,
 )
 

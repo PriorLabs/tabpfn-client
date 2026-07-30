@@ -21,7 +21,7 @@ from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client import config
 import json
 from tabpfn_client.client import (
-    GetApiSettingsResponse,
+    GetSettingsResponse,
     PredictionResult,
     ServiceClient,
 )
@@ -410,7 +410,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
     def setUp(self):
         # skip init
         config.Config.is_initialized = True
-        ServiceClient._api_settings = GetApiSettingsResponse(
+        ServiceClient._api_settings = GetSettingsResponse(
             **_api_settings_payload(max_cells=100_000)
         )
         ServiceClient._api_settings_ts = time.monotonic()
