@@ -970,13 +970,6 @@ def _resolve_thinking_config(
     tabpfn_config: ClassifierTabPFNConfig | RegressorTabPFNConfig,
 ) -> ThinkingConfig | None:
     if enabled:
-        model_path = tabpfn_config.model_path
-        if not _is_thinking_supported_model_path(model_path):
-            raise ValueError(
-                f"Thinking mode is only supported on v3 models, got "
-                f"model_path={model_path!r}. Either leave model_path at its "
-                f"default ('auto') or set it to a v3 model (e.g. 'v3_default')."
-            )
         match tabpfn_config:
             case ClassifierTabPFNConfig():
                 return ClassifierThinkingConfig(
@@ -993,13 +986,3 @@ def _resolve_thinking_config(
                     tabpfn_config=tabpfn_config,
                 )
     return None
-
-
-def _is_thinking_supported_model_path(model_path: str | None) -> bool:
-    """Thinking is server-side supported only for v3 models (or the auto sentinel,
-    which lets the server pick — currently a v3 model)."""
-    if model_path in _AUTO_MODEL_PATH_ALIASES:
-        return True
-    # `None` is an auto alias handled above, so the remainder is a concrete path.
-    assert model_path is not None
-    return V_3_IDENTIFIER in model_path
