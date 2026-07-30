@@ -317,8 +317,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         X_clean = _clean_text_features(X)
         self._validate_targets_and_classes(y)
 
-        tabpfn_systems = resolve_tabpfn_systems(self.paper_version, self.thinking_mode)
-        thinking_config = resolve_thinking_config(
+        tabpfn_systems = _resolve_tabpfn_systems(self.paper_version, self.thinking_mode)
+        thinking_config = _resolve_thinking_config(
             enabled=self.thinking_mode,
             effort=self.thinking_effort,
             timeout_secs=self.thinking_timeout_s,
@@ -634,8 +634,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self._validate_targets(y)
         X_clean = _clean_text_features(X)
 
-        tabpfn_systems = resolve_tabpfn_systems(self.paper_version, self.thinking_mode)
-        thinking_config = resolve_thinking_config(
+        tabpfn_systems = _resolve_tabpfn_systems(self.paper_version, self.thinking_mode)
+        thinking_config = _resolve_thinking_config(
             enabled=self.thinking_mode,
             effort=self.thinking_effort,
             timeout_secs=self.thinking_timeout_s,
@@ -949,7 +949,7 @@ def run_task(task: Callable, message: str, with_spinner: bool = True) -> Any:
     return result
 
 
-def resolve_tabpfn_systems(paper_version: bool, thinking_mode: bool) -> list[str]:
+def _resolve_tabpfn_systems(paper_version: bool, thinking_mode: bool) -> list[str]:
     if paper_version and thinking_mode:
         raise ValueError(
             "Paper version and thinking mode cannot be enabled at the same time"
@@ -961,7 +961,7 @@ def resolve_tabpfn_systems(paper_version: bool, thinking_mode: bool) -> list[str
     return ["preprocessing", "text"]
 
 
-def resolve_thinking_config(
+def _resolve_thinking_config(
     *,
     enabled: bool,
     effort: str | None = None,
@@ -970,6 +970,13 @@ def resolve_thinking_config(
     tabpfn_config: ClassifierTabPFNConfig | RegressorTabPFNConfig,
 ) -> ThinkingConfig | None:
     if enabled:
+        model_path = tabpfn_config.model_path
+        if not _is_thinking_supported_model_path(model_path):
+            raise ValueError(
+                f"Thinking mode is only supported on v3 models, got "
+                f"model_path={model_path!r}. Either leave model_path at its "
+                f"default ('auto') or set it to a v3 model (e.g. 'v3_default')."
+            )
         match tabpfn_config:
             case ClassifierTabPFNConfig():
                 return ClassifierThinkingConfig(
@@ -986,3 +993,13 @@ def resolve_thinking_config(
                     tabpfn_config=tabpfn_config,
                 )
     return None
+
+
+def _is_thinking_supported_model_path(model_path: str | None) -> bool:
+    """Thinking is server-side supported only for v3 models (or the auto sentinel,
+    which lets the server pick — currently a v3 model)."""
+    if model_path in _AUTO_MODEL_PATH_ALIASES:
+        return True
+    # `None` is an auto alias handled above, so the remainder is a concrete path.
+    assert model_path is not None
+    return V_3_IDENTIFIER in model_path
