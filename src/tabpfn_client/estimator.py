@@ -246,30 +246,31 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
-        thinking_config: ThinkingConfig | None, default=None
-            The configuration for the thinking mode.
-        # XXX
+        thinking_mode: bool, default=False
+            If True, spend extra fit-time compute for higher precision.
+            Equivalent to passing `thinking_effort="medium"` — setting any
+            `thinking_effort` value also enables thinking, so this flag is
+            optional when you've set the level explicitly.
+        thinking_effort: {"medium", "high"} or None, default=None
+            Effort level for thinking mode. When set, thinking is enabled
+            (you don't also need `thinking_mode=True`). When None and
+            `thinking_mode=True`, defaults to "medium".
+        thinking_timeout_s: float or None, default=None
+            Budget for the fit, in seconds. Only consulted when thinking is
+            enabled. Capped at 2400.
         thinking_metric: str or None, default=None
             Optimization metric for the fit. Only consulted when thinking
             is enabled.
 
-            Binary classification:
-                "accuracy", "balanced_accuracy", "mcc", "log_loss",
-                "pac", "quadratic_kappa", "roc_auc", "average_precision",
-                "precision", "precision_macro", "precision_micro",
-                "precision_weighted", "recall", "recall_macro",
-                "recall_micro", "recall_weighted", "f1", "f1_macro",
-                "f1_micro", "f1_weighted".
-            Multiclass classification:
-                "accuracy", "balanced_accuracy", "mcc", "log_loss",
-                "pac", "quadratic_kappa", "precision_macro",
-                "precision_micro", "precision_weighted", "recall_macro",
-                "recall_micro", "recall_weighted", "f1_macro",
-                "f1_micro", "f1_weighted", "roc_auc_ovo",
-                "roc_auc_ovo_macro", "roc_auc_ovr", "roc_auc_ovr_macro",
-                "roc_auc_ovr_micro", "roc_auc_ovr_weighted".
+            Regression:
+                "r2", "mean_squared_error", "root_mean_squared_error",
+                "mean_absolute_error", "median_absolute_error",
+                "mean_absolute_percentage_error",
+                "symmetric_mean_absolute_percentage_error", "spearmanr",
+                "pearsonr".
 
-            Aliases "acc", "nll", "pac_score" are also accepted.
+            Aliases "mse", "rmse", "mae", "mape", "smape" are also
+            accepted.
         fit_call_mode: FitCallMode, default=FitCallMode.AUTO
             The mode to use for calling the fit method.
             - AUTO: Automatically determine the best mode based on the size of the training set.
@@ -288,7 +289,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.inference_precision = inference_precision
         self.random_state = random_state
         self.inference_config = inference_config
-        # XXX resolver
         self.paper_version = paper_version
         self.thinking_mode = thinking_mode
         self.thinking_effort = thinking_effort
@@ -319,10 +319,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
         tabpfn_systems = resolve_tabpfn_systems(self.paper_version, self.thinking_mode)
         thinking_config = resolve_thinking_config(
-            thinking_mode=self.thinking_mode,
-            thinking_effort=self.thinking_effort,
-            thinking_timeout_s=self.thinking_timeout_s,
-            thinking_metric=self.thinking_metric,
+            enabled=self.thinking_mode,
+            effort=self.thinking_effort,
+            timeout_secs=self.thinking_timeout_s,
+            metric=self.thinking_metric,
             tabpfn_config=tabpfn_config,
         )
 
@@ -628,13 +628,20 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
     ):
         # assert init() is called
         init()
-
         tabpfn_config = self._get_tabpfn_config()
-        task_config = RegressorConfig(tabpfn_config=tabpfn_config)
 
         validate_train_set(X, y)
         self._validate_targets(y)
         X_clean = _clean_text_features(X)
+
+        tabpfn_systems = resolve_tabpfn_systems(self.paper_version, self.thinking_mode)
+        thinking_config = resolve_thinking_config(
+            enabled=self.thinking_mode,
+            effort=self.thinking_effort,
+            timeout_secs=self.thinking_timeout_s,
+            metric=self.thinking_metric,
+            tabpfn_config=tabpfn_config,
+        )
 
         if Config.use_server:
             # Create a new sentry trace at every fit, provided that:
@@ -650,12 +657,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                 return InferenceClient.fit(
                     X_clean,
                     y,
-                    task_config=task_config,
-                    paper_version=self.paper_version,
-                    thinking_mode=self.thinking_mode,
-                    thinking_effort=self.thinking_effort,
-                    thinking_timeout_s=self.thinking_timeout_s,
-                    thinking_metric=self.thinking_metric,
+                    task=self._TASK,
+                    tabpfn_systems=tabpfn_systems,
+                    thinking_config=thinking_config,
+                    call_mode=self.fit_call_mode,
                     client_options=self.client_options,
                     description=description,
                 )
@@ -958,26 +963,26 @@ def resolve_tabpfn_systems(paper_version: bool, thinking_mode: bool) -> list[str
 
 def resolve_thinking_config(
     *,
-    thinking_mode: bool,
-    thinking_effort: str | None = None,
-    thinking_timeout_s: float | None = None,
-    thinking_metric: str | None = None,
+    enabled: bool,
+    effort: str | None = None,
+    timeout_secs: float | None = None,
+    metric: str | None = None,
     tabpfn_config: ClassifierTabPFNConfig | RegressorTabPFNConfig,
 ) -> ThinkingConfig | None:
-    if thinking_mode:
+    if enabled:
         match tabpfn_config:
             case ClassifierTabPFNConfig():
                 return ClassifierThinkingConfig(
-                    effort=thinking_effort,
-                    timeout_secs=thinking_timeout_s,
-                    metric=thinking_metric,
+                    effort=effort,
+                    timeout_secs=timeout_secs,
+                    metric=metric,
                     tabpfn_config=tabpfn_config,
                 )
             case RegressorTabPFNConfig():
                 return RegressorThinkingConfig(
-                    effort=thinking_effort,
-                    timeout_secs=thinking_timeout_s,
-                    metric=thinking_metric,
+                    effort=effort,
+                    timeout_secs=timeout_secs,
+                    metric=metric,
                     tabpfn_config=tabpfn_config,
                 )
     return None

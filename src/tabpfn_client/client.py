@@ -19,7 +19,10 @@ import traceback
 import warnings
 from pydantic import BaseModel, ValidationError
 from typing import Any, cast, Mapping, NoReturn
-from typing_extensions import TypeVar  # supports default= on Python 3.10
+from typing_extensions import (
+    Never,  # in `typing` only from Python 3.11
+    TypeVar,  # supports default= on Python 3.10
+)
 from tabpfn_client.models import (
     ResolvedAsyncSettings,
     ClientOptions,
@@ -34,7 +37,6 @@ import pandas as pd
 
 import backoff
 import httpx
-from typing import Never
 from omegaconf import DictConfig, OmegaConf
 from tabpfn_client.browser_auth import BrowserAuthHandler
 from tabpfn_common_utils import utils as common_utils
@@ -242,10 +244,6 @@ class ServiceClient(Singleton):
                 "TABPFN_CLIENT_ASYNC_POLL_TIMEOUT",
                 server.poll_timeout_secs if server else None,
             ),
-            poll_interval_secs=resolve(
-                "TABPFN_CLIENT_ASYNC_POLL_INTERVAL",
-                server.poll_interval_secs if server else None,
-            ),
         )
 
     @classmethod
@@ -268,7 +266,7 @@ class ServiceClient(Singleton):
         y: pd.Series | np.ndarray,
         # start: fit request
         task: PredictionTask,
-        tabpfn_systems: list[str],
+        tabpfn_systems: list[str] | None = None,
         thinking_config: ThinkingConfig | None = None,
         # end: fit request
         call_mode: ApiCallMode = ApiCallMode.AUTO,
@@ -286,8 +284,8 @@ class ServiceClient(Singleton):
             The target values.
         task: PredictionTask
             Task type: "classification" or "regression"
-        tabpfn_systems: list[str]
-            The systems to use for the fit method.
+        tabpfn_systems: list[str], optional
+            The systems to use for the fit method. Defaults to ["preprocessing", "text"].
         thinking_config: ThinkingConfig | None
             The configuration for the thinking mode.
         call_mode: ApiCallMode, default=ApiCallMode.AUTO
@@ -305,6 +303,7 @@ class ServiceClient(Singleton):
         fitted_train_set_id: UUID
             The unique ID of the fitted train set in the server.
         """
+        tabpfn_systems = tabpfn_systems or ["preprocessing", "text"]
         client_options = client_options or ClientOptions()
 
         df_X = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
@@ -439,38 +438,31 @@ class ServiceClient(Singleton):
     def _wait_for_fit(
         cls,
         fitted_train_set_id: UUID,
-        timeout: float | None = None,
         headers: dict[str, str] | None = None,
     ) -> None:
         """Poll ``POST /tabpfn/get_fit_status`` until the fit reaches a terminal state.
 
+        The first poll happens immediately; between polls we sleep for the
+        server's per-response ``retry_in_secs`` hint (5s until the first hint
+        arrives).
+
         Returns once the fit is COMPLETED. Raises if the fit FAILED, or
-        ``TimeoutError`` if it does not reach a terminal state within ``timeout``
-        seconds (the resolved poll timeout when omitted). A failed fit is
-        reported by the server as HTTP 200 with ``status=failed`` (only an
-        unknown/foreign id is a 404), so the status field — not the HTTP code —
-        is what we inspect here.
+        ``TimeoutError`` when no terminal state is reached within the resolved
+        poll timeout. A failed fit is reported by the server as HTTP 200 with
+        ``status=failed`` (only an unknown/foreign id is a 404), so the status
+        field — not the HTTP code — is what we inspect here.
         """
+        single_poll_timeout = 15.0
         async_settings = cls._resolve_async_settings()
-        if timeout is None:
-            timeout = async_settings.poll_timeout_secs
+        total_timeout = async_settings.poll_timeout_secs
+        deadline = time.monotonic() + total_timeout
+        retry_in_secs = 5.0  # fallback until the server sends retry_in_secs
 
-        deadline = time.monotonic() + timeout
         while True:
-            # status == PENDING: keep polling until the deadline.
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError(
-                    f"Fit {fitted_train_set_id} did not reach a terminal state "
-                    f"within {timeout} seconds."
-                )
-
-            time.sleep(min(async_settings.poll_interval_secs, remaining))
-
             try:
                 status_resp = cls._get_fit_status(
                     req=GetFitStatusRequest(fitted_train_set_id=fitted_train_set_id),
-                    timeout=timeout,
+                    timeout=single_poll_timeout,
                     headers=headers,
                 )
             except (
@@ -481,17 +473,30 @@ class ServiceClient(Singleton):
                 httpx.RemoteProtocolError,
                 RetryableServerError,
             ):
-                continue
+                pass
+            else:
+                if status_resp.status == FitStatus.COMPLETED:
+                    return
+                if status_resp.status == FitStatus.FAILED:
+                    raise RuntimeError(
+                        f"Fit {fitted_train_set_id} failed: "
+                        f"{status_resp.error or 'no error message provided'}"
+                    )
+                if status_resp.retry_in_secs is not None:
+                    retry_in_secs = status_resp.retry_in_secs
 
-            if status_resp.status == FitStatus.COMPLETED:
-                return
-            if status_resp.status == FitStatus.FAILED:
-                raise RuntimeError(
-                    f"Fit {fitted_train_set_id} failed: "
-                    f"{status_resp.error or 'no error message provided'}"
+            # Still PENDING (or a transient error): sleep, then poll again.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"Fit {fitted_train_set_id} did not reach a terminal state "
+                    f"within {total_timeout} seconds."
                 )
+            time.sleep(min(retry_in_secs, remaining))
 
-    # XXX backoff here? otherwise makes no sense
+    # NOTE: no backoff decorator here on purpose — the `_wait_for_fit` polling
+    # loop already retries transient errors until its deadline, and a nested
+    # retry layer would skew the poll interval accounting.
     @classmethod
     def _get_fit_status(
         cls,

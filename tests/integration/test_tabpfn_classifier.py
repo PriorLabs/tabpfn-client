@@ -140,7 +140,6 @@ class TestTabPFNClassifier(unittest.TestCase):
             return_value=ResolvedAsyncSettings(
                 use_above_trainset_size_bytes=50 * 1024 * 1024,
                 poll_timeout_secs=7200.0,
-                poll_interval_secs=0,
             ),
         ):
             tabpfn.fit(self.X_train, self.y_train)

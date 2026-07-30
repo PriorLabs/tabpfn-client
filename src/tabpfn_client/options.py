@@ -18,7 +18,6 @@ class Options(BaseSettings):
     # Environment > server default > client default
     TABPFN_CLIENT_ASYNC_USE_ABOVE_TRAINSET_SIZE: int = 50 * 1024 * 1024
     TABPFN_CLIENT_ASYNC_POLL_TIMEOUT: float = 7200.0
-    TABPFN_CLIENT_ASYNC_POLL_INTERVAL: float = 5.0
 
 
 _opts: Options = Options()

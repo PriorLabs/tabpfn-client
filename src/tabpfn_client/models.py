@@ -21,7 +21,6 @@ class PredictionResult:
 class ResolvedAsyncSettings:
     use_above_trainset_size_bytes: int
     poll_timeout_secs: float
-    poll_interval_secs: float
 
 
 @dataclass

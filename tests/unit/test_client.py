@@ -1,5 +1,6 @@
 import time
 import unittest
+from contextlib import contextmanager
 from typing import Any, cast
 from uuid import UUID
 from unittest.mock import Mock, patch
@@ -16,14 +17,16 @@ from tabpfn_client.client import (
     RetryableServerError,
     ServiceClient,
 )
-from tabpfn_client.options import get_opts
 from tabpfn_client.api_models import (
     ClassifierConfig,
     DuplicateTrainSetErrorResponse,
     FitResponse,
+    FitStatus,
+    GetFitStatusResponse,
     RegressorConfig,
     RegressorOutputType,
     RegressorPredictParams,
+    PredictionTask,
 )
 from tests.mock_tabpfn_server import with_mock_server
 
@@ -65,7 +68,6 @@ def _fast_poll_settings() -> ResolvedAsyncSettings:
     return ResolvedAsyncSettings(
         use_above_trainset_size_bytes=50 * 1024 * 1024,
         poll_timeout_secs=7200.0,
-        poll_interval_secs=0,
     )
 
 
@@ -272,7 +274,7 @@ class TestServiceClient(unittest.TestCase):
             fitted_train_set_id = ServiceClient.fit(
                 self.X_train,
                 self.y_train,
-                task_config=ClassifierConfig(),
+                task=PredictionTask.CLASSIFICATION,
             )
             pred = ServiceClient.predict(
                 fitted_train_set_id=fitted_train_set_id,
@@ -467,12 +469,12 @@ class TestServiceClient(unittest.TestCase):
             fitted_train_set_id_1 = ServiceClient.fit(
                 self.X_train,
                 self.y_train,
-                task_config=ClassifierConfig(),
+                task=PredictionTask.CLASSIFICATION,
             )
             fitted_train_set_id_2 = ServiceClient.fit(
                 self.X_train,
                 self.y_train,
-                task_config=ClassifierConfig(),
+                task=PredictionTask.CLASSIFICATION,
             )
 
         self.assertEqual(fitted_train_set_id_1, fitted_train_set_id_2)
@@ -496,12 +498,17 @@ class TestServiceClient(unittest.TestCase):
             200,
             json={"fitted_train_set_id": fitted_train_set_id, "status": "pending"},
         )
-        status_route = mock_server.router.get(f"/tabpfn/fit/{fitted_train_set_id}")
+        status_route = mock_server.router.post("/tabpfn/get_fit_status")
         # First poll still pending, second poll completed — exercises the loop.
         status_route.side_effect = [
             httpx.Response(
                 200,
-                json={"fitted_train_set_id": fitted_train_set_id, "status": "pending"},
+                json={
+                    "fitted_train_set_id": fitted_train_set_id,
+                    "status": "pending",
+                    # Keep the test fast: the poll loop honours this hint.
+                    "retry_in_secs": 0,
+                },
             ),
             httpx.Response(
                 200,
@@ -525,7 +532,7 @@ class TestServiceClient(unittest.TestCase):
             result = ServiceClient.fit(
                 self.X_train,
                 self.y_train,
-                task_config=ClassifierConfig(),
+                task=PredictionTask.CLASSIFICATION,
             )
 
         self.assertEqual(result, UUID(fitted_train_set_id))
@@ -546,7 +553,7 @@ class TestServiceClient(unittest.TestCase):
             200,
             json={"fitted_train_set_id": fitted_train_set_id, "status": "pending"},
         )
-        mock_server.router.get(f"/tabpfn/fit/{fitted_train_set_id}").respond(
+        mock_server.router.post("/tabpfn/get_fit_status").respond(
             200,
             json={
                 "fitted_train_set_id": fitted_train_set_id,
@@ -569,7 +576,7 @@ class TestServiceClient(unittest.TestCase):
                 ServiceClient.fit(
                     self.X_train,
                     self.y_train,
-                    task_config=ClassifierConfig(),
+                    task=PredictionTask.CLASSIFICATION,
                 )
 
         self.assertIn("boom", str(cm.exception))
@@ -610,36 +617,6 @@ class TestServiceClient(unittest.TestCase):
         self.assertTrue(np.array_equal(pred_1.y_pred, pred_2.y_pred))
         self.assertEqual(prepare_route.call_count, 2)
         self.assertEqual(predict_route.call_count, 2)
-
-    def test_resolve_async_settings_precedence(self):
-        # Environment > server default > client default.
-        opts = get_opts()
-        opts.model_fields_set.discard("TABPFN_CLIENT_ASYNC_POLL_INTERVAL")
-        payload = _api_settings_payload()
-        payload["async_settings"]["poll_interval_secs"] = 2.5
-        ServiceClient._api_settings = GetSettingsResponse(**payload)
-
-        # The server value beats the client default (5.0).
-        self.assertEqual(
-            ServiceClient._resolve_async_settings().poll_interval_secs, 2.5
-        )
-
-        # An explicitly set option beats the server value.
-        original = opts.TABPFN_CLIENT_ASYNC_POLL_INTERVAL
-        opts.TABPFN_CLIENT_ASYNC_POLL_INTERVAL = 1.5  # marks the field as set
-        try:
-            self.assertEqual(
-                ServiceClient._resolve_async_settings().poll_interval_secs, 1.5
-            )
-        finally:
-            opts.TABPFN_CLIENT_ASYNC_POLL_INTERVAL = original
-            opts.model_fields_set.discard("TABPFN_CLIENT_ASYNC_POLL_INTERVAL")
-
-        # The client default applies when the server is unreachable.
-        with patch.object(ServiceClient, "get_api_settings", return_value=None):
-            self.assertEqual(
-                ServiceClient._resolve_async_settings().poll_interval_secs, 5.0
-            )
 
     def test_get_api_settings_uses_cache(self):
         ServiceClient._api_settings = None
@@ -761,3 +738,141 @@ class TestServiceClientPredictionNormalization(unittest.TestCase):
             np.array([[1.0, np.nan], [np.nan, 4.0]]),
             equal_nan=True,
         )
+
+
+class _FakeTime:
+    """Deterministic stand-in for the `time` module inside the polling loop:
+    the clock only advances when the loop sleeps."""
+
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, secs: float) -> None:
+        self.sleeps.append(secs)
+        self.now += secs
+
+
+def _fit_status(
+    status: FitStatus,
+    retry_in_secs: float | None = None,
+    error: str | None = None,
+) -> GetFitStatusResponse:
+    return GetFitStatusResponse(
+        fitted_train_set_id=TestWaitForFit.FIT_ID,
+        status=status,
+        retry_in_secs=retry_in_secs,
+        error=error,
+    )
+
+
+class TestWaitForFit(unittest.TestCase):
+    """Pin the `_wait_for_fit` polling contract with a fake clock: the first
+    poll is immediate, sleeps run between polls following the server's
+    `retry_in_secs` hint (5s fallback until the first hint), and the deadline
+    is enforced with the last sleep capped to the remainder."""
+
+    FIT_ID = UUID("00000000-0000-0000-0000-000000000002")
+    FALLBACK_INTERVAL = 5.0
+
+    @contextmanager
+    def _patched(self, status_outcomes, poll_timeout: float = 100.0):
+        """Patch the loop's clock, deadline settings, and status calls.
+
+        `status_outcomes` is a Mock side_effect: a list of responses and/or
+        exceptions, a single exception (raised on every call), or a callable.
+        """
+        fake_time = _FakeTime()
+        settings = ResolvedAsyncSettings(
+            use_above_trainset_size_bytes=50 * 1024 * 1024,
+            poll_timeout_secs=poll_timeout,
+        )
+        with (
+            patch("tabpfn_client.client.time", fake_time),
+            patch.object(
+                ServiceClient, "_resolve_async_settings", return_value=settings
+            ),
+            patch.object(
+                ServiceClient, "_get_fit_status", side_effect=status_outcomes
+            ) as mock_status,
+        ):
+            yield fake_time, mock_status
+
+    def test_completed_immediately_polls_once_without_sleeping(self):
+        with self._patched([_fit_status(FitStatus.COMPLETED)]) as (fake_time, mock):
+            ServiceClient._wait_for_fit(self.FIT_ID)
+        self.assertEqual(mock.call_count, 1)
+        self.assertEqual(fake_time.sleeps, [])
+
+    def test_pending_sleeps_fallback_interval_between_polls(self):
+        with self._patched(
+            [_fit_status(FitStatus.PENDING), _fit_status(FitStatus.COMPLETED)]
+        ) as (fake_time, mock):
+            ServiceClient._wait_for_fit(self.FIT_ID)
+        self.assertEqual(mock.call_count, 2)
+        self.assertEqual(fake_time.sleeps, [self.FALLBACK_INTERVAL])
+
+    def test_server_retry_hint_sets_interval(self):
+        with self._patched(
+            [
+                _fit_status(FitStatus.PENDING, retry_in_secs=1.5),
+                _fit_status(FitStatus.PENDING, retry_in_secs=2.5),
+                _fit_status(FitStatus.COMPLETED),
+            ]
+        ) as (fake_time, _):
+            ServiceClient._wait_for_fit(self.FIT_ID)
+        self.assertEqual(fake_time.sleeps, [1.5, 2.5])
+
+    def test_server_retry_hint_persists_when_later_responses_omit_it(self):
+        with self._patched(
+            [
+                _fit_status(FitStatus.PENDING, retry_in_secs=2.0),
+                _fit_status(FitStatus.PENDING),  # no hint: keep the last one
+                _fit_status(FitStatus.COMPLETED),
+            ]
+        ) as (fake_time, _):
+            ServiceClient._wait_for_fit(self.FIT_ID)
+        self.assertEqual(fake_time.sleeps, [2.0, 2.0])
+
+    def test_deadline_caps_last_sleep_and_raises_timeout(self):
+        # timeout 12, interval 5: polls at t=0/5/10, the last sleep is capped
+        # to the 2s remaining, and a final poll at the deadline still runs.
+        with self._patched(
+            lambda **kwargs: _fit_status(FitStatus.PENDING), poll_timeout=12.0
+        ) as (fake_time, mock):
+            with self.assertRaises(TimeoutError) as cm:
+                ServiceClient._wait_for_fit(self.FIT_ID)
+        self.assertIn("did not reach a terminal state", str(cm.exception))
+        self.assertEqual(fake_time.sleeps, [5.0, 5.0, 2.0])
+        self.assertEqual(mock.call_count, 4)
+
+    def test_failed_fit_raises_runtime_error_without_sleeping(self):
+        with self._patched([_fit_status(FitStatus.FAILED, error="boom")]) as (
+            fake_time,
+            _,
+        ):
+            with self.assertRaises(RuntimeError) as cm:
+                ServiceClient._wait_for_fit(self.FIT_ID)
+        self.assertIn("boom", str(cm.exception))
+        self.assertEqual(fake_time.sleeps, [])
+
+    def test_transient_errors_retry_until_deadline(self):
+        with self._patched(httpx.ConnectError("down"), poll_timeout=10.0) as (
+            fake_time,
+            mock,
+        ):
+            with self.assertRaises(TimeoutError):
+                ServiceClient._wait_for_fit(self.FIT_ID)
+        self.assertEqual(fake_time.sleeps, [5.0, 5.0])
+        self.assertEqual(mock.call_count, 3)
+
+    def test_transient_error_then_recovery(self):
+        with self._patched(
+            [httpx.ConnectError("blip"), _fit_status(FitStatus.COMPLETED)]
+        ) as (fake_time, mock):
+            ServiceClient._wait_for_fit(self.FIT_ID)
+        self.assertEqual(mock.call_count, 2)
+        self.assertEqual(fake_time.sleeps, [self.FALLBACK_INTERVAL])
