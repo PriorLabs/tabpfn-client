@@ -18,12 +18,6 @@ class PredictionResult:
 
 
 @dataclass
-class ResolvedAsyncSettings:
-    use_above_trainset_size_bytes: int
-    poll_timeout_secs: float
-
-
-@dataclass
 class ClientOptions:
     """
     Options for the client.

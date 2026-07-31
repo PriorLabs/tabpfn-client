@@ -41,10 +41,18 @@ class UnknownEnum(str):
         return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
+DatasetFileType = Literal["csv", "parquet"]
+
+
+TabPFNSystem = Literal["preprocessing", "text", "thinking"]
+
+
+ThinkingEffort = Literal["medium", "high"]
+
+
 class AsyncSettings(BaseModel):
     use_above_trainset_size_bytes: int
     poll_timeout_secs: float
-    poll_interval_secs: float
 
 
 class ClassifierOutputType(str, Enum):
@@ -89,11 +97,8 @@ class ClassifierMetadata(BaseModel):
     tabpfn_config: ClassifierTabPFNConfig
 
 
-ThinkingEffort = Literal["medium", "high"]
-
-
 class ClassifierThinkingConfig(BaseModel):
-    effort: Annotated[Literal["medium", "high"] | str, Field(union_mode="left_to_right")] | None = None
+    effort: Annotated[ThinkingEffort | str, Field(union_mode="left_to_right")] | None = None
     timeout_secs: float | None = None
     metric: str | None = None
     task: Literal["classification"] = "classification"
@@ -101,7 +106,7 @@ class ClassifierThinkingConfig(BaseModel):
 
 
 class FileInfo(BaseModel):
-    format: Annotated[Literal["csv", "parquet"] | str, Field(union_mode="left_to_right")]
+    format: Annotated[DatasetFileType | str, Field(union_mode="left_to_right")]
     hash: str | None = Field(
         default=None, description="The crc32c hash of the file, used to deduplicate the file."
     )
@@ -197,7 +202,7 @@ class RegressorMetadata(BaseModel):
 
 
 class RegressorThinkingConfig(BaseModel):
-    effort: Annotated[Literal["medium", "high"] | str, Field(union_mode="left_to_right")] | None = None
+    effort: Annotated[ThinkingEffort | str, Field(union_mode="left_to_right")] | None = None
     timeout_secs: float | None = None
     metric: str | None = None
     task: Literal["regression"] = "regression"
@@ -235,14 +240,7 @@ class DuplicateTrainSetErrorResponse(BaseModel):
 class FitRequest(BaseModel):
     train_set_upload_id: UUID
     task: Annotated[PredictionTask | UnknownEnum, Field(union_mode="left_to_right")]
-    tabpfn_systems: (
-        list[
-            Annotated[
-                Literal["preprocessing", "text", "thinking"] | str, Field(union_mode="left_to_right")
-            ]
-        ]
-        | None
-    ) = None
+    tabpfn_systems: list[Annotated[TabPFNSystem | str, Field(union_mode="left_to_right")]] | None = None
     thinking_config: ThinkingConfig | None = None
 
 
@@ -323,14 +321,7 @@ class PrepareTrainSetUploadResponse(BaseModel):
 class SubmitFitJobRequest(BaseModel):
     train_set_upload_id: UUID
     task: Annotated[PredictionTask | UnknownEnum, Field(union_mode="left_to_right")]
-    tabpfn_systems: (
-        list[
-            Annotated[
-                Literal["preprocessing", "text", "thinking"] | str, Field(union_mode="left_to_right")
-            ]
-        ]
-        | None
-    ) = None
+    tabpfn_systems: list[Annotated[TabPFNSystem | str, Field(union_mode="left_to_right")]] | None = None
     thinking_config: ThinkingConfig | None = None
 
 

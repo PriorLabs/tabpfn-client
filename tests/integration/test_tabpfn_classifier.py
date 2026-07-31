@@ -10,8 +10,9 @@ import numpy as np
 from tabpfn_client import init, reset
 from tabpfn_client import TabPFNClassifier
 from tests.mock_tabpfn_server import with_mock_server
-from tabpfn_client.client import ResolvedAsyncSettings, ServiceClient
+from tabpfn_client.client import ServiceClient
 from tabpfn_client.service_wrapper import UserAuthenticationClient
+from tabpfn_client.api_models import AsyncSettings
 
 
 class TestTabPFNClassifier(unittest.TestCase):
@@ -137,7 +138,7 @@ class TestTabPFNClassifier(unittest.TestCase):
         with patch.object(
             ServiceClient,
             "_resolve_async_settings",
-            return_value=ResolvedAsyncSettings(
+            return_value=AsyncSettings(
                 use_above_trainset_size_bytes=50 * 1024 * 1024,
                 poll_timeout_secs=7200.0,
             ),

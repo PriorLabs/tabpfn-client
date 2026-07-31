@@ -40,6 +40,7 @@ from tabpfn_client.api_models import (
     ClassifierThinkingConfig,
     RegressorThinkingConfig,
     ThinkingEffort,
+    TabPFNSystem,
 )
 from tabpfn_client.models import ApiCallMode
 from tabpfn_client.options import get_opts
@@ -949,7 +950,9 @@ def run_task(task: Callable, message: str, with_spinner: bool = True) -> Any:
     return result
 
 
-def _resolve_tabpfn_systems(paper_version: bool, thinking_mode: bool) -> list[str]:
+def _resolve_tabpfn_systems(
+    paper_version: bool, thinking_mode: bool
+) -> list[TabPFNSystem]:
     if paper_version and thinking_mode:
         raise ValueError(
             "Paper version and thinking mode cannot be enabled at the same time"

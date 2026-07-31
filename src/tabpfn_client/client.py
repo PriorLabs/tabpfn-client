@@ -24,7 +24,6 @@ from typing_extensions import (
     TypeVar,  # supports default= on Python 3.10
 )
 from tabpfn_client.models import (
-    ResolvedAsyncSettings,
     ClientOptions,
     PredictionResult,
     ApiCallMode,
@@ -43,6 +42,7 @@ from tabpfn_common_utils import utils as common_utils
 from tabpfn_common_utils.utils import Singleton
 from tabpfn_client.api_models import (
     GetSettingsResponse,
+    TabPFNSystem,
     PrepareTrainSetUploadRequest,
     PrepareTrainSetUploadResponse,
     DuplicateTrainSetErrorResponse,
@@ -64,6 +64,7 @@ from tabpfn_client.api_models import (
     PredictionTask,
     SubmitFitJobResponse,
     ThinkingConfig,
+    AsyncSettings,
 )
 from tabpfn_client.options import get_opts
 
@@ -217,7 +218,7 @@ class ServiceClient(Singleton):
             return cls._api_settings  # return stale value if available
 
     @classmethod
-    def _resolve_async_settings(cls) -> ResolvedAsyncSettings:
+    def _resolve_async_settings(cls) -> AsyncSettings:
         """Resolve the async-fit settings: environment > server default > client default.
 
         An option explicitly set via the environment wins; otherwise the
@@ -235,7 +236,7 @@ class ServiceClient(Singleton):
                 return server_value
             return getattr(opts, opt_name)
 
-        return ResolvedAsyncSettings(
+        return AsyncSettings(
             use_above_trainset_size_bytes=resolve(
                 "TABPFN_CLIENT_ASYNC_USE_ABOVE_TRAINSET_SIZE",
                 server.use_above_trainset_size_bytes if server else None,
@@ -266,7 +267,7 @@ class ServiceClient(Singleton):
         y: pd.Series | np.ndarray,
         # start: fit request
         task: PredictionTask,
-        tabpfn_systems: list[str] | None = None,
+        tabpfn_systems: list[TabPFNSystem] | None = None,
         thinking_config: ThinkingConfig | None = None,
         # end: fit request
         call_mode: ApiCallMode = ApiCallMode.AUTO,
@@ -284,7 +285,7 @@ class ServiceClient(Singleton):
             The target values.
         task: PredictionTask
             Task type: "classification" or "regression"
-        tabpfn_systems: list[str], optional
+        tabpfn_systems: list[TabPFNSystem], optional
             The systems to use for the fit method. Defaults to ["preprocessing", "text"].
         thinking_config: ThinkingConfig | None
             The configuration for the thinking mode.

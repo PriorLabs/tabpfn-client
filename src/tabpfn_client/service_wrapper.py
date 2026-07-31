@@ -21,7 +21,7 @@ from tabpfn_client.api_models import (
 )
 from tabpfn_client.options import get_opts
 from tabpfn_client.models import ApiCallMode
-from tabpfn_client.api_models import PredictionTask, ThinkingConfig
+from tabpfn_client.api_models import PredictionTask, ThinkingConfig, TabPFNSystem
 
 logger = logging.getLogger(__name__)
 
@@ -275,7 +275,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         X,
         y,
         task: PredictionTask,
-        tabpfn_systems: list[str],
+        tabpfn_systems: list[TabPFNSystem],
         thinking_config: ThinkingConfig | None,
         call_mode: ApiCallMode,
         client_options: ClientOptions | None,

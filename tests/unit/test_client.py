@@ -13,7 +13,6 @@ from sklearn.model_selection import train_test_split
 
 from tabpfn_client.client import (
     GetSettingsResponse,
-    ResolvedAsyncSettings,
     RetryableServerError,
     ServiceClient,
 )
@@ -27,6 +26,7 @@ from tabpfn_client.api_models import (
     RegressorOutputType,
     RegressorPredictParams,
     PredictionTask,
+    AsyncSettings,
 )
 from tests.mock_tabpfn_server import with_mock_server
 
@@ -64,8 +64,8 @@ def _api_settings_payload(
     }
 
 
-def _fast_poll_settings() -> ResolvedAsyncSettings:
-    return ResolvedAsyncSettings(
+def _fast_poll_settings() -> AsyncSettings:
+    return AsyncSettings(
         use_above_trainset_size_bytes=50 * 1024 * 1024,
         poll_timeout_secs=7200.0,
     )
@@ -786,7 +786,7 @@ class TestWaitForFit(unittest.TestCase):
         exceptions, a single exception (raised on every call), or a callable.
         """
         fake_time = _FakeTime()
-        settings = ResolvedAsyncSettings(
+        settings = AsyncSettings(
             use_above_trainset_size_bytes=50 * 1024 * 1024,
             poll_timeout_secs=poll_timeout,
         )
