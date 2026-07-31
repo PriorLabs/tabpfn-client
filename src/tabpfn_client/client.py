@@ -304,10 +304,11 @@ class ServiceClient(Singleton):
         fitted_train_set_id: UUID
             The unique ID of the fitted train set in the server.
         """
-        tabpfn_systems_: list[TabPFNSystem | str] = list(
-            tabpfn_systems or ["preprocessing", "text"]
-        )
         client_options = client_options or ClientOptions()
+
+        tabpfn_systems_: list[TabPFNSystem | str] = ["preprocessing", "text"]
+        if tabpfn_systems is not None:  # make sure [] paper_version is not discarded
+            tabpfn_systems_ = list(tabpfn_systems)
 
         df_X = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
         df_y = cast(pd.DataFrame, y if isinstance(y, pd.DataFrame) else pd.DataFrame(y))
