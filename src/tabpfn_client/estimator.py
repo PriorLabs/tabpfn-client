@@ -988,4 +988,8 @@ def _resolve_thinking_config(
                     metric=metric,
                     tabpfn_config=tabpfn_config,
                 )
+    if effort is not None:
+        raise ValueError(
+            "When thinking effort is provided, thinking mode must be enabled"
+        )
     return None
