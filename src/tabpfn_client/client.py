@@ -285,7 +285,7 @@ class ServiceClient(Singleton):
             The target values.
         task: PredictionTask
             Task type: "classification" or "regression"
-        tabpfn_systems: list[TabPFNSystem], optional
+        tabpfn_systems: Sequence[TabPFNSystem], optional
             The systems to use for the fit method. Defaults to ["preprocessing", "text"].
         thinking_config: ThinkingConfig | None
             The configuration for the thinking mode.
@@ -304,7 +304,9 @@ class ServiceClient(Singleton):
         fitted_train_set_id: UUID
             The unique ID of the fitted train set in the server.
         """
-        tabpfn_systems = tabpfn_systems or ["preprocessing", "text"]
+        tabpfn_systems_: list[TabPFNSystem | str] = list(
+            tabpfn_systems or ["preprocessing", "text"]
+        )
         client_options = client_options or ClientOptions()
 
         df_X = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
@@ -404,7 +406,7 @@ class ServiceClient(Singleton):
                 req=SubmitFitJobRequest(
                     train_set_upload_id=prepare_resp.train_set_upload_id,
                     task=task,
-                    tabpfn_systems=tabpfn_systems,
+                    tabpfn_systems=tabpfn_systems_,
                     thinking_config=thinking_config,
                 ),
                 timeout=client_options.timeout,
@@ -419,7 +421,7 @@ class ServiceClient(Singleton):
                 req=FitRequest(
                     train_set_upload_id=prepare_resp.train_set_upload_id,
                     task=task,
-                    tabpfn_systems=tabpfn_systems,
+                    tabpfn_systems=tabpfn_systems_,
                     thinking_config=thinking_config,
                 ),
                 timeout=client_options.timeout,
