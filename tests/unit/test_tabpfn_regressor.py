@@ -447,7 +447,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
         tabpfn = TabPFNRegressor()
 
         # skip fitting
-        tabpfn.fitted_ = True
+        tabpfn.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
 
         # test oversized cells
         with self.assertRaises(ValueError):
@@ -458,7 +458,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
         tabpfn = TabPFNRegressor()
 
         # skip fitting
-        tabpfn.fitted_ = True
+        tabpfn.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
 
         # mock prediction
         with patch.object(InferenceClient, "predict") as mock_predict:
@@ -491,10 +491,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
         )
 
         # Skip fitting
-        regressor.fitted_ = True
-        regressor._last_fitted_train_set_id = UUID(
-            "00000000-0000-0000-0000-000000000000"
-        )
+        regressor.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
 
         test_X = np.random.randn(10, 5)
 
@@ -533,7 +530,9 @@ class TestTabPFNRegressorInference(unittest.TestCase):
     def test_predict_params_output_type(self):
         """Test that predict_params contains correct output_type and quantiles."""
         regressor = TabPFNRegressor()
-        regressor.fitted_ = True  # Skip fitting
+        regressor.model_id_ = UUID(
+            "00000000-0000-0000-0000-000000000000"
+        )  # Skip fitting
         test_X = np.random.randn(10, 5)
 
         # Test default predict() sets output_type to "mean"
@@ -563,7 +562,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
         """Server returns a stacked (n_quantiles, n_samples) array; predict()
         normalizes it to a list of per-quantile arrays, matching local tabpfn."""
         regressor = TabPFNRegressor()
-        regressor.fitted_ = True
+        regressor.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
         test_X = np.random.randn(20, 5)
         quantiles = [0.1, 0.5, 0.9]
 
@@ -585,7 +584,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
         """A single quantile may arrive squeezed to 1D; it must still become a
         list of one (n_samples,) array, matching local tabpfn."""
         regressor = TabPFNRegressor()
-        regressor.fitted_ = True
+        regressor.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
         test_X = np.random.randn(20, 5)
 
         with patch.object(InferenceClient, "predict") as mock_predict:
@@ -601,10 +600,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
     def test_predict_full_adds_criterion_with_optional_dependencies(self):
         regressor = TabPFNRegressor()
-        regressor.fitted_ = True
-        regressor._last_fitted_train_set_id = UUID(
-            "00000000-0000-0000-0000-000000000000"
-        )
+        regressor.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
         regressor._last_train_X = np.random.randn(5, 2)
         regressor._last_train_y = np.random.randn(5)
 
@@ -650,10 +646,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
     def test_predict_full_missing_optional_dependencies_logs_warning(self):
         regressor = TabPFNRegressor()
-        regressor.fitted_ = True
-        regressor._last_fitted_train_set_id = UUID(
-            "00000000-0000-0000-0000-000000000000"
-        )
+        regressor.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
         regressor._last_train_X = np.random.randn(5, 2)
         regressor._last_train_y = np.random.randn(5)
 
@@ -687,7 +680,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
         """Test predictions with long text (>2500 chars) and text containing commas."""
         # Skip initialization
         tabpfn = TabPFNRegressor()
-        tabpfn.fitted_ = True
+        tabpfn.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
 
         # Create test data with a mix of numeric and text features
         n_samples = 5
@@ -774,7 +767,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
         # Skip initialization
         tabpfn = TabPFNRegressor()
-        tabpfn.fitted_ = True
+        tabpfn.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
 
         # Create test data
         n_samples = 5
