@@ -967,7 +967,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         X_clean = _clean_text_features(X)
 
         # NOTE(@trace_id)
-        # If this instance was created via `load_model` we assume this is a 
+        # If this instance was created via `load_model` we assume this is a
         # fit-once-predict-many scenario, so we won't try to link all operations
         # under the same trace. In this case we will let the server create a new trace
         # for every prediction or use the user-supplied one.
