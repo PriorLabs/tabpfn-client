@@ -87,16 +87,7 @@ _VALID_THINKING_EFFORT_LEVELS = frozenset({"medium", "high"})
 
 # Bumped when the shape of the `_ModelHandle` schema changes in a way pydantic
 # validation cannot otherwise catch (e.g. renamed fields, changed semantics).
-_MODEL_HANDLE_VERSION = 1
-
-
-class _SavableEstimator(Protocol):
-    """Read-only structural type for the helpers below. Declares only what
-    they actually access on the estimator so the helpers don't need `Any`."""
-
-    model_id: str | UUID | None
-
-    def get_params(self, deep: bool = False) -> dict[str, Any]: ...
+_MODEL_HANDLE_VERSION = 1  # Why is it needed?
 
 
 class _ModelHandle(BaseModel):
@@ -110,11 +101,12 @@ class _ModelHandle(BaseModel):
 
     format_version: int
     task: PredictionTask
-    params: dict[str, Any]
+    params: dict[str, Any]  # tabpfn_config?
     classes: list[Any] | None = None  # classification only
 
 
-def _resolve_train_set_id(estimator: _SavableEstimator) -> UUID | None:
+# XXX 1 fitted_train_set_is_ and model_id?
+def _resolve_train_set_id(estimator: TabPFNClassifier | TabPFNRegressor) -> UUID | None:
     """Resolve the server-side fitted-train-set id an estimator should predict against.
 
     A real `fit()` sets `fitted_train_set_id_` and always wins; otherwise fall
@@ -128,14 +120,13 @@ def _resolve_train_set_id(estimator: _SavableEstimator) -> UUID | None:
     crash `__sklearn_is_fitted__`. The estimator degrades to "not fitted"
     and `predict` surfaces the standard `NotFittedError`.
     """
-    fitted = getattr(estimator, "fitted_train_set_id_", None)
+    fitted = estimator.fitted_train_set_id_
     if fitted is not None:
         return fitted
-    raw = estimator.model_id
-    if raw is None or isinstance(raw, UUID):
-        return raw
+    if estimator.model_id is None:
+        return None
     try:
-        return UUID(str(raw))
+        return UUID(str(estimator.model_id))
     except (ValueError, TypeError):
         return None
 
@@ -149,13 +140,13 @@ def _read_handle_data(source: dict[str, Any] | str | Path) -> dict[str, Any]:
 
 
 def _build_model_handle(
-    estimator: _SavableEstimator,
+    estimator: TabPFNClassifier | TabPFNRegressor,
     task: PredictionTask,
     path: str | Path | None,
 ) -> dict[str, Any] | Path:
     """Shared implementation of `save_model()` for both estimators."""
     check_is_fitted(estimator)
-    params = estimator.get_params(deep=False)
+    params = estimator.get_params(deep=False)  # XXX 2 tabpfn_config?
     # `client_options` is runtime-only (timeouts, auth/trace headers) and not
     # JSON-serializable; drop it so the handle stays portable.
     params.pop("client_options", None)
@@ -163,16 +154,8 @@ def _build_model_handle(
     # `model_id`. Coerce to str for JSON.
     params["model_id"] = str(_resolve_train_set_id(estimator))
     classes: list[Any] | None = None
-    if task is PredictionTask.CLASSIFICATION:
-        classes_attr = getattr(estimator, "classes_", None)
-        if classes_attr is None:
-            # A bare `model_id` classifier (never fit / never load_model'd) has
-            # no class labels to persist; fail clearly instead of AttributeError.
-            raise ValueError(
-                "Cannot save a classifier without `classes_`. Fit it first, or "
-                "reconstruct it via `load_model()`."
-            )
-        classes = classes_attr.tolist()
+    if isinstance(estimator, TabPFNClassifier):
+        classes = estimator.classes_.tolist()
     handle = _ModelHandle(
         format_version=_MODEL_HANDLE_VERSION,
         task=task,
@@ -188,7 +171,7 @@ def _build_model_handle(
 
 
 def _load_model_handle_for(
-    cls: type,
+    cls: type[TabPFNClassifier | TabPFNRegressor],
     source: dict[str, Any] | str | Path,
     task: PredictionTask,
 ) -> _ModelHandle:
@@ -468,6 +451,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.client_options = client_options or ClientOptions()
         self.model_id = model_id
 
+        self.fitted_train_set_id_ = None
         self._last_trace_id = None
         self._last_train_X = None
         self._last_train_y = None
@@ -475,7 +459,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self._last_train_set_description = None
         self._fit_count = 0
 
-    def __sklearn_is_fitted__(self) -> bool:
+    def __sklearn_is_fitted__(self) -> bool:  # XXX 3 prevent loading from instance
         # `fitted_` is a legacy fittedness flag some tests set directly; it is
         # kept as a fallback so those tests keep passing.
         return _resolve_train_set_id(self) is not None or getattr(
@@ -534,7 +518,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             self.fitted_train_set_id_ = cast(UUID, run_task(fit_task, "Fitting"))
             self._last_train_X = X_clean
             self._last_train_y = y
-            self.fitted_ = True
+            self.fitted_ = True  # XXX  4 public?
             self._fit_count += 1
         else:
             raise NotImplementedError(
@@ -715,7 +699,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         return _build_model_handle(self, task=PredictionTask.CLASSIFICATION, path=path)
 
     @classmethod
-    def load_model(cls, handle: dict[str, Any] | str | Path) -> "TabPFNClassifier":
+    def load_model(cls, handle: dict[str, Any] | str | Path) -> TabPFNClassifier:
         """Reconstruct a classifier from a `save_model()` handle (dict or path).
 
         The resulting estimator is already fitted (it references the server-side
@@ -887,6 +871,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.client_options = client_options or ClientOptions()
         self.model_id = model_id
 
+        self.fitted_train_set_id_ = None
         self._last_trace_id = None
         self._last_train_X = None
         self._last_train_y = None
@@ -1139,7 +1124,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         return _build_model_handle(self, task=PredictionTask.REGRESSION, path=path)
 
     @classmethod
-    def load_model(cls, handle: dict[str, Any] | str | Path) -> "TabPFNRegressor":
+    def load_model(cls, handle: dict[str, Any] | str | Path) -> TabPFNRegressor:
         """Reconstruct a regressor from a `save_model()` handle (dict or path).
 
         The resulting estimator is already fitted (it references the server-side

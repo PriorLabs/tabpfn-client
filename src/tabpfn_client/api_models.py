@@ -53,11 +53,10 @@ class ClassifierPredictParams(BaseModel):
 
 
 class FitMode(str, Enum):
-    # Only the two values that gapi wires end-to-end. The server-side enum
-    # also has internal `low_memory` / `batched` modes, but those are not
-    # accepted by the public API — see `FitRequest._validate_fit_mode`.
+    LOW_MEMORY = "low_memory"
     FIT_PREPROCESSORS = "fit_preprocessors"
     FIT_WITH_CACHE = "fit_with_cache"
+    BATCHED = "batched"
 
 
 class ClassifierTabPFNConfig(BaseModel):
@@ -126,10 +125,8 @@ class ModelLimit(BaseModel):
     max_classes: int
     max_cols: int
     test_set_max_rows_w_full_regression_output: int
+    predict_row_pairs_budget: int
     test_set_max_cells: int
-    # Optional until all deployed servers send it; estimator.py falls back to
-    # its local default when absent.
-    predict_row_pairs_budget: int | None = None
 
 
 class ModelVersion(str, Enum):
@@ -204,7 +201,6 @@ class DuplicateTestSetErrorResponse(BaseModel):
     message: str
     error_code: str = "DUPLICATE_TEST_SET_UPLOAD"
     trace_id: UUID | None = None
-    detail: str | None = None
     test_set_upload_id: UUID
 
 
@@ -212,7 +208,6 @@ class DuplicateTrainSetErrorResponse(BaseModel):
     message: str
     error_code: str = "DUPLICATE_TRAIN_SET_UPLOAD"
     trace_id: UUID | None = None
-    detail: str | None = None
     train_set_upload_id: UUID
 
 
@@ -268,7 +263,6 @@ class NotFoundErrorResponse(BaseModel):
     message: str
     error_code: str = "NOT_FOUND"
     trace_id: UUID | None = None
-    detail: str | None = None
 
 
 class PredictRequest(BaseModel):
