@@ -71,6 +71,13 @@ _AUTO_MODEL_PATH_ALIASES: frozenset[str | None] = frozenset({None, "auto", "defa
 
 THINKING_TIMEOUT_MAX_S = 40 * 60
 
+# Prediction compute scales with n_train_rows * n_test_rows, so the API caps
+# their product. The effective per-call test row limit therefore shrinks as
+# the fitted training set grows (e.g. 1M training rows -> 250k test rows).
+# The server sends its budget via get_model_limits (`predict_row_pairs_budget`);
+# this is only the fallback for servers that predate that field.
+FALLBACK_PREDICT_ROW_PAIRS_BUDGET = 250_000 * 1_000_000
+
 _VALID_THINKING_EFFORT_LEVELS = frozenset({"medium", "high"})
 
 # `FitMode` exposes only the two values gapi wires end-to-end:
@@ -579,7 +586,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             predict_params=predict_params,
         )
 
-        validate_test_set(X, output_type, tabpfn_config.model_path)
+        validate_test_set(
+            X,
+            output_type,
+            tabpfn_config.model_path,
+            train_rows=self._last_train_X.shape[0]
+            if self._last_train_X is not None
+            else None,
+        )
         X_clean = _clean_text_features(X)
 
         if (
@@ -997,7 +1011,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             predict_params=predict_params,
         )
 
-        validate_test_set(X, output_type, tabpfn_config.model_path)
+        validate_test_set(
+            X,
+            output_type,
+            tabpfn_config.model_path,
+            train_rows=self._last_train_X.shape[0]
+            if self._last_train_X is not None
+            else None,
+        )
         X_clean = _clean_text_features(X)
 
         if (
@@ -1218,6 +1239,7 @@ def validate_test_set(
     X: pd.DataFrame | np.ndarray,
     output_type: str | None,
     model_path: str | None = None,
+    train_rows: int | None = None,
 ):
     """Check the integrity of the test data."""
 
@@ -1231,9 +1253,14 @@ def validate_test_set(
         model_version = model_version_from_path(model_path)
         limit = model_limit_from_version(model_version, limits.model_limits)
 
-    if X.shape[0] > limit.test_set_max_rows:
+    max_rows = limit.test_set_max_rows
+    if train_rows:
+        budget = limit.predict_row_pairs_budget or FALLBACK_PREDICT_ROW_PAIRS_BUDGET
+        max_rows = min(max_rows, budget // train_rows)
+
+    if X.shape[0] > max_rows:
         raise ValueError(
-            f"The number of test rows ({X.shape[0]}) exceeds the maximum of {limit.test_set_max_rows}. "
+            f"The number of test rows ({X.shape[0]}) exceeds the maximum of {max_rows}. "
             "Split the test set across multiple calls to reduce the number of rows."
         )
     if X.shape[1] > limit.max_cols:

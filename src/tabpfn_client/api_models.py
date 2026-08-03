@@ -127,6 +127,9 @@ class ModelLimit(BaseModel):
     max_cols: int
     test_set_max_rows_w_full_regression_output: int
     test_set_max_cells: int
+    # Optional until all deployed servers send it; estimator.py falls back to
+    # its local default when absent.
+    predict_row_pairs_budget: int | None = None
 
 
 class ModelVersion(str, Enum):
