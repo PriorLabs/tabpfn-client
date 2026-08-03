@@ -125,7 +125,9 @@ class ModelLimit(BaseModel):
     max_classes: int
     max_cols: int
     test_set_max_rows_w_full_regression_output: int
-    predict_row_pairs_budget: int
+    # Optional: older servers don't send this; validate_test_set falls back to
+    # FALLBACK_PREDICT_ROW_PAIRS_BUDGET when absent.
+    predict_row_pairs_budget: int | None = None
     test_set_max_cells: int
 
 
