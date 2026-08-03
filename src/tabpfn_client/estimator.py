@@ -871,6 +871,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         X_clean = _clean_text_features(X)
 
         if Config.use_server:
+            # NOTE(@trace_id)
             # Create a new sentry trace at every fit, provided that:
             # - The user has not explicitly set a sentry-trace header.
             # - In any case if we're going to refit.
@@ -965,6 +966,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         )
         X_clean = _clean_text_features(X)
 
+        # NOTE(@trace_id)
+        # If this instance was created via `load_model` we assume this is a 
+        # fit-once-predict-many scenario, so we won't try to link all operations
+        # under the same trace. In this case we will let the server create a new trace
+        # for every prediction or use the user-supplied one.
         if (
             "sentry-trace" not in self.client_options.headers
             and self._last_trace_id is not None
