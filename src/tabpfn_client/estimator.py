@@ -80,11 +80,6 @@ FALLBACK_PREDICT_ROW_PAIRS_BUDGET = 250_000 * 1_000_000
 
 _VALID_THINKING_EFFORT_LEVELS = frozenset({"medium", "high"})
 
-# `FitMode` exposes only the two values gapi wires end-to-end:
-# `fit_preprocessors` (the stateless default) and `fit_with_cache` (persist a
-# server-side KV cache keyed by the returned fitted-train-set id, so later
-# predicts against that id are served from the cache instead of re-fitting).
-
 # Bumped when the shape of the `_ModelHandle` schema changes in a way pydantic
 # validation cannot otherwise catch (e.g. renamed fields, changed semantics).
 _MODEL_HANDLE_VERSION = 1

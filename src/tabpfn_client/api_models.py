@@ -53,10 +53,8 @@ class ClassifierPredictParams(BaseModel):
 
 
 class FitMode(str, Enum):
-    LOW_MEMORY = "low_memory"
     FIT_PREPROCESSORS = "fit_preprocessors"
     FIT_WITH_CACHE = "fit_with_cache"
-    BATCHED = "batched"
 
 
 class ClassifierTabPFNConfig(BaseModel):
