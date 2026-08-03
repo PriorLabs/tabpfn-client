@@ -87,7 +87,10 @@ _VALID_THINKING_EFFORT_LEVELS = frozenset({"medium", "high"})
 
 # Bumped when the shape of the `_ModelHandle` schema changes in a way pydantic
 # validation cannot otherwise catch (e.g. renamed fields, changed semantics).
-_MODEL_HANDLE_VERSION = 1  # Why is it needed?
+_MODEL_HANDLE_VERSION = 1
+
+# Transport params are persisted when saving the model.
+_TRANSPORT_PARAMS = frozenset({"client_options"})
 
 
 class _ModelHandle(BaseModel):
@@ -102,7 +105,7 @@ class _ModelHandle(BaseModel):
     format_version: int
     task: PredictionTask
     model_id: UUID
-    params: dict[str, Any]  # XXX tabpfn_config?
+    params: dict[str, Any]
     classes: list[Any] | None = None  # classification only
 
 
@@ -121,10 +124,11 @@ def _build_model_handle(
 ) -> dict[str, Any] | Path:
     """Shared implementation of `save_model()` for both estimators."""
     check_is_fitted(estimator)
-    params = estimator.get_params(deep=False)  # XXX 2 tabpfn_config?
+    params = estimator.get_params(deep=False)
     # `client_options` is runtime-only (timeouts, auth/trace headers) and not
     # JSON-serializable; drop it so the handle stays portable.
-    params.pop("client_options", None)
+    for param in _TRANSPORT_PARAMS:
+        params.pop(param, None)
     classes: list[Any] | None = None
     if isinstance(estimator, TabPFNClassifier):
         classes = estimator.classes_.tolist()
@@ -135,6 +139,8 @@ def _build_model_handle(
         params=params,
         classes=classes,
     )
+    # NOTE: We always treat None as "unset", therefore we want to exclude None values
+    # to avoid overriding future defaults.
     dumped = handle.model_dump(mode="json", exclude_none=True)
     if path is None:
         return dumped
@@ -171,6 +177,11 @@ def _load_model_handle_for(
         raise ValueError(
             f"Cannot load a {handle.task.value!r} model into {cls.__name__}."
         )
+    if handle.task == PredictionTask.CLASSIFICATION:
+        if handle.classes is None:
+            raise ValueError(
+                f"Classifier handle is missing 'classes'; cannot reconstruct {cls.__name__}."
+            )
     return handle
 
 
@@ -274,7 +285,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     # The server-side fitted-train-set id predictions run against. Written by
     # `fit()` (the id the server returns) and by `load_model()`; absent on
     # unfitted instances, which is what makes `__sklearn_is_fitted__` work.
-    model_id_: UUID
+    model_id_: UUID  # annotation only, no class attribute
 
     def __init__(
         self,
@@ -668,11 +679,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         calling `fit()` again.
         """
         data = _load_model_handle_for(cls, handle, task=PredictionTask.CLASSIFICATION)
-        if data.classes is None:
-            raise ValueError(
-                f"Classifier handle is missing 'classes'; cannot reconstruct {cls.__name__}."
-            )
-        est = cls(**data.params)
+        est = cls(**data.params)  # NOTE: An extra (removed) param will fail-close.
         est.model_id_ = data.model_id
         est.classes_ = np.asarray(data.classes)
         return est

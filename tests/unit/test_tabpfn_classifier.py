@@ -536,7 +536,9 @@ class TestTabPFNClassifierInference(unittest.TestCase):
     def test_predict_params_output_type(self):
         """Test that predict_params contains correct output_type."""
         classifier = TabPFNClassifier()
-        classifier.model_id_ = UUID("00000000-0000-0000-0000-000000000000")  # Skip fitting
+        classifier.model_id_ = UUID(
+            "00000000-0000-0000-0000-000000000000"
+        )  # Skip fitting
         test_X = np.random.randn(10, 5)
 
         # Test predict() sets output_type to "preds"
