@@ -25,8 +25,8 @@ from tabpfn_client.api_models import (
     RegressorConfig,
     RegressorOutputType,
     RegressorPredictParams,
-    PredictionTask,
     AsyncSettings,
+    ClassifierFitTaskConfig,
 )
 from tests.mock_tabpfn_server import with_mock_server
 
@@ -274,7 +274,7 @@ class TestServiceClient(unittest.TestCase):
             fitted_train_set_id = ServiceClient.fit(
                 self.X_train,
                 self.y_train,
-                task=PredictionTask.CLASSIFICATION,
+                task_config=ClassifierFitTaskConfig(),
             )
             pred = ServiceClient.predict(
                 fitted_train_set_id=fitted_train_set_id,
@@ -469,12 +469,12 @@ class TestServiceClient(unittest.TestCase):
             fitted_train_set_id_1 = ServiceClient.fit(
                 self.X_train,
                 self.y_train,
-                task=PredictionTask.CLASSIFICATION,
+                task_config=ClassifierFitTaskConfig(),
             )
             fitted_train_set_id_2 = ServiceClient.fit(
                 self.X_train,
                 self.y_train,
-                task=PredictionTask.CLASSIFICATION,
+                task_config=ClassifierFitTaskConfig(),
             )
 
         self.assertEqual(fitted_train_set_id_1, fitted_train_set_id_2)
@@ -532,7 +532,7 @@ class TestServiceClient(unittest.TestCase):
             result = ServiceClient.fit(
                 self.X_train,
                 self.y_train,
-                task=PredictionTask.CLASSIFICATION,
+                task_config=ClassifierFitTaskConfig(),
             )
 
         self.assertEqual(result, UUID(fitted_train_set_id))
@@ -576,7 +576,7 @@ class TestServiceClient(unittest.TestCase):
                 ServiceClient.fit(
                     self.X_train,
                     self.y_train,
-                    task=PredictionTask.CLASSIFICATION,
+                    task_config=ClassifierFitTaskConfig(),
                 )
 
         self.assertIn("boom", str(cm.exception))

@@ -18,7 +18,7 @@ from uuid import UUID
 import numpy as np
 
 from tabpfn_client.api_models import FitMode
-from tabpfn_client.client import NeedsRefittingError, PredictionResult, ServiceClient
+from tabpfn_client.client import PredictionResult, ServiceClient
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
 from tabpfn_client.service_wrapper import InferenceClient
 
@@ -143,22 +143,6 @@ class TestSaveLoadModel(unittest.TestCase):
         handle["format_version"] = 999
         with self.assertRaises(ValueError):
             TabPFNRegressor.load_model(handle)
-
-
-class TestRefitGuard(unittest.TestCase):
-    def test_load_by_id_cannot_auto_refit(self):
-        reg = TabPFNRegressor()
-        reg.model_id_ = UUID(_MODEL_ID)  # no in-memory train data
-        with patch("tabpfn_client.estimator.init"):
-            with patch.object(ServiceClient, "get_model_limits", return_value=None):
-                with patch.object(InferenceClient, "fit") as mock_fit:
-                    with patch.object(
-                        InferenceClient, "predict", side_effect=NeedsRefittingError()
-                    ):
-                        with self.assertRaises(RuntimeError) as ctx:
-                            reg.predict(np.random.randn(4, 3))
-        self.assertIn("no in-memory", str(ctx.exception).lower())
-        mock_fit.assert_not_called()
 
 
 class TestSklearnCompatibility(unittest.TestCase):

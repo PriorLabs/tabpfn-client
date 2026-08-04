@@ -26,7 +26,7 @@ from typing_extensions import (
 from tabpfn_client.models import (
     ClientOptions,
     PredictionResult,
-    ApiCallMode,
+    ApiMode,
 )
 from tabpfn_client.errors import RetryableServerError
 
@@ -61,12 +61,15 @@ from tabpfn_client.api_models import (
     PredictResponse,
     ClassifierConfig,
     RegressorConfig,
-    PredictionTask,
     SubmitFitJobResponse,
     ThinkingConfig,
     AsyncSettings,
+    FitTaskConfig,
 )
 from tabpfn_client.options import get_opts
+
+
+# XXX: 3 remove load/save
 
 logger = logging.getLogger(__name__)
 
@@ -266,11 +269,11 @@ class ServiceClient(Singleton):
         X: pd.DataFrame | np.ndarray,
         y: pd.Series | np.ndarray,
         # start: fit request
-        task: PredictionTask,
+        task_config: FitTaskConfig,
         tabpfn_systems: list[TabPFNSystem] | None = None,
         thinking_config: ThinkingConfig | None = None,
         # end: fit request
-        call_mode: ApiCallMode = ApiCallMode.AUTO,
+        api_mode: ApiMode = ApiMode.AUTO,
         client_options: ClientOptions | None = None,
         description: str | None = None,
     ) -> UUID:
@@ -283,17 +286,14 @@ class ServiceClient(Singleton):
             The training input samples.
         y : array-like of shape (n_samples,) or (n_samples, n_outputs)
             The target values.
-        task: PredictionTask
-            Task type: "classification" or "regression"
+        task_config: FitTaskConfig
+            The configuration for the fit task.
         tabpfn_systems: Sequence[TabPFNSystem], optional
             The systems to use for the fit method. Defaults to ["preprocessing", "text"].
-        thinking_config: ThinkingConfig | None
+        thinking_config: ThinkingConfig, optional
             The configuration for the thinking mode.
-        call_mode: ApiCallMode, default=ApiCallMode.AUTO
-            The mode to use for calling the fit method.
-            - AUTO: Automatically determine the best mode based on the size of the training set.
-            - SYNC: Call the fit method synchronously.
-            - ASYNC: Call the fit method asynchronously.
+        api_mode: ApiMode, default=ApiMode.AUTO, optional
+            The API mode to use for the fit method. SYNC, ASYNC, or AUTO.
         client_options : ClientOptions, optional
             Client specific options (e.g. timeout, headers).
         description: str, optional
@@ -327,12 +327,12 @@ class ServiceClient(Singleton):
                         f"the server limit of {api_settings.dataset_max_size_bytes} bytes."
                     )
 
-        match call_mode:
-            case ApiCallMode.SYNC:
+        match api_mode:
+            case ApiMode.SYNC:
                 use_async = False
-            case ApiCallMode.ASYNC:
+            case ApiMode.ASYNC:
                 use_async = True
-            case ApiCallMode.AUTO:
+            case ApiMode.AUTO:
                 use_async = True
                 trainset_size_threshold = (
                     cls._resolve_async_settings().use_above_trainset_size_bytes
@@ -406,9 +406,9 @@ class ServiceClient(Singleton):
             fit_resp = cls._submit_fit_job(
                 req=SubmitFitJobRequest(
                     train_set_upload_id=prepare_resp.train_set_upload_id,
-                    task=task,
+                    task_config=task_config,  # XXX: 1 TabpfnConfig None?
                     tabpfn_systems=tabpfn_systems_,
-                    thinking_config=thinking_config,
+                    thinking_config=thinking_config,  # XXX: 1 None?
                 ),
                 timeout=client_options.timeout,
                 headers=client_options.headers,
@@ -421,7 +421,7 @@ class ServiceClient(Singleton):
             fit_resp = cls._fit(
                 req=FitRequest(
                     train_set_upload_id=prepare_resp.train_set_upload_id,
-                    task=task,
+                    task_config=task_config,
                     tabpfn_systems=tabpfn_systems_,
                     thinking_config=thinking_config,
                 ),

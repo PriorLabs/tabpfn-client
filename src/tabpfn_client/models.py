@@ -5,7 +5,7 @@ from typing import Any
 from tabpfn_client.options import get_opts
 
 
-class ApiCallMode(str, Enum):
+class ApiMode(str, Enum):
     AUTO = "auto"
     SYNC = "sync"
     ASYNC = "async"

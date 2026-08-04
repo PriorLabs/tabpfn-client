@@ -16,12 +16,14 @@ from tabpfn_client.client import (
 import tabpfn_client.constants as constants
 from tabpfn_common_utils.utils import Singleton
 from tabpfn_client.api_models import (
+    FitTaskConfig,
     ClassifierConfig,
     RegressorConfig,
+    ThinkingConfig,
+    TabPFNSystem,
 )
 from tabpfn_client.options import get_opts
-from tabpfn_client.models import ApiCallMode
-from tabpfn_client.api_models import PredictionTask, ThinkingConfig, TabPFNSystem
+from tabpfn_client.models import ApiMode
 
 logger = logging.getLogger(__name__)
 
@@ -274,20 +276,20 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         cls,
         X,
         y,
-        task: PredictionTask,
+        task_config: FitTaskConfig,
         tabpfn_systems: list[TabPFNSystem],
         thinking_config: ThinkingConfig | None,
-        call_mode: ApiCallMode,
+        api_mode: ApiMode,
         client_options: ClientOptions | None,
         description: str | None,
     ) -> UUID:
         return ServiceClient.fit(
             X,
             y,
-            task=task,
+            task_config=task_config,
             tabpfn_systems=tabpfn_systems,
             thinking_config=thinking_config,
-            call_mode=call_mode,
+            api_mode=api_mode,
             client_options=client_options,
             description=description,
         )

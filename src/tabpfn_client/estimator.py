@@ -33,7 +33,6 @@ from tabpfn_client.utils import model_limit_from_version, model_version_from_pat
 from tabpfn_client.service_wrapper import InferenceClient
 from tabpfn_client.api_models import (
     FitMode,
-    PredictionTask,
     RegressorTabPFNConfig,
     ClassifierTabPFNConfig,
     RegressorPredictParams,
@@ -41,13 +40,14 @@ from tabpfn_client.api_models import (
     ClassifierConfig,
     RegressorConfig,
     ThinkingConfig,
+    FitTaskConfig,
+    ClassifierFitTaskConfig,
+    RegressorFitTaskConfig,
     PredictionTask,
-    ClassifierThinkingConfig,
-    RegressorThinkingConfig,
     ThinkingEffort,
     TabPFNSystem,
 )
-from tabpfn_client.models import ApiCallMode
+from tabpfn_client.models import ApiMode
 from tabpfn_client.options import get_opts
 
 try:
@@ -308,7 +308,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         thinking_effort: ThinkingEffort | None = None,
         thinking_timeout_s: float | None = None,
         thinking_metric: str | None = None,
-        fit_call_mode: ApiCallMode = ApiCallMode.AUTO,
+        api_mode: ApiMode = ApiMode.AUTO,
         client_options: ClientOptions | None = None,
     ):
         """Construct a TabPFN classifier.
@@ -401,6 +401,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             cache keyed by the resulting fitted-train-set id; later predicts
             against that id (see `save_model` / `load_model`) are served from
             the cache instead of re-fitting.
+        api_mode: ApiMode, default=ApiMode.AUTO
+            Controls how the client calls the server.
+            SYNC: the client waits for the server to complete the request before returning.
+            ASYNC: the client returns immediately and the server completes the request in the background.
+            AUTO: the client automatically determines the best mode to use based on the request.
         client_options : ClientOptions, default=None
             Client specific options (e.g. timeout, headers).
         """
@@ -420,7 +425,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.thinking_effort = thinking_effort
         self.thinking_timeout_s = thinking_timeout_s
         self.thinking_metric = thinking_metric
-        self.fit_call_mode = fit_call_mode
+        self.api_mode = api_mode
         self.client_options = client_options or ClientOptions()
 
         self._last_trace_id = None
@@ -445,16 +450,17 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         X_clean = _clean_text_features(X)
         self._validate_targets_and_classes(y)
 
-        tabpfn_systems = _resolve_tabpfn_systems(self.paper_version, self.thinking_mode)
-        thinking_config = _resolve_thinking_config(
+        task_config = _build_fit_task_config(tabpfn_config)
+        tabpfn_systems = _build_tabpfn_systems(self.paper_version, self.thinking_mode)
+        thinking_config = _build_thinking_config(
             enabled=self.thinking_mode,
             effort=self.thinking_effort,
             timeout_secs=self.thinking_timeout_s,
             metric=self.thinking_metric,
-            tabpfn_config=tabpfn_config,
         )
 
         if Config.use_server:
+            # NOTE(@trace_id)
             # Create a new sentry trace at every fit, provided that:
             # - The user has not explicitly set a sentry-trace header.
             # - In any case if we're going to refit.
@@ -468,10 +474,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 return InferenceClient.fit(
                     X_clean,
                     y,
-                    task=self._TASK,
+                    task_config=task_config,
                     tabpfn_systems=tabpfn_systems,
                     thinking_config=thinking_config,
-                    call_mode=self.fit_call_mode,
+                    api_mode=self.api_mode,
                     client_options=self.client_options,
                     description=description,
                 )
@@ -547,45 +553,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             self.client_options.headers["sentry-trace"] = self._last_trace_id
 
         def predict_task() -> PredictionResult:
-            last_exc = None
-            refit_attempts = 0
-            while True:
-                if refit_attempts > 1:
-                    raise RuntimeError(
-                        "Failed to predict after refitting"
-                    ) from last_exc
-                try:
-                    return InferenceClient.predict(
-                        X_clean,
-                        fitted_train_set_id=self.model_id_,
-                        task_config=task_config,
-                        client_options=self.client_options,
-                    )
-                except NeedsRefittingError as exc:
-                    last_exc = exc
-                    refit_attempts += 1
-                    if self._last_train_X is None or self._last_train_y is None:
-                        # A load-by-id estimator (constructed via `load_model`)
-                        # has no training data in memory to rebuild from, so we
-                        # can't transparently recover here.
-                        raise RuntimeError(
-                            "The referenced fitted model is no longer available "
-                            "on the server and this estimator has no in-memory "
-                            "training data to refit (it was created via "
-                            "`load_model`). Re-create it by calling `fit(X, y)`."
-                        ) from exc
-                    self.model_id_ = InferenceClient.fit(
-                        self._last_train_X,
-                        self._last_train_y,
-                        task_config=task_config,
-                        paper_version=self.paper_version,
-                        thinking_mode=self.thinking_mode,
-                        thinking_effort=self.thinking_effort,
-                        thinking_timeout_s=self.thinking_timeout_s,
-                        thinking_metric=self.thinking_metric,
-                        client_options=self.client_options,
-                        description=self._last_train_set_description,
-                    )
+            return InferenceClient.predict(
+                X_clean,
+                fitted_train_set_id=self.model_id_,
+                task_config=task_config,
+                client_options=self.client_options,
+            )
 
         result = run_task(predict_task, "Predicting")
         # Unpack and store metadata
@@ -720,7 +693,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         thinking_effort: ThinkingEffort | None = None,
         thinking_timeout_s: float | None = None,
         thinking_metric: str | None = None,
-        fit_call_mode: ApiCallMode = ApiCallMode.AUTO,
+        api_mode: ApiMode = ApiMode.AUTO,
         client_options: ClientOptions | None = None,
     ):
         """Construct a TabPFN regressor.
@@ -769,6 +742,15 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         categorical_features_indices: list[int] or None, default=None
             The indices of the columns that should be treated as categorical.
             If None, the model infers which columns are categorical.
+        fit_mode: {"fit_preprocessors", "fit_with_cache"} or None, default=None
+            Controls what the server persists at fit time. None defers to the
+            server default, which is "fit_preprocessors".
+            "fit_preprocessors" fits only the preprocessing state, so every
+            predict re-runs the forward pass from the uploaded train set.
+            "fit_with_cache" additionally builds and persists a server-side KV
+            cache keyed by the resulting fitted-train-set id; later predicts
+            against that id (see `save_model` / `load_model`) are served from
+            the cache instead of re-fitting.
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
@@ -797,15 +779,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
 
             Aliases "mse", "rmse", "mae", "mape", "smape" are also
             accepted.
-        fit_mode: {"fit_preprocessors", "fit_with_cache"} or None, default=None
-            Controls what the server persists at fit time. None defers to the
-            server default, which is "fit_preprocessors".
-            "fit_preprocessors" fits only the preprocessing state, so every
-            predict re-runs the forward pass from the uploaded train set.
-            "fit_with_cache" additionally builds and persists a server-side KV
-            cache keyed by the resulting fitted-train-set id; later predicts
-            against that id (see `save_model` / `load_model`) are served from
-            the cache instead of re-fitting.
+        api_mode: ApiMode, default=ApiMode.AUTO
+            Controls how the client calls the server.
+            SYNC: the client waits for the server to complete the request before returning.
+            ASYNC: the client returns immediately and the server completes the request in the background.
+            AUTO: the client automatically determines the best mode to use based on the request.
         client_options : ClientOptions, default=None
             Client specific options (e.g. timeout, headers).
         """
@@ -824,7 +802,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.thinking_effort = thinking_effort
         self.thinking_timeout_s = thinking_timeout_s
         self.thinking_metric = thinking_metric
-        self.fit_call_mode = fit_call_mode
+        self.api_mode = api_mode
         self.client_options = client_options or ClientOptions()
 
         self._last_trace_id = None
@@ -849,13 +827,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self._validate_targets(y)
         X_clean = _clean_text_features(X)
 
-        tabpfn_systems = _resolve_tabpfn_systems(self.paper_version, self.thinking_mode)
-        thinking_config = _resolve_thinking_config(
+        task_config = _build_fit_task_config(tabpfn_config)
+        tabpfn_systems = _build_tabpfn_systems(self.paper_version, self.thinking_mode)
+        thinking_config = _build_thinking_config(
             enabled=self.thinking_mode,
             effort=self.thinking_effort,
             timeout_secs=self.thinking_timeout_s,
             metric=self.thinking_metric,
-            tabpfn_config=tabpfn_config,
         )
 
         if Config.use_server:
@@ -873,10 +851,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                 return InferenceClient.fit(
                     X_clean,
                     y,
-                    task=self._TASK,
+                    task_config=task_config,
                     tabpfn_systems=tabpfn_systems,
                     thinking_config=thinking_config,
-                    call_mode=self.fit_call_mode,
+                    api_mode=self.api_mode,
                     client_options=self.client_options,
                     description=description,
                 )
@@ -898,7 +876,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         output_type: Literal[
             "mean", "median", "mode", "quantiles", "full", "main"
         ] = "mean",
-        quantiles: list[float] | None = None,
+        quantiles: list[float] | None = None,  # NOTE: captured in _get_predict_params()
     ) -> np.ndarray | list[np.ndarray] | dict[str, np.ndarray]:
         """Predict regression target for X.
 
@@ -962,45 +940,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             self.client_options.headers["sentry-trace"] = self._last_trace_id
 
         def predict_task() -> PredictionResult:
-            last_exc = None
-            refit_attempts = 0
-            while True:
-                if refit_attempts > 1:
-                    raise RuntimeError(
-                        "Failed to predict after refitting"
-                    ) from last_exc
-                try:
-                    return InferenceClient.predict(
-                        X_clean,
-                        fitted_train_set_id=self.model_id_,
-                        task_config=task_config,
-                        client_options=self.client_options,
-                    )
-                except NeedsRefittingError as exc:
-                    last_exc = exc
-                    refit_attempts += 1
-                    if self._last_train_X is None or self._last_train_y is None:
-                        # A load-by-id estimator (constructed via `load_model`)
-                        # has no training data in memory to rebuild from, so we
-                        # can't transparently recover here.
-                        raise RuntimeError(
-                            "The referenced fitted model is no longer available "
-                            "on the server and this estimator has no in-memory "
-                            "training data to refit (it was created via "
-                            "`load_model`). Re-create it by calling `fit(X, y)`."
-                        ) from exc
-                    self.model_id_ = InferenceClient.fit(
-                        self._last_train_X,
-                        self._last_train_y,
-                        task_config=task_config,
-                        paper_version=self.paper_version,
-                        thinking_mode=self.thinking_mode,
-                        thinking_effort=self.thinking_effort,
-                        thinking_timeout_s=self.thinking_timeout_s,
-                        thinking_metric=self.thinking_metric,
-                        client_options=self.client_options,
-                        description=self._last_train_set_description,
-                    )
+            return InferenceClient.predict(
+                X_clean,
+                fitted_train_set_id=self.model_id_,
+                task_config=task_config,
+                client_options=self.client_options,
+            )
 
         result = run_task(predict_task, "Predicting")
         # Unpack and store metadata
@@ -1241,7 +1186,22 @@ def run_task(task: Callable, message: str, with_spinner: bool = True) -> Any:
     return result
 
 
-def _resolve_tabpfn_systems(
+# XXX: 2 TabPFNConfig -> ClassifierTabPFNConfig | RegressorTabPFNConfig 3
+def _build_fit_task_config(
+    tabpfn_config: ClassifierTabPFNConfig | RegressorTabPFNConfig,
+) -> FitTaskConfig:
+    match tabpfn_config:
+        case ClassifierTabPFNConfig():
+            return ClassifierFitTaskConfig(
+                tabpfn_config=tabpfn_config,
+            )
+        case RegressorTabPFNConfig():
+            return RegressorFitTaskConfig(
+                tabpfn_config=tabpfn_config,
+            )
+
+
+def _build_tabpfn_systems(
     paper_version: bool, thinking_mode: bool
 ) -> list[TabPFNSystem]:
     if paper_version and thinking_mode:
@@ -1255,32 +1215,21 @@ def _resolve_tabpfn_systems(
     return ["preprocessing", "text"]
 
 
-def _resolve_thinking_config(
+def _build_thinking_config(
     *,
     enabled: bool,
     effort: str | None = None,
     timeout_secs: float | None = None,
     metric: str | None = None,
-    tabpfn_config: ClassifierTabPFNConfig | RegressorTabPFNConfig,
 ) -> ThinkingConfig | None:
-    if enabled:
-        match tabpfn_config:
-            case ClassifierTabPFNConfig():
-                return ClassifierThinkingConfig(
-                    effort=effort,
-                    timeout_secs=timeout_secs,
-                    metric=metric,
-                    tabpfn_config=tabpfn_config,
-                )
-            case RegressorTabPFNConfig():
-                return RegressorThinkingConfig(
-                    effort=effort,
-                    timeout_secs=timeout_secs,
-                    metric=metric,
-                    tabpfn_config=tabpfn_config,
-                )
-    if effort is not None:
-        raise ValueError(
-            "When thinking effort is provided, thinking mode must be enabled"
-        )
-    return None
+    if not enabled:
+        if any(v is not None for v in [effort, timeout_secs, metric]):
+            raise ValueError(
+                "When thinking mode is disabled, effort, timeout_secs, and metric must be None"
+            )
+        return None
+    return ThinkingConfig(
+        effort=effort,
+        timeout_secs=timeout_secs,
+        metric=metric,
+    )
