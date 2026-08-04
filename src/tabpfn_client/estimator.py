@@ -3,11 +3,9 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import sys
 import time
-from pathlib import Path
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, ClassVar, Literal, cast, overload
@@ -16,7 +14,6 @@ from uuid import UUID
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, ValidationError
 from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.utils import column_or_1d
 from sklearn.utils.multiclass import check_classification_targets
@@ -85,104 +82,8 @@ FALLBACK_PREDICT_ROW_PAIRS_BUDGET = 250_000 * 1_000_000
 
 _VALID_THINKING_EFFORT_LEVELS = frozenset({"medium", "high"})
 
-# Bumped when the shape of the `_ModelHandle` schema changes in a way pydantic
-# validation cannot otherwise catch (e.g. renamed fields, changed semantics).
-_MODEL_HANDLE_VERSION = 1
-
 # Transport params are persisted when saving the model.
 _TRANSPORT_PARAMS = frozenset({"client_options"})
-
-
-class _ModelHandle(BaseModel):
-    """Serialized reference to a fitted (server-side) TabPFN model.
-
-    Structural validation (missing keys, wrong types, etc.) is done by
-    pydantic on `load_model`; `format_version` remains as an explicit gate
-    for schema evolution that pydantic cannot see (e.g. semantic changes
-    to fields whose shape hasn't changed).
-    """
-
-    format_version: int
-    task: PredictionTask
-    model_id: UUID
-    params: dict[str, Any]
-    classes: list[Any] | None = None  # classification only
-
-
-def _read_handle_data(source: dict[str, Any] | str | Path) -> dict[str, Any]:
-    """Accept either an in-memory handle dict or a path to a JSON file
-    produced by `save_model()`."""
-    if isinstance(source, dict):
-        return source
-    return json.loads(Path(source).read_text())
-
-
-def _build_model_handle(
-    estimator: TabPFNClassifier | TabPFNRegressor,
-    task: PredictionTask,
-    path: str | Path | None,
-) -> dict[str, Any] | Path:
-    """Shared implementation of `save_model()` for both estimators."""
-    check_is_fitted(estimator)
-    params = estimator.get_params(deep=False)
-    # `client_options` is runtime-only (timeouts, auth/trace headers) and not
-    # JSON-serializable; drop it so the handle stays portable.
-    for param in _TRANSPORT_PARAMS:
-        params.pop(param, None)
-    classes: list[Any] | None = None
-    if isinstance(estimator, TabPFNClassifier):
-        classes = estimator.classes_.tolist()
-    handle = _ModelHandle(
-        format_version=_MODEL_HANDLE_VERSION,
-        task=task,
-        model_id=estimator.model_id_,
-        params=params,
-        classes=classes,
-    )
-    # NOTE: We always treat None as "unset", therefore we want to exclude None values
-    # to avoid overriding future defaults.
-    dumped = handle.model_dump(mode="json", exclude_none=True)
-    if path is None:
-        return dumped
-    out = Path(path)
-    out.write_text(json.dumps(dumped, indent=2))
-    return out
-
-
-def _load_model_handle_for(
-    cls: type[TabPFNClassifier | TabPFNRegressor],
-    source: dict[str, Any] | str | Path,
-    task: PredictionTask,
-) -> _ModelHandle:
-    """Read + validate a `save_model()` handle for the target estimator class.
-
-    Pydantic catches structural problems (missing keys, wrong types, bad
-    enum values); `format_version` is checked separately as an explicit
-    schema-evolution gate; task mismatch is caught last with a clear error.
-    """
-    raw = _read_handle_data(source)
-    try:
-        handle = _ModelHandle.model_validate(raw)
-    except ValidationError as exc:
-        raise ValueError(
-            f"Malformed model handle for {cls.__name__} "
-            f"(may be from an unsupported format version): {exc}"
-        ) from exc
-    if handle.format_version != _MODEL_HANDLE_VERSION:
-        raise ValueError(
-            f"Unsupported model handle version {handle.format_version!r}; "
-            f"expected {_MODEL_HANDLE_VERSION}."
-        )
-    if handle.task is not task:
-        raise ValueError(
-            f"Cannot load a {handle.task.value!r} model into {cls.__name__}."
-        )
-    if handle.task == PredictionTask.CLASSIFICATION:
-        if handle.classes is None:
-            raise ValueError(
-                f"Classifier handle is missing 'classes'; cannot reconstruct {cls.__name__}."
-            )
-    return handle
 
 
 class TabPFNModelSelection:
@@ -609,42 +510,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 f"{URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE}"
             )
 
-    @overload
-    def save_model(self, path: None = None) -> dict[str, Any]: ...
-    @overload
-    def save_model(self, path: str | Path) -> Path: ...
-    def save_model(self, path: str | Path | None = None) -> dict[str, Any] | Path:
-        """Serialize a portable reference to the fitted (server-side) model.
-
-        The handle captures the server-side fitted-train-set id (`model_id_`),
-        the estimator hyperparameters, and the class labels — everything
-        `load_model()` needs to reconstruct an equivalent classifier. No
-        training data leaves the
-        client; predictions run against the model referenced by the id, so this
-        is most useful with `fit_mode="fit_with_cache"`.
-
-        Parameters
-        ----------
-        path : str, Path or None, default=None
-            If given, the handle is written to this path as JSON and the path
-            is returned. If None, the handle dict is returned directly.
-        """
-        return _build_model_handle(self, task=PredictionTask.CLASSIFICATION, path=path)
-
-    @classmethod
-    def load_model(cls, handle: dict[str, Any] | str | Path) -> TabPFNClassifier:
-        """Reconstruct a classifier from a `save_model()` handle (dict or path).
-
-        The resulting estimator is already fitted (it references the server-side
-        model by id) and restores `classes_`, so it can `predict` without
-        calling `fit()` again.
-        """
-        data = _load_model_handle_for(cls, handle, task=PredictionTask.CLASSIFICATION)
-        est = cls(**data.params)  # NOTE: An extra (removed) param will fail-close.
-        est.model_id_ = data.model_id
-        est.classes_ = np.asarray(data.classes)
-        return est
-
 
 class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
@@ -994,39 +859,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         y_ = column_or_1d(y, warn=True)
         if sum(pd.isnull(y_)) > 0:
             raise ValueError("Input y contains NaN.")
-
-    @overload
-    def save_model(self, path: None = None) -> dict[str, Any]: ...
-    @overload
-    def save_model(self, path: str | Path) -> Path: ...
-    def save_model(self, path: str | Path | None = None) -> dict[str, Any] | Path:
-        """Serialize a portable reference to the fitted (server-side) model.
-
-        The handle captures the server-side fitted-train-set id (`model_id_`)
-        and the estimator hyperparameters — everything `load_model()` needs to
-        reconstruct an equivalent regressor. No training data leaves the
-        client; predictions run against the model referenced by the id, so this
-        is most useful with `fit_mode="fit_with_cache"`.
-
-        Parameters
-        ----------
-        path : str, Path or None, default=None
-            If given, the handle is written to this path as JSON and the path
-            is returned. If None, the handle dict is returned directly.
-        """
-        return _build_model_handle(self, task=PredictionTask.REGRESSION, path=path)
-
-    @classmethod
-    def load_model(cls, handle: dict[str, Any] | str | Path) -> TabPFNRegressor:
-        """Reconstruct a regressor from a `save_model()` handle (dict or path).
-
-        The resulting estimator is already fitted (it references the server-side
-        model by id), so it can `predict` without calling `fit()` again.
-        """
-        data = _load_model_handle_for(cls, handle, task=PredictionTask.REGRESSION)
-        est = cls(**data.params)
-        est.model_id_ = data.model_id
-        return est
 
 
 def validate_train_set(

@@ -83,68 +83,6 @@ class TestModelIdFittedState(unittest.TestCase):
         )
 
 
-class TestSaveLoadModel(unittest.TestCase):
-    def test_regressor_round_trip_dict(self):
-        reg = TabPFNRegressor(n_estimators=4)
-        reg.model_id_ = UUID(_MODEL_ID)
-        handle = reg.save_model()
-        self.assertEqual(handle["task"], "regression")
-        self.assertEqual(handle["model_id"], _MODEL_ID)
-        # `model_id_` is fitted state, not a constructor param, so it must not
-        # leak into the params blob.
-        self.assertNotIn("model_id", handle["params"])
-        self.assertNotIn("client_options", handle["params"])
-
-        loaded = TabPFNRegressor.load_model(handle)
-        self.assertTrue(loaded.__sklearn_is_fitted__())
-        self.assertEqual(loaded.model_id_, UUID(_MODEL_ID))
-        self.assertEqual(loaded.get_params()["n_estimators"], 4)
-
-    def test_classifier_round_trip_restores_classes(self):
-        clf = TabPFNClassifier()
-        clf.model_id_ = UUID(_MODEL_ID)
-        clf.classes_ = np.array([0, 1, 2])
-        loaded = TabPFNClassifier.load_model(clf.save_model())
-        self.assertTrue(loaded.__sklearn_is_fitted__())
-        self.assertEqual(loaded.model_id_, UUID(_MODEL_ID))
-        np.testing.assert_array_equal(loaded.classes_, np.array([0, 1, 2]))
-
-    def test_round_trip_via_file(self):
-        import tempfile
-        from pathlib import Path
-
-        reg = TabPFNRegressor()
-        reg.model_id_ = UUID(_MODEL_ID)
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / "model.json"
-            returned = reg.save_model(path)
-            self.assertEqual(Path(returned), path)
-            self.assertTrue(path.exists())
-            loaded = TabPFNRegressor.load_model(path)
-        self.assertEqual(loaded.model_id_, UUID(_MODEL_ID))
-
-    def test_load_model_task_mismatch_raises(self):
-        clf = TabPFNClassifier()
-        clf.model_id_ = UUID(_MODEL_ID)
-        clf.classes_ = np.array([0, 1])
-        with self.assertRaises(ValueError):
-            TabPFNRegressor.load_model(clf.save_model())
-
-    def test_save_model_unfitted_raises(self):
-        from sklearn.exceptions import NotFittedError
-
-        with self.assertRaises(NotFittedError):
-            TabPFNRegressor().save_model()
-
-    def test_unsupported_handle_version_raises(self):
-        reg = TabPFNRegressor()
-        reg.model_id_ = UUID(_MODEL_ID)
-        handle = reg.save_model()
-        handle["format_version"] = 999
-        with self.assertRaises(ValueError):
-            TabPFNRegressor.load_model(handle)
-
-
 class TestSklearnCompatibility(unittest.TestCase):
     def test_clone_drops_fitted_state(self):
         # `model_id_` is fitted state, not a constructor param, so `clone`
