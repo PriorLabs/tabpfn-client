@@ -199,7 +199,7 @@ class ServiceClient(Singleton):
         return cls._access_token
 
     @classmethod
-    def get_api_settings(cls) -> GetSettingsResponse | None:
+    def get_settings(cls) -> GetSettingsResponse | None:
         """Fetch and cache dataset limits. The cache expires after 1 hour.
 
         Not thread-safe, but concurrent calls are benign: duplicates fetch the
@@ -211,7 +211,7 @@ class ServiceClient(Singleton):
         ):
             return cls._api_settings
         try:
-            response = cls.httpx_client.get("/tabpfn/get_api_settings")
+            response = cls.httpx_client.get("/tabpfn/get_settings")
             response.raise_for_status()
             cls._api_settings = GetSettingsResponse.model_validate(response.json())
             cls._api_settings_ts = time.monotonic()
@@ -229,7 +229,7 @@ class ServiceClient(Singleton):
         server is unreachable.
         """
         opts = get_opts()
-        api_settings = cls.get_api_settings()
+        api_settings = cls.get_settings()
         server = api_settings.async_settings if api_settings is not None else None
 
         def resolve(opt_name: str, server_value: Any) -> Any:
@@ -310,19 +310,20 @@ class ServiceClient(Singleton):
         df_X = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
         df_y = cast(pd.DataFrame, y if isinstance(y, pd.DataFrame) else pd.DataFrame(y))
 
-        total_mem_usage = None
-        api_settings = cls.get_api_settings()
+        total_mem_usage = 0
+        api_settings = cls.get_settings()
 
-        if api_settings is not None:
-            total_mem_usage = 0
-            for name, df in [("x_train", df_X), ("y_train", df_y)]:
-                mem_usage = df.memory_usage(deep=True).sum()
-                total_mem_usage += mem_usage
-                if mem_usage > api_settings.dataset_max_size_bytes:
-                    raise ValueError(
-                        f"In-memory size of {name} ({mem_usage} bytes) exceeds "
-                        f"the server limit of {api_settings.dataset_max_size_bytes} bytes."
-                    )
+        for name, df in [("x_train", df_X), ("y_train", df_y)]:
+            mem_usage = df.memory_usage(deep=True).sum()
+            total_mem_usage += mem_usage
+            if (
+                api_settings is not None
+                and mem_usage > api_settings.dataset_max_size_bytes
+            ):
+                raise ValueError(
+                    f"In-memory size of {name} ({mem_usage} bytes) exceeds "
+                    f"the server limit of {api_settings.dataset_max_size_bytes} bytes."
+                )
 
         match api_mode:
             case ApiMode.SYNC:
@@ -330,15 +331,10 @@ class ServiceClient(Singleton):
             case ApiMode.ASYNC:
                 use_async = True
             case ApiMode.AUTO:
-                use_async = True
                 trainset_size_threshold = (
                     cls._resolve_async_settings().use_above_trainset_size_bytes
                 )
-                if (
-                    total_mem_usage is not None
-                    and total_mem_usage <= trainset_size_threshold
-                ):
-                    use_async = False
+                use_async = total_mem_usage > trainset_size_threshold
 
         x_bytes, x_crc32c_hash = _serialize_to_parquet(df_X)
         y_bytes, y_crc32c_hash = _serialize_to_parquet(df_y)
@@ -622,7 +618,7 @@ class ServiceClient(Singleton):
 
         df_x_test = x_test if isinstance(x_test, pd.DataFrame) else pd.DataFrame(x_test)
 
-        api_settings = cls.get_api_settings()
+        api_settings = cls.get_settings()
         if api_settings is not None:
             mem_usage = df_x_test.memory_usage(deep=True).sum()
             if mem_usage > api_settings.dataset_max_size_bytes:

@@ -50,9 +50,7 @@ def _validate(
     train_rows: int | None = None,
     limits: GetSettingsResponse | None = None,
 ):
-    with patch.object(
-        ServiceClient, "get_api_settings", return_value=limits or _limits()
-    ):
+    with patch.object(ServiceClient, "get_settings", return_value=limits or _limits()):
         validate_test_set(_X(n_test_rows), None, train_rows=train_rows)
 
 
@@ -86,5 +84,5 @@ def test_smaller_budget_shrinks_adaptive_limit():
 
 
 def test_no_limits_available_skips_validation():
-    with patch.object(ServiceClient, "get_api_settings", return_value=None):
+    with patch.object(ServiceClient, "get_settings", return_value=None):
         validate_test_set(_X(2_000_000), None, train_rows=1_000_000)

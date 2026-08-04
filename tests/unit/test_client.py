@@ -623,7 +623,7 @@ class TestServiceClient(unittest.TestCase):
         self.assertEqual(prepare_route.call_count, 2)
         self.assertEqual(predict_route.call_count, 2)
 
-    def test_get_api_settings_uses_cache(self):
+    def test_get_settings_uses_cache(self):
         ServiceClient._api_settings = None
         ServiceClient._api_settings_ts = 0.0
 
@@ -639,15 +639,15 @@ class TestServiceClient(unittest.TestCase):
         with patch.object(
             ServiceClient.httpx_client, "get", return_value=response
         ) as m:
-            first = ServiceClient.get_api_settings()
-            second = ServiceClient.get_api_settings()
+            first = ServiceClient.get_settings()
+            second = ServiceClient.get_settings()
 
         assert first is not None
         self.assertEqual(first.dataset_max_size_bytes, 456)
         self.assertIs(first, second)
         self.assertEqual(m.call_count, 1)
 
-    def test_get_api_settings_returns_stale_value_on_failure(self):
+    def test_get_settings_returns_stale_value_on_failure(self):
         stale = GetSettingsResponse(
             **_api_settings_payload(
                 max_cells=100,
@@ -662,7 +662,7 @@ class TestServiceClient(unittest.TestCase):
         with patch.object(
             ServiceClient.httpx_client, "get", side_effect=RuntimeError("boom")
         ):
-            result = ServiceClient.get_api_settings()
+            result = ServiceClient.get_settings()
 
         self.assertIs(result, stale)
 
@@ -718,7 +718,7 @@ class TestServiceClientPredictionNormalization(unittest.TestCase):
             ),
         )
 
-        with patch.object(ServiceClient, "get_api_settings", return_value=None):
+        with patch.object(ServiceClient, "get_settings", return_value=None):
             with patch.object(ServiceClient, "_upload_to_gcs"):
                 pred = ServiceClient.predict(
                     fitted_train_set_id=UUID("00000000-0000-0000-0000-000000000002"),

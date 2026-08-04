@@ -98,7 +98,7 @@ def init(use_server=True):
             UserAuthenticationClient.retrieve_greeting_messages()
         )
 
-        _ = ServiceClient.get_api_settings()
+        _ = ServiceClient.get_settings()
 
         Config.use_server = True
         Config.is_initialized = True

@@ -49,7 +49,7 @@ class TestFitMode(unittest.TestCase):
         reg = TabPFNRegressor(fit_mode=FitMode.FIT_WITH_CACHE)
         reg.model_id_ = UUID(_MODEL_ID)
         with patch("tabpfn_client.estimator.init"):
-            with patch.object(ServiceClient, "get_api_settings", return_value=None):
+            with patch.object(ServiceClient, "get_settings", return_value=None):
                 with patch.object(
                     InferenceClient, "predict", return_value=_regressor_prediction()
                 ) as mock_predict:
@@ -71,7 +71,7 @@ class TestModelIdFittedState(unittest.TestCase):
         reg = TabPFNRegressor()
         reg.model_id_ = UUID(_MODEL_ID)
         with patch("tabpfn_client.estimator.init"):
-            with patch.object(ServiceClient, "get_api_settings", return_value=None):
+            with patch.object(ServiceClient, "get_settings", return_value=None):
                 with patch.object(InferenceClient, "fit") as mock_fit:
                     with patch.object(
                         InferenceClient, "predict", return_value=_regressor_prediction()
@@ -182,7 +182,7 @@ class TestSklearnCompatibility(unittest.TestCase):
         reg = TabPFNRegressor()
         reg.model_id_ = UUID(_MODEL_ID)
         with patch("tabpfn_client.estimator.init") as mock_init:
-            with patch.object(ServiceClient, "get_api_settings", return_value=None):
+            with patch.object(ServiceClient, "get_settings", return_value=None):
                 with patch.object(
                     InferenceClient, "predict", return_value=_regressor_prediction()
                 ):

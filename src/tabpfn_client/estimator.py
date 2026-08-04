@@ -593,7 +593,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.classes_ = np.unique(y_)
 
         # TODO: these things should ideally be shared with the local package
-        api_settings = ServiceClient.get_api_settings()
+        api_settings = ServiceClient.get_settings()
         if api_settings is None:
             return
 
@@ -1039,7 +1039,7 @@ def validate_train_set(
         if X.shape[0] != y.shape[0]:
             raise ValueError("X and y must have the same number of samples")
 
-    api_settings = ServiceClient.get_api_settings()
+    api_settings = ServiceClient.get_settings()
     if api_settings is None:
         return
 
@@ -1070,7 +1070,7 @@ def validate_test_set(
 ):
     """Check the integrity of the test data."""
 
-    api_settings = ServiceClient.get_api_settings()
+    api_settings = ServiceClient.get_settings()
     if api_settings is None:
         return
 

@@ -123,7 +123,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_api_settings").respond(
+        mock_server.router.get("/tabpfn/get_settings").respond(
             200,
             json=_api_settings_payload(),
         )
@@ -169,7 +169,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_api_settings").respond(
+        mock_server.router.get("/tabpfn/get_settings").respond(
             200,
             json=_api_settings_payload(),
         )
@@ -214,7 +214,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_api_settings").respond(
+        mock_server.router.get("/tabpfn/get_settings").respond(
             200,
             json=_api_settings_payload(),
         )
@@ -297,7 +297,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_api_settings").respond(
+        mock_server.router.get("/tabpfn/get_settings").respond(
             200,
             json=_api_settings_payload(),
         )

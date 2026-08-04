@@ -226,7 +226,7 @@ def test_sklearn_compatible(
             patch.object(
                 estimator_module.InferenceClient, "predict", side_effect=fake.predict
             ),
-            patch.object(ServiceClient, "get_api_settings", return_value=None),
+            patch.object(ServiceClient, "get_settings", return_value=None),
         ):
             check_estimator(
                 estimator(),
