@@ -302,6 +302,10 @@ class ServiceClient(Singleton):
         fitted_train_set_id: UUID
             The unique ID of the fitted train set in the server.
         """
+        # Validate here rather than in the estimators: sklearn requires
+        # hyperparameters to be stored as-given (set_params/GridSearchCV
+        # bypass __init__ entirely).
+        api_mode = ApiMode(api_mode)
         client_options = client_options or ClientOptions()
         tabpfn_systems_: list[TabPFNSystem | str] = list(tabpfn_systems)
 

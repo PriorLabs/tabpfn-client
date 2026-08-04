@@ -484,6 +484,23 @@ class TestServiceClient(unittest.TestCase):
         self.assertEqual(prepare_route.call_count, 2)
         self.assertEqual(fit_route.call_count, 2)
 
+    def test_fit_rejects_invalid_api_mode_before_any_request(self):
+        # `api_mode` is coerced through the ApiMode enum up front, so a typo
+        # fails fast with a clear ValueError instead of leaving `use_async`
+        # unbound after the train set was already uploaded. Deliberately no
+        # mock server: the error must fire before any request is attempted.
+        for bad_mode in ("SYNC", "asdasd"):
+            with self.assertRaises(ValueError, msg=bad_mode):
+                ServiceClient.fit(
+                    self.X_train,
+                    self.y_train,
+                    tabpfn_systems=["preprocessing", "text"],
+                    task_config=ClassifierFitTaskConfig(),
+                    # cast: deliberately smuggle a bad value past the ApiMode
+                    # annotation to exercise the runtime check.
+                    api_mode=cast(Any, bad_mode),
+                )
+
     @with_mock_server()
     def test_fit_async_mode_polls_until_completed(self, mock_server):
         # In async mode POST /tabpfn/fit returns immediately with status=pending;
