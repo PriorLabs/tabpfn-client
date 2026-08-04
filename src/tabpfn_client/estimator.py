@@ -1060,6 +1060,7 @@ def _build_tabpfn_systems(
 
 
 def _resolve_thinking_mode(enabled: bool, effort: str | None = None) -> bool:
+    # To honour previous contract, setting effort alone is enough to enable thinking.
     if enabled:
         return True
     if effort:
