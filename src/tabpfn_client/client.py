@@ -270,7 +270,7 @@ class ServiceClient(Singleton):
         y: pd.Series | np.ndarray,
         # start: fit request
         task_config: FitTaskConfig,
-        tabpfn_systems: list[TabPFNSystem] | None = None,
+        tabpfn_systems: list[TabPFNSystem],
         thinking_config: ThinkingConfig | None = None,
         # end: fit request
         api_mode: ApiMode = ApiMode.AUTO,
@@ -305,10 +305,7 @@ class ServiceClient(Singleton):
             The unique ID of the fitted train set in the server.
         """
         client_options = client_options or ClientOptions()
-
-        tabpfn_systems_: list[TabPFNSystem | str] = ["preprocessing", "text"]
-        if tabpfn_systems is not None:  # make sure [] paper_version is not discarded
-            tabpfn_systems_ = list(tabpfn_systems)
+        tabpfn_systems_: list[TabPFNSystem | str] = list(tabpfn_systems)
 
         df_X = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
         df_y = cast(pd.DataFrame, y if isinstance(y, pd.DataFrame) else pd.DataFrame(y))

@@ -274,6 +274,7 @@ class TestServiceClient(unittest.TestCase):
             fitted_train_set_id = ServiceClient.fit(
                 self.X_train,
                 self.y_train,
+                tabpfn_systems=["preprocessing", "text"],
                 task_config=ClassifierFitTaskConfig(),
             )
             pred = ServiceClient.predict(
@@ -469,11 +470,13 @@ class TestServiceClient(unittest.TestCase):
             fitted_train_set_id_1 = ServiceClient.fit(
                 self.X_train,
                 self.y_train,
+                tabpfn_systems=["preprocessing", "text"],
                 task_config=ClassifierFitTaskConfig(),
             )
             fitted_train_set_id_2 = ServiceClient.fit(
                 self.X_train,
                 self.y_train,
+                tabpfn_systems=["preprocessing", "text"],
                 task_config=ClassifierFitTaskConfig(),
             )
 
@@ -532,6 +535,7 @@ class TestServiceClient(unittest.TestCase):
             result = ServiceClient.fit(
                 self.X_train,
                 self.y_train,
+                tabpfn_systems=["preprocessing", "text"],
                 task_config=ClassifierFitTaskConfig(),
             )
 
@@ -576,6 +580,7 @@ class TestServiceClient(unittest.TestCase):
                 ServiceClient.fit(
                     self.X_train,
                     self.y_train,
+                    tabpfn_systems=["preprocessing", "text"],
                     task_config=ClassifierFitTaskConfig(),
                 )
 

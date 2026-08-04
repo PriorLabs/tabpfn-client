@@ -1219,11 +1219,7 @@ def _build_thinking_config(
     timeout_secs: float | None = None,
     metric: str | None = None,
 ) -> ThinkingConfig | None:
-    if not enabled:
-        if any(v is not None for v in [effort, timeout_secs, metric]):
-            raise ValueError(
-                "When thinking mode is disabled, effort, timeout_secs, and metric must be None"
-            )
+    if not enabled and all(v is None for v in [effort, timeout_secs, metric]):
         return None
     return ThinkingConfig(
         effort=effort,
