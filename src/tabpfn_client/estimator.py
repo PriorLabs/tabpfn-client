@@ -355,9 +355,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
         validate_train_set(X, y)
         X_clean = _clean_text_features(X)
-        classes = self._validate_targets_and_classes(y) # XXX
+        classes = self._validate_targets_and_classes(y)  # XXX
 
-        self.thinking_mode = _resolve_thinking_mode(self.thinking_mode, self.thinking_effort)
+        self.thinking_mode = _resolve_thinking_mode(
+            self.thinking_mode, self.thinking_effort
+        )
         task_config = _build_fit_task_config(tabpfn_config)
         tabpfn_systems = _build_tabpfn_systems(self.paper_version, self.thinking_mode)
         thinking_config = _build_thinking_config(
@@ -706,7 +708,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self._validate_targets(y)
         X_clean = _clean_text_features(X)
 
-        self.thinking_mode = _resolve_thinking_mode(self.thinking_mode, self.thinking_effort)
+        self.thinking_mode = _resolve_thinking_mode(
+            self.thinking_mode, self.thinking_effort
+        )
         task_config = _build_fit_task_config(tabpfn_config)
         tabpfn_systems = _build_tabpfn_systems(self.paper_version, self.thinking_mode)
         thinking_config = _build_thinking_config(
