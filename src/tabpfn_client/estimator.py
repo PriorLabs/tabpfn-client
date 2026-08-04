@@ -79,7 +79,7 @@ THINKING_TIMEOUT_MAX_S = 40 * 60
 # Prediction compute scales with n_train_rows * n_test_rows, so the API caps
 # their product. The effective per-call test row limit therefore shrinks as
 # the fitted training set grows (e.g. 1M training rows -> 250k test rows).
-# The server sends its budget via get_model_limits (`predict_row_pairs_budget`);
+# The server sends its budget via get_settings (`predict_row_pairs_budget`);
 # this is only the fallback for servers that predate that field.
 FALLBACK_PREDICT_ROW_PAIRS_BUDGET = 250_000 * 1_000_000
 

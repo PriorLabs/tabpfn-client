@@ -239,7 +239,7 @@ Usage limits reset daily at 00:00:00 UTC.
 
 ### Size Limitations
 
-Per-model size limits (rows, columns, cells, classes) are enforced by the server and are returned from `/tabpfn/get_model_limits`. The client validates against the most permissive limit at `fit` time and against the selected model's limit at `predict` time, raising `ValueError` before the request is sent.
+Per-model size limits (rows, columns, cells, classes) are enforced by the server and are returned from `/tabpfn/get_settings`. The client validates against the most permissive limit at `fit` time and against the selected model's limit at `predict` time, raising `ValueError` before the request is sent.
 
 In particular, regression with `output_type="full"` has a stricter cap on the number of test rows than regular regression predictions; split the test set across calls if you hit it.
 
