@@ -406,9 +406,9 @@ class ServiceClient(Singleton):
             fit_resp = cls._submit_fit_job(
                 req=SubmitFitJobRequest(
                     train_set_upload_id=prepare_resp.train_set_upload_id,
-                    task_config=task_config,  # XXX: 1 TabpfnConfig None?
+                    task_config=task_config,
                     tabpfn_systems=tabpfn_systems_,
-                    thinking_config=thinking_config,  # XXX: 1 None?
+                    thinking_config=thinking_config,
                 ),
                 timeout=client_options.timeout,
                 headers=client_options.headers,

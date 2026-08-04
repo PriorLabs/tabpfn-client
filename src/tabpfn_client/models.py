@@ -4,6 +4,11 @@ import numpy as np
 from typing import Any
 from tabpfn_client.options import get_opts
 
+from tabpfn_client.api_models import ClassifierTabPFNConfig, RegressorTabPFNConfig
+
+
+TabPFNConfig = ClassifierTabPFNConfig | RegressorTabPFNConfig
+
 
 class ApiMode(str, Enum):
     AUTO = "auto"

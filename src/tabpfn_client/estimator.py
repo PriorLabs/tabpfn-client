@@ -47,7 +47,7 @@ from tabpfn_client.api_models import (
     ThinkingEffort,
     TabPFNSystem,
 )
-from tabpfn_client.models import ApiMode
+from tabpfn_client.models import ApiMode, TabPFNConfig
 from tabpfn_client.options import get_opts
 
 try:
@@ -1186,10 +1186,7 @@ def run_task(task: Callable, message: str, with_spinner: bool = True) -> Any:
     return result
 
 
-# XXX: 2 TabPFNConfig -> ClassifierTabPFNConfig | RegressorTabPFNConfig 3
-def _build_fit_task_config(
-    tabpfn_config: ClassifierTabPFNConfig | RegressorTabPFNConfig,
-) -> FitTaskConfig:
+def _build_fit_task_config(tabpfn_config: TabPFNConfig) -> FitTaskConfig:
     match tabpfn_config:
         case ClassifierTabPFNConfig():
             return ClassifierFitTaskConfig(

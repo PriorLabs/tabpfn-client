@@ -13,10 +13,10 @@
 # default smart mode would land known values in the wider branch.
 # Discriminator `const` fields are intentionally left non-forward-compatible.
 #
-# Nullified-defaults note: every field with a literal default is projected
-# as `<type> | None = None`. The server's concrete defaults are intentionally
-# dropped so an omitted (None) value lets the server apply its own. `const`
-# discriminator and `default_factory` fields keep their original shape.
+# Nullified-defaults note: every non-required field is projected as
+# `<type> | None = None`. The server's defaults (literal or default_factory)
+# are intentionally dropped so an omitted (None) value lets the server apply
+# its own. `const` discriminator fields keep their fixed value.
 
 from __future__ import annotations
 
@@ -98,13 +98,13 @@ class PredictionTask(str, Enum):
 
 class ClassifierConfig(BaseModel):
     task: Literal[PredictionTask.CLASSIFICATION] = PredictionTask.CLASSIFICATION
-    tabpfn_config: ClassifierTabPFNConfig = Field(default_factory=ClassifierTabPFNConfig)
-    predict_params: ClassifierPredictParams = Field(default_factory=ClassifierPredictParams)
+    tabpfn_config: ClassifierTabPFNConfig | None = None
+    predict_params: ClassifierPredictParams | None = None
 
 
 class ClassifierFitTaskConfig(BaseModel):
     task: Literal[PredictionTask.CLASSIFICATION] = PredictionTask.CLASSIFICATION
-    tabpfn_config: ClassifierTabPFNConfig = Field(default_factory=ClassifierTabPFNConfig)
+    tabpfn_config: ClassifierTabPFNConfig | None = None
 
 
 class ClassifierMetadata(BaseModel):
@@ -195,13 +195,13 @@ class RegressorTabPFNConfig(BaseModel):
 
 class RegressorConfig(BaseModel):
     task: Literal[PredictionTask.REGRESSION] = PredictionTask.REGRESSION
-    tabpfn_config: RegressorTabPFNConfig = Field(default_factory=RegressorTabPFNConfig)
-    predict_params: RegressorPredictParams = Field(default_factory=RegressorPredictParams)
+    tabpfn_config: RegressorTabPFNConfig | None = None
+    predict_params: RegressorPredictParams | None = None
 
 
 class RegressorFitTaskConfig(BaseModel):
     task: Literal[PredictionTask.REGRESSION] = PredictionTask.REGRESSION
-    tabpfn_config: RegressorTabPFNConfig = Field(default_factory=RegressorTabPFNConfig)
+    tabpfn_config: RegressorTabPFNConfig | None = None
 
 
 class RegressorMetadata(BaseModel):
@@ -249,7 +249,7 @@ class DuplicateTrainSetErrorResponse(BaseModel):
 class FitRequest(BaseModel):
     task_config: FitTaskConfig
     tabpfn_systems: list[Annotated[TabPFNSystem | str, Field(union_mode="left_to_right")]] | None = None
-    thinking_config: ThinkingConfig = Field(default_factory=ThinkingConfig)
+    thinking_config: ThinkingConfig | None = None
     train_set_upload_id: UUID
 
 
@@ -330,7 +330,7 @@ class PrepareTrainSetUploadResponse(BaseModel):
 class SubmitFitJobRequest(BaseModel):
     task_config: FitTaskConfig
     tabpfn_systems: list[Annotated[TabPFNSystem | str, Field(union_mode="left_to_right")]] | None = None
-    thinking_config: ThinkingConfig = Field(default_factory=ThinkingConfig)
+    thinking_config: ThinkingConfig | None = None
     train_set_upload_id: UUID
 
 
