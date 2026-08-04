@@ -1129,7 +1129,7 @@ class ServiceClient(Singleton):
             message = "Email not verified"
         else:
             try:
-                message = response.json().get("message", "")
+                message = response.json()["message"]
             except (json.JSONDecodeError, KeyError):
                 message = (
                     response.text
