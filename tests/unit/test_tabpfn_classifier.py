@@ -457,7 +457,7 @@ class TestTabPFNClassifierInference(unittest.TestCase):
         tabpfn = TabPFNClassifier()
 
         # skip fitting
-        tabpfn.fitted_ = True
+        tabpfn.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
 
         # test oversized cells
         with self.assertRaises(ValueError):
@@ -468,7 +468,7 @@ class TestTabPFNClassifierInference(unittest.TestCase):
         tabpfn = TabPFNClassifier()
 
         # skip fitting
-        tabpfn.fitted_ = True
+        tabpfn.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
         tabpfn.classes_ = np.array([0, 1])
 
         # mock prediction
@@ -503,10 +503,7 @@ class TestTabPFNClassifierInference(unittest.TestCase):
         )
 
         # Skip fitting
-        classifier.fitted_ = True
-        classifier._last_fitted_train_set_id = UUID(
-            "00000000-0000-0000-0000-000000000000"
-        )
+        classifier.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
 
         test_X = np.random.randn(10, 5)
 
@@ -545,7 +542,9 @@ class TestTabPFNClassifierInference(unittest.TestCase):
     def test_predict_params_output_type(self):
         """Test that predict_params contains correct output_type."""
         classifier = TabPFNClassifier()
-        classifier.fitted_ = True  # Skip fitting
+        classifier.model_id_ = UUID(
+            "00000000-0000-0000-0000-000000000000"
+        )  # Skip fitting
         test_X = np.random.randn(10, 5)
 
         # Test predict() sets output_type to "preds"
@@ -616,7 +615,7 @@ class TestTabPFNClassifierInference(unittest.TestCase):
         """Test predictions with long text (>2500 chars) and text containing commas."""
         # Skip initialization
         tabpfn = TabPFNClassifier()
-        tabpfn.fitted_ = True
+        tabpfn.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
         tabpfn.classes_ = np.array([0, 1])  # Binary classification
 
         # Create test data with a mix of numeric and text features
@@ -755,7 +754,7 @@ class TestTabPFNClassifierInference(unittest.TestCase):
 
         # Skip initialization
         tabpfn = TabPFNClassifier()
-        tabpfn.fitted_ = True
+        tabpfn.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
         tabpfn.classes_ = np.array([0, 1])
 
         # Create test data

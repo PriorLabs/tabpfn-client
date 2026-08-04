@@ -66,6 +66,11 @@ class ClassifierPredictParams(BaseModel):
     ) = None
 
 
+class FitMode(str, Enum):
+    FIT_PREPROCESSORS = "fit_preprocessors"
+    FIT_WITH_CACHE = "fit_with_cache"
+
+
 class ClassifierTabPFNConfig(BaseModel):
     n_estimators: int | None = None
     categorical_features_indices: list[int] | None = None
@@ -79,6 +84,7 @@ class ClassifierTabPFNConfig(BaseModel):
         Annotated[Literal["autocast", "auto"] | str, Field(union_mode="left_to_right")] | None
     ) = None
     ignore_pretraining_limits: bool | None = None
+    fit_mode: Annotated[FitMode | UnknownEnum, Field(union_mode="left_to_right")] | None = None
     model_path: str | None = None
     balance_probabilities: bool | None = None
 
@@ -139,7 +145,9 @@ class ModelLimit(BaseModel):
     max_classes: int
     max_cols: int
     test_set_max_rows_w_full_regression_output: int
-    predict_row_pairs_budget: int
+    # Optional: older servers don't send this; validate_test_set falls back to
+    # FALLBACK_PREDICT_ROW_PAIRS_BUDGET when absent.
+    predict_row_pairs_budget: int | None = None
     test_set_max_cells: int
 
 
@@ -184,6 +192,7 @@ class RegressorTabPFNConfig(BaseModel):
         Annotated[Literal["autocast", "auto"] | str, Field(union_mode="left_to_right")] | None
     ) = None
     ignore_pretraining_limits: bool | None = None
+    fit_mode: Annotated[FitMode | UnknownEnum, Field(union_mode="left_to_right")] | None = None
     model_path: str | None = None
 
 
@@ -240,8 +249,28 @@ class DuplicateTrainSetErrorResponse(BaseModel):
 class FitRequest(BaseModel):
     train_set_upload_id: UUID
     task: Annotated[PredictionTask | UnknownEnum, Field(union_mode="left_to_right")]
-    tabpfn_systems: list[Annotated[TabPFNSystem | str, Field(union_mode="left_to_right")]] | None = None
-    thinking_config: ThinkingConfig | None = None
+    tabpfn_systems: (
+        list[
+            Annotated[
+                Literal["preprocessing", "text", "thinking"] | str, Field(union_mode="left_to_right")
+            ]
+        ]
+        | None
+    ) = None
+    tabpfn_config: dict[str, Any] | None = None
+    thinking_effort: (
+        Annotated[Literal["medium", "high"] | str, Field(union_mode="left_to_right")] | None
+    ) = None
+    thinking_timeout_s: float | None = None
+    thinking_effort_metric: str | None = None
+    force_refit: bool | None = Field(
+        default=None,
+        description="Deprecated, ignored: every fit creates a fresh fitted train set and runs unconditionally. Reuse fits by keeping the fitted_train_set_id (estimator save_model/load_model).",
+    )
+    async_mode: bool | None = Field(
+        default=None,
+        description="Submit the fit and return immediately with status=pending; poll GET /fit/{fitted_train_set_id} for the outcome. Defaults to the blocking behaviour.",
+    )
 
 
 class FitResponse(BaseModel):
