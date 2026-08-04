@@ -29,7 +29,6 @@ from tabpfn_client.api_models import ModelVersion
 from tabpfn_client.utils import model_limit_from_version, model_version_from_path
 from tabpfn_client.service_wrapper import InferenceClient
 from tabpfn_client.api_models import (
-    FitMode,
     RegressorTabPFNConfig,
     ClassifierTabPFNConfig,
     RegressorPredictParams,
@@ -43,7 +42,7 @@ from tabpfn_client.api_models import (
     ThinkingEffort,
     TabPFNSystem,
 )
-from tabpfn_client.models import ApiMode, TabPFNConfig
+from tabpfn_client.models import ApiMode, TabPFNConfig, FitModeLiteral
 from tabpfn_client.options import get_opts
 
 try:
@@ -195,7 +194,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         random_state: int | None = 0,
         inference_config: dict[str, Any] | None = None,
         categorical_features_indices: list[int] | None = None,
-        fit_mode: FitMode | None = None,
+        fit_mode: FitModeLiteral | None = None,
         # end: tabpfn_config
         paper_version: bool = False,
         thinking_mode: bool = False,
@@ -566,7 +565,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         random_state: int | None = 0,
         inference_config: dict[str, Any] | None = None,
         categorical_features_indices: list[int] | None = None,
-        fit_mode: FitMode | None = None,
+        fit_mode: FitModeLiteral | None = None,
         # end: tabpfn_config
         paper_version: bool = False,
         thinking_mode: bool = False,

@@ -16,16 +16,27 @@ from uuid import UUID
 
 import numpy as np
 
-from tabpfn_client.api_models import FitMode
 from tabpfn_client.client import PredictionResult, ServiceClient
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
 from tabpfn_client.service_wrapper import InferenceClient
+from typing import get_args
+from tabpfn_client.models import FitModeLiteral
+from tabpfn_client.api_models import FitMode
 
 _MODEL_ID = "00000000-0000-0000-0000-000000000abc"
 
 
 def _regressor_prediction() -> PredictionResult:
     return PredictionResult(y_pred={"mean": np.zeros(4)}, metadata={})
+
+
+def test_fit_mode_literal_guard():
+    # Guard against drift from the generated enum: every literal value must be a
+    # valid FitMode, or the package fails loudly at import time.
+    assert set(get_args(FitModeLiteral)) <= {m.value for m in FitMode}, (
+        "FitModeLiteral contains values that are not FitMode members: "
+        f"{set(get_args(FitModeLiteral)) - {m.value for m in FitMode}}"
+    )
 
 
 class TestFitMode(unittest.TestCase):
@@ -40,12 +51,12 @@ class TestFitMode(unittest.TestCase):
 
     def test_fit_with_cache_reaches_wire_config(self):
         for Est in (TabPFNClassifier, TabPFNRegressor):
-            cfg = Est(fit_mode=FitMode.FIT_WITH_CACHE)._get_tabpfn_config()
+            cfg = Est(fit_mode="fit_with_cache")._get_tabpfn_config()
             dumped = cfg.model_dump(mode="json", exclude_none=True)
             self.assertEqual(dumped.get("fit_mode"), "fit_with_cache", Est.__name__)
 
     def test_fit_mode_forwarded_on_predict_task_config(self):
-        reg = TabPFNRegressor(fit_mode=FitMode.FIT_WITH_CACHE)
+        reg = TabPFNRegressor(fit_mode="fit_with_cache")
         reg.model_id_ = UUID(_MODEL_ID)
         with patch("tabpfn_client.estimator.init"):
             with patch.object(ServiceClient, "get_settings", return_value=None):

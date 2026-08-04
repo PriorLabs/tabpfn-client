@@ -1,13 +1,19 @@
 from enum import Enum
 from dataclasses import dataclass, field
 import numpy as np
-from typing import Any
+from typing import Any, Literal
 from tabpfn_client.options import get_opts
 
-from tabpfn_client.api_models import ClassifierTabPFNConfig, RegressorTabPFNConfig
+from tabpfn_client.api_models import (
+    ClassifierTabPFNConfig,
+    RegressorTabPFNConfig,
+)
 
 
 TabPFNConfig = ClassifierTabPFNConfig | RegressorTabPFNConfig
+
+# Literal over enum to keep same static checks as the tabpfn package.
+FitModeLiteral = Literal["fit_preprocessors", "fit_with_cache"]
 
 
 class ApiMode(str, Enum):
