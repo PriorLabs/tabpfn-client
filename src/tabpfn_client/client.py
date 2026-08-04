@@ -998,7 +998,7 @@ class ServiceClient(Singleton):
             message = ""
         else:
             is_valid = False
-            message = response.json()["message"]
+            message = response.json().get("message", "")
 
         return is_valid, message
 
@@ -1044,10 +1044,10 @@ class ServiceClient(Singleton):
         cls._check_version(response)
         if response.status_code == 200:
             is_created = True
-            message = response.json()["message"]
+            message = response.json().get("message", "")
         else:
             is_created = False
-            message = response.json()["message"]
+            message = response.json().get("message", "")
 
         access_token = response.json()["token"] if is_created else None
         return is_created, message, access_token
@@ -1077,10 +1077,10 @@ class ServiceClient(Singleton):
         cls._check_version(response)
         if response.status_code == 200:
             is_verified = True
-            message = response.json()["message"]
+            message = response.json().get("message", "")
         else:
             is_verified = False
-            message = response.json()["message"]
+            message = response.json().get("message", "")
 
         return is_verified, message
 
@@ -1125,7 +1125,7 @@ class ServiceClient(Singleton):
             message = "Email not verified"
         else:
             try:
-                message = response.json()["message"]
+                message = response.json().get("message", "")
             except (json.JSONDecodeError, KeyError):
                 message = (
                     response.text
@@ -1164,10 +1164,10 @@ class ServiceClient(Singleton):
         )
         if response.status_code == 200:
             sent = True
-            message = response.json()["message"]
+            message = response.json().get("message", "")
         else:
             sent = False
-            message = response.json()["message"]
+            message = response.json().get("message", "")
         return sent, message
 
     @classmethod
@@ -1181,10 +1181,10 @@ class ServiceClient(Singleton):
         )
         if response.status_code == 200:
             sent = True
-            message = response.json()["message"]
+            message = response.json().get("message", "")
         else:
             sent = False
-            message = response.json()["message"]
+            message = response.json().get("message", "")
         return sent, message
 
     @classmethod
