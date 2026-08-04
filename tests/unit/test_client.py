@@ -12,6 +12,7 @@ from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
 
 from tabpfn_client.client import (
+    _MIN_RETRY_INTERVAL_SECS,
     GetSettingsResponse,
     RetryableServerError,
     ServiceClient,
@@ -59,7 +60,6 @@ def _api_settings_payload(
         "async_settings": {
             "use_above_trainset_size_bytes": 50 * 1024 * 1024,
             "poll_timeout_secs": 7200.0,
-            "poll_interval_secs": 5.0,
         },
     }
 
@@ -526,7 +526,8 @@ class TestServiceClient(unittest.TestCase):
                 json={
                     "fitted_train_set_id": fitted_train_set_id,
                     "status": "pending",
-                    # Keep the test fast: the poll loop honours this hint.
+                    # A 0 hint is clamped to the loop's floor; sleep is
+                    # mocked below to keep the test fast.
                     "retry_in_secs": 0,
                 },
             ),
@@ -548,6 +549,7 @@ class TestServiceClient(unittest.TestCase):
                 "_resolve_async_settings",
                 return_value=_fast_poll_settings(),
             ),
+            patch("tabpfn_client.client.time.sleep") as mock_sleep,
         ):
             result = ServiceClient.fit(
                 self.X_train,
@@ -558,6 +560,9 @@ class TestServiceClient(unittest.TestCase):
 
         self.assertEqual(result, UUID(fitted_train_set_id))
         self.assertEqual(status_route.call_count, 2)
+        # The server's 0 hint was clamped to the floor instead of
+        # busy-polling with no sleep at all.
+        mock_sleep.assert_called_once_with(_MIN_RETRY_INTERVAL_SECS)
 
     @with_mock_server()
     def test_fit_async_mode_raises_on_failed(self, mock_server):
@@ -799,6 +804,7 @@ class TestWaitForFit(unittest.TestCase):
 
     FIT_ID = UUID("00000000-0000-0000-0000-000000000002")
     FALLBACK_INTERVAL = 5.0
+    MIN_INTERVAL = _MIN_RETRY_INTERVAL_SECS
 
     @contextmanager
     def _patched(self, status_outcomes, poll_timeout: float = 100.0):
@@ -847,6 +853,20 @@ class TestWaitForFit(unittest.TestCase):
         ) as (fake_time, _):
             ServiceClient._wait_for_fit(self.FIT_ID)
         self.assertEqual(fake_time.sleeps, [1.5, 2.5])
+
+    def test_zero_or_negative_retry_hint_clamped_to_floor(self):
+        # A zero or negative hint (server bug / clock skew) must neither
+        # busy-poll the endpoint nor crash time.sleep with a ValueError;
+        # both are clamped to the loop's floor.
+        with self._patched(
+            [
+                _fit_status(FitStatus.PENDING, retry_in_secs=0.0),
+                _fit_status(FitStatus.PENDING, retry_in_secs=-30.0),
+                _fit_status(FitStatus.COMPLETED),
+            ]
+        ) as (fake_time, _):
+            ServiceClient._wait_for_fit(self.FIT_ID)
+        self.assertEqual(fake_time.sleeps, [self.MIN_INTERVAL, self.MIN_INTERVAL])
 
     def test_server_retry_hint_persists_when_later_responses_omit_it(self):
         with self._patched(

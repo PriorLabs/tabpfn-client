@@ -35,7 +35,6 @@ def _limits(
             "async_settings": {
                 "use_above_trainset_size_bytes": 50 * 1024 * 1024,
                 "poll_timeout_secs": 7200.0,
-                "poll_interval_secs": 5.0,
             },
         }
     )

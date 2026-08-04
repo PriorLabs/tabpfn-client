@@ -155,6 +155,10 @@ def _serialize_to_parquet(df: pd.DataFrame) -> tuple[bytes, str]:
 SuccessT = TypeVar("SuccessT", bound=BaseModel)
 ErrorT = TypeVar("ErrorT", bound=BaseModel, default=Never)
 
+# Floor for the server's `retry_in_secs` polling hint — defensive: a zero or
+# negative value must neither busy-poll the endpoint nor crash `time.sleep`.
+_MIN_RETRY_INTERVAL_SECS = 0.3
+
 
 class ServiceClient(Singleton):
     """
@@ -446,7 +450,9 @@ class ServiceClient(Singleton):
 
         The first poll happens immediately; between polls we sleep for the
         server's per-response ``retry_in_secs`` hint (5s until the first hint
-        arrives).
+        arrives), clamped to the ``_MIN_RETRY_INTERVAL_SECS`` floor so a
+        zero/negative hint can neither busy-poll the endpoint nor crash
+        ``time.sleep``.
 
         Returns once the fit is COMPLETED. Raises if the fit FAILED, or
         ``TimeoutError`` when no terminal state is reached within the resolved
@@ -483,7 +489,9 @@ class ServiceClient(Singleton):
                         f"{status_resp.error or 'no error message provided'}"
                     )
                 if status_resp.retry_in_secs is not None:
-                    retry_in_secs = status_resp.retry_in_secs
+                    retry_in_secs = max(
+                        status_resp.retry_in_secs, _MIN_RETRY_INTERVAL_SECS
+                    )
 
             # Still PENDING (or a transient error): sleep, then poll again.
             remaining = deadline - time.monotonic()
