@@ -69,8 +69,6 @@ from tabpfn_client.api_models import (
 from tabpfn_client.options import get_opts
 
 
-# XXX: 3 remove load/save
-
 logger = logging.getLogger(__name__)
 
 # avoid logging of httpx and httpcore on client side
@@ -421,9 +419,12 @@ class ServiceClient(Singleton):
                 timeout=client_options.timeout,
                 headers=client_options.headers,
             )
-            # NOTE: The server only returns COMPLETED or PENDING, failed requests
-            # will raise an error.
-            if fit_resp.status == FitStatus.PENDING:
+            # NOTE: The server currently only returns COMPLETED or PENDING
+            # (failed requests raise), but `status` is forward-compatible
+            # (`FitStatus | UnknownEnum`), so treat anything that is not
+            # COMPLETED as still in progress instead of silently skipping
+            # the wait when a newer server adds a status.
+            if fit_resp.status != FitStatus.COMPLETED:
                 cls._wait_for_fit(
                     fit_resp.fitted_train_set_id,
                     headers=client_options.headers,
@@ -463,10 +464,8 @@ class ServiceClient(Singleton):
                     headers=headers,
                 )
             except (
-                httpx.ConnectError,
+                httpx.NetworkError,
                 httpx.TimeoutException,
-                httpx.ReadTimeout,
-                httpx.WriteTimeout,
                 httpx.RemoteProtocolError,
                 RetryableServerError,
             ):
@@ -507,6 +506,14 @@ class ServiceClient(Singleton):
             timeout=timeout,
             headers=headers,
         )
+        # Polling is idempotent and a long-running fit must survive transient
+        # server hiccups (rate limiting, rolling deploys), so also map 429/500
+        # to the retryable error the `_wait_for_fit` loop already tolerates.
+        # `_raise_http_error` only does this for 408/502/503/504.
+        if res.status_code in {429, 500}:
+            raise RetryableServerError(
+                f"Fail to call get_fit_status: [HTTP {res.status_code}] {res.text}."
+            )
         return cls._validate_response(
             res,
             "get_fit_status",
@@ -514,15 +521,16 @@ class ServiceClient(Singleton):
         )
 
     @classmethod
+    # Job submission is not idempotent (each accepted request enqueues a new
+    # fit job), so only connection-setup failures — where the request never
+    # reached the server — are safe to retry. Anything after send (read
+    # timeouts, 5xx) may mean the job was already enqueued, and a blind retry
+    # would run the whole fit twice.
     @backoff.on_exception(
         backoff.constant,
         (
             httpx.ConnectError,
-            httpx.TimeoutException,
-            httpx.ReadTimeout,
-            httpx.WriteTimeout,
-            httpx.RemoteProtocolError,
-            RetryableServerError,
+            httpx.ConnectTimeout,
         ),
         max_tries=2,
         interval=0,

@@ -1,10 +1,9 @@
 """Unit tests for the KV-cache client surface:
 
 - `fit_mode` reaching the server-side `tabpfn_config` on the wire,
-- `model_id_` (the fitted-train-set id, written by `fit()`/`load_model()`)
-  as the single fitted-state slot that makes an estimator predictable,
-- `save_model()` / `load_model()` round-trips,
-- the refit-fallback guard for load-by-id estimators.
+- `model_id_` (the fitted-train-set id, written by `fit()` or assigned
+  directly to reuse a previous fit) as the single fitted-state slot that
+  makes an estimator predictable.
 
 These stay hermetic by patching `InferenceClient` / `ServiceClient` rather
 than talking to a mock server — the concern here is client-side wiring, not
@@ -114,9 +113,10 @@ class TestSklearnCompatibility(unittest.TestCase):
                 check_is_fitted(est)
 
     def test_predict_triggers_init_from_cold_state(self):
-        # A fresh process that only calls `load_model(...).predict(...)` never
-        # touches `fit()`, so `_predict` itself must call `init()` to authorize
-        # the HTTP client — otherwise the main cross-process reuse path 401s.
+        # A fresh process that only assigns a saved `model_id_` and predicts
+        # never touches `fit()`, so `_predict` itself must call `init()` to
+        # authorize the HTTP client — otherwise the main cross-process reuse
+        # path 401s.
         reg = TabPFNRegressor()
         reg.model_id_ = UUID(_MODEL_ID)
         with patch("tabpfn_client.estimator.init") as mock_init:
