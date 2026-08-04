@@ -357,6 +357,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         X_clean = _clean_text_features(X)
         classes = self._validate_targets_and_classes(y) # XXX
 
+        self.thinking_mode = _resolve_thinking_mode(self.thinking_mode, self.thinking_effort)
         task_config = _build_fit_task_config(tabpfn_config)
         tabpfn_systems = _build_tabpfn_systems(self.paper_version, self.thinking_mode)
         thinking_config = _build_thinking_config(
@@ -705,6 +706,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self._validate_targets(y)
         X_clean = _clean_text_features(X)
 
+        self.thinking_mode = _resolve_thinking_mode(self.thinking_mode, self.thinking_effort)
         task_config = _build_fit_task_config(tabpfn_config)
         tabpfn_systems = _build_tabpfn_systems(self.paper_version, self.thinking_mode)
         thinking_config = _build_thinking_config(
@@ -1057,6 +1059,14 @@ def _build_tabpfn_systems(
     return ["preprocessing", "text"]
 
 
+def _resolve_thinking_mode(enabled: bool, effort: str | None = None) -> bool:
+    if enabled:
+        return True
+    if effort:
+        return True
+    return False
+
+
 def _build_thinking_config(
     *,
     enabled: bool,
@@ -1064,7 +1074,7 @@ def _build_thinking_config(
     timeout_secs: float | None = None,
     metric: str | None = None,
 ) -> ThinkingConfig | None:
-    if not enabled and all(v is None for v in [effort, timeout_secs, metric]):
+    if not enabled:
         return None
     return ThinkingConfig(
         effort=effort,
