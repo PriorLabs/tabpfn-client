@@ -351,7 +351,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
         validate_train_set(X, y)
         X_clean = _clean_text_features(X)
-        classes = self._validate_targets_and_classes(y)  # XXX
+        classes = self._validate_targets_and_classes(y)
 
         self.thinking_mode = _resolve_thinking_mode(
             self.thinking_mode, self.thinking_effort
@@ -389,9 +389,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 )
 
             self.model_id_ = cast(UUID, run_task(fit_task, "Fitting"))
-            # Fitted state is committed together, only after the server fit
-            # succeeded, so a failed re-fit keeps the previous consistent state.
-            self.classes_ = classes  # XXX
+            # NOTE: Previously classes were assigned in-place before a fit succeeded,
+            # consider this failure mode:
+            #  1. first fit() -> succeeds, model_id_ and classes_ are assigned
+            #  2. second fit() -> fails, only classes_ assigned, new classes old model_id_
+            # Now we make sure to assign classes_ only after a successful fit.
+            self.classes_ = classes
             self._last_train_X = X_clean
             self._fit_count += 1
         else:
