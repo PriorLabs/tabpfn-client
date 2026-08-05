@@ -389,7 +389,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             # NOTE: Previously classes were assigned in-place before a fit succeeded,
             # consider this failure mode:
             #  1. first fit() -> succeeds, model_id_ and classes_ are assigned
-            #  2. second fit() -> fails, only classes_ assigned, new classes old model_id_
+            #  2. second fit() -> fails, only classes_ assigned, new classes_ but old model_id_
             # Now we make sure to assign classes_ only after a successful fit.
             self.classes_ = classes
             self._last_train_X = X_clean
