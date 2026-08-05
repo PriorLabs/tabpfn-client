@@ -335,6 +335,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self._last_meta = {}
         self._fit_count = 0
 
+    # NOTE: Some "*_" variables could be assigned before a fit succeeded (eg. it
+    # used to be the case for `classes_`). We defensively override sklearn using
+    # "*_" variables to determine fitted state and check whether `model_id_` is set
+    # as single-source-of-truth instead.
     def __sklearn_is_fitted__(self) -> bool:
         return getattr(self, "model_id_", None) is not None
 
