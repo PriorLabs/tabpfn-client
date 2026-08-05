@@ -352,13 +352,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         X_clean = _clean_text_features(X)
         classes = self._validate_targets_and_classes(y)
 
-        self.thinking_mode = _resolve_thinking_mode(
-            self.thinking_mode, self.thinking_effort
-        )
+        # NOTE: Always resolve, do not re-assign to self.thinking_mode, user could change effort.
+        thinking_mode = _resolve_thinking_mode(self.thinking_mode, self.thinking_effort)
         task_config = _build_fit_task_config(tabpfn_config)
-        tabpfn_systems = _build_tabpfn_systems(self.paper_version, self.thinking_mode)
+        tabpfn_systems = _build_tabpfn_systems(self.paper_version, thinking_mode)
         thinking_config = _build_thinking_config(
-            enabled=self.thinking_mode,
+            enabled=thinking_mode,
             effort=self.thinking_effort,
             timeout_secs=self.thinking_timeout_s,
             metric=self.thinking_metric,
@@ -706,13 +705,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self._validate_targets(y)
         X_clean = _clean_text_features(X)
 
-        self.thinking_mode = _resolve_thinking_mode(
-            self.thinking_mode, self.thinking_effort
-        )
+        thinking_mode = _resolve_thinking_mode(self.thinking_mode, self.thinking_effort)
         task_config = _build_fit_task_config(tabpfn_config)
-        tabpfn_systems = _build_tabpfn_systems(self.paper_version, self.thinking_mode)
+        tabpfn_systems = _build_tabpfn_systems(self.paper_version, thinking_mode)
         thinking_config = _build_thinking_config(
-            enabled=self.thinking_mode,
+            enabled=thinking_mode,
             effort=self.thinking_effort,
             timeout_secs=self.thinking_timeout_s,
             metric=self.thinking_metric,
