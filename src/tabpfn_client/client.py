@@ -459,12 +459,20 @@ class ServiceClient(Singleton):
         poll timeout. A failed fit is reported by the server as HTTP 200 with
         ``status=failed`` (only an unknown/foreign id is a 404), so the status
         field — not the HTTP code — is what we inspect here.
+
+        Transient poll failures (network errors, retryable HTTP statuses) are
+        logged and retried until the deadline; when the deadline expires while
+        polls are failing, the ``TimeoutError`` chains the most recent poll
+        error so the cause is not lost.
         """
         single_poll_timeout = 15.0
         async_settings = cls._resolve_async_settings()
         total_timeout = async_settings.poll_timeout_secs
         deadline = time.monotonic() + total_timeout
         retry_in_secs = 5.0  # fallback until the server sends retry_in_secs
+        # Most recent transient poll error; reset on every successful poll so
+        # the TimeoutError only chains it if polls were failing at the end.
+        last_error: Exception | None = None
 
         while True:
             try:
@@ -478,9 +486,14 @@ class ServiceClient(Singleton):
                 httpx.TimeoutException,
                 httpx.RemoteProtocolError,
                 RetryableServerError,
-            ):
-                pass
+            ) as exc:
+                last_error = exc
+                logger.warning(
+                    f"Transient error while polling status of fit "
+                    f"{fitted_train_set_id}, retrying until the poll deadline: {exc}"
+                )
             else:
+                last_error = None
                 if status_resp.status == FitStatus.COMPLETED:
                     return
                 if status_resp.status == FitStatus.FAILED:
@@ -496,10 +509,13 @@ class ServiceClient(Singleton):
             # Still PENDING (or a transient error): sleep, then poll again.
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError(
+                message = (
                     f"Fit {fitted_train_set_id} did not reach a terminal state "
                     f"within {total_timeout} seconds."
                 )
+                if last_error is not None:
+                    message += f" The last status poll failed: {last_error}"
+                raise TimeoutError(message) from last_error
             time.sleep(min(retry_in_secs, remaining))
 
     # NOTE: no backoff decorator here on purpose — the `_wait_for_fit` polling
@@ -518,11 +534,9 @@ class ServiceClient(Singleton):
             timeout=timeout,
             headers=headers,
         )
-        # Polling is idempotent and a long-running fit must survive transient
-        # server hiccups (rate limiting, rolling deploys), so also map 429/500
-        # to the retryable error the `_wait_for_fit` loop already tolerates.
-        # `_raise_http_error` only does this for 408/502/503/504.
-        if res.status_code in {429, 500}:
+        # We generally don't retry on 429s to avoid overwhelming the server.
+        # We make an exeption here as a backoff polict in place.
+        if res.status_code == 429:
             raise RetryableServerError(
                 f"Fail to call get_fit_status: [HTTP {res.status_code}] {res.text}."
             )
@@ -533,11 +547,9 @@ class ServiceClient(Singleton):
         )
 
     @classmethod
-    # Job submission is not idempotent (each accepted request enqueues a new
-    # fit job), so only connection-setup failures — where the request never
-    # reached the server — are safe to retry. Anything after send (read
-    # timeouts, 5xx) may mean the job was already enqueued, and a blind retry
-    # would run the whole fit twice.
+    # Every fit call creates a new fit job, no dedup logic exists on the server.
+    # We want to be careful with retries here, we then just retry on
+    # errors that we can be confident prevented a job to be enqueued.
     @backoff.on_exception(
         backoff.constant,
         (

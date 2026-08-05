@@ -888,6 +888,8 @@ class TestWaitForFit(unittest.TestCase):
             with self.assertRaises(TimeoutError) as cm:
                 ServiceClient._wait_for_fit(self.FIT_ID)
         self.assertIn("did not reach a terminal state", str(cm.exception))
+        # The fit was genuinely still pending: no poll error to chain.
+        self.assertIsNone(cm.exception.__cause__)
         self.assertEqual(fake_time.sleeps, [5.0, 5.0, 2.0])
         self.assertEqual(mock.call_count, 4)
 
@@ -902,14 +904,24 @@ class TestWaitForFit(unittest.TestCase):
         self.assertEqual(fake_time.sleeps, [])
 
     def test_transient_errors_retry_until_deadline(self):
+        # Each swallowed error is logged, and the TimeoutError chains the last
+        # one so the real cause of a failing poll loop is not discarded.
         with self._patched(httpx.ConnectError("down"), poll_timeout=10.0) as (
             fake_time,
             mock,
         ):
-            with self.assertRaises(TimeoutError):
+            with (
+                self.assertLogs("tabpfn_client.client", level="WARNING") as logs,
+                self.assertRaises(TimeoutError) as cm,
+            ):
                 ServiceClient._wait_for_fit(self.FIT_ID)
         self.assertEqual(fake_time.sleeps, [5.0, 5.0])
         self.assertEqual(mock.call_count, 3)
+        self.assertIsInstance(cm.exception.__cause__, httpx.ConnectError)
+        self.assertIn("The last status poll failed: down", str(cm.exception))
+        self.assertEqual(len(logs.output), 3)
+        self.assertIn(str(self.FIT_ID), logs.output[0])
+        self.assertIn("down", logs.output[0])
 
     def test_transient_error_then_recovery(self):
         with self._patched(

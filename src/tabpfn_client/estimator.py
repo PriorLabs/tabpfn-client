@@ -258,6 +258,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         categorical_features_indices: list[int] or None, default=None
             The indices of the columns that should be treated as categorical.
             If None, the model infers which columns are categorical.
+        fit_mode: {"fit_preprocessors", "fit_with_cache"} or None, default=None
+            Controls what the server persists at fit time. None defers to the
+            server default, which is "fit_preprocessors".
+            "fit_preprocessors" fits only the preprocessing state, so every
+            predict re-runs the forward pass from the uploaded train set.
+            "fit_with_cache" additionally builds and persists a server-side KV
+            cache keyed by the resulting fitted-train-set id; later predicts
+            against that id (stored on the estimator as `model_id_`) are
+            served from the cache instead of re-fitting.
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
@@ -294,15 +303,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
                 "roc_auc_ovr_micro", "roc_auc_ovr_weighted".
 
             Aliases "acc", "nll", "pac_score" are also accepted.
-        fit_mode: {"fit_preprocessors", "fit_with_cache"} or None, default=None
-            Controls what the server persists at fit time. None defers to the
-            server default, which is "fit_preprocessors".
-            "fit_preprocessors" fits only the preprocessing state, so every
-            predict re-runs the forward pass from the uploaded train set.
-            "fit_with_cache" additionally builds and persists a server-side KV
-            cache keyed by the resulting fitted-train-set id; later predicts
-            against that id (stored on the estimator as `model_id_`) are
-            served from the cache instead of re-fitting.
         api_mode: ApiMode, default=ApiMode.AUTO
             Controls how the client calls the server.
             SYNC: the client waits for the server to complete the request before returning.
