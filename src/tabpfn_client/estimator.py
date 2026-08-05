@@ -367,7 +367,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             # NOTE(@trace_id)
             # Create a new sentry trace at every fit, provided that:
             # - The user has not explicitly set a sentry-trace header.
-            # - In any case if we're going to refit.
             # - In any case if we have already called .fit() on this instance.
             if self._fit_count > 0 or "sentry-trace" not in self.client_options.headers:
                 self.client_options.headers["sentry-trace"] = uuid4().hex
@@ -716,11 +715,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         )
 
         if Config.use_server:
-            # NOTE(@trace_id)
-            # Create a new sentry trace at every fit, provided that:
-            # - The user has not explicitly set a sentry-trace header.
-            # - In any case if we're going to refit.
-            # - In any case if we have already called .fit() on this instance.
             if self._fit_count > 0 or "sentry-trace" not in self.client_options.headers:
                 self.client_options.headers["sentry-trace"] = uuid4().hex
 
