@@ -28,7 +28,7 @@ from tabpfn_client.models import (
     PredictionResult,
     ApiMode,
 )
-from tabpfn_client.errors import RetryableServerError
+from tabpfn_client.errors import RetryableServerError, CappedRetryableServerError
 
 import google_crc32c
 
@@ -456,7 +456,10 @@ class ServiceClient(Singleton):
 
         Returns once the fit is COMPLETED. Raises if the fit FAILED, or
         ``TimeoutError`` when no terminal state is reached within the resolved
-        poll timeout. A failed fit is reported by the server as HTTP 200 with
+        poll timeout. The timeout is a hard bound: the loop gives up as soon
+        as the next poll could no longer start before the deadline, instead
+        of sleeping up to the deadline and polling once more past it.
+        A failed fit is reported by the server as HTTP 200 with
         ``status=failed`` (only an unknown/foreign id is a 404), so the status
         field — not the HTTP code — is what we inspect here.
 
@@ -473,6 +476,8 @@ class ServiceClient(Singleton):
         # Most recent transient poll error; reset on every successful poll so
         # the TimeoutError only chains it if polls were failing at the end.
         last_error: Exception | None = None
+        max_consecutive_capped_errors = 3
+        consecutive_capped_errors = 0
 
         while True:
             try:
@@ -488,12 +493,23 @@ class ServiceClient(Singleton):
                 RetryableServerError,
             ) as exc:
                 last_error = exc
+                consecutive_capped_errors = 0
                 logger.warning(
                     f"Transient error while polling status of fit "
                     f"{fitted_train_set_id}, retrying until the poll deadline: {exc}"
                 )
+            except CappedRetryableServerError as exc:
+                consecutive_capped_errors += 1
+                if consecutive_capped_errors > max_consecutive_capped_errors:
+                    raise exc
+                last_error = exc
+                logger.warning(
+                    f"Unexpected error while polling status of fit "
+                    f"{fitted_train_set_id}, retrying up to {max_consecutive_capped_errors} consecutive errors: {exc}"
+                )
             else:
                 last_error = None
+                consecutive_capped_errors = 0
                 if status_resp.status == FitStatus.COMPLETED:
                     return
                 if status_resp.status == FitStatus.FAILED:
@@ -506,17 +522,20 @@ class ServiceClient(Singleton):
                         status_resp.retry_in_secs, _MIN_RETRY_INTERVAL_SECS
                     )
 
-            # Still PENDING (or a transient error): sleep, then poll again.
+            # Still PENDING (or a transient error): sleep, then poll again —
+            # unless the next poll could only start at/after the deadline. The
+            # poll timeout is a hard bound, so give up now rather than sleep
+            # up to the deadline and issue one more poll past it.
             remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            if remaining <= retry_in_secs:
                 message = (
                     f"Fit {fitted_train_set_id} did not reach a terminal state "
-                    f"within {total_timeout} seconds."
+                    f"within the poll timeout of {total_timeout} seconds."
                 )
                 if last_error is not None:
                     message += f" The last status poll failed: {last_error}"
                 raise TimeoutError(message) from last_error
-            time.sleep(min(retry_in_secs, remaining))
+            time.sleep(retry_in_secs)
 
     # NOTE: no backoff decorator here on purpose — the `_wait_for_fit` polling
     # loop already retries transient errors until its deadline, and a nested
@@ -534,10 +553,12 @@ class ServiceClient(Singleton):
             timeout=timeout,
             headers=headers,
         )
-        # We generally don't retry on 429s to avoid overwhelming the server.
-        # We make an exeption here as a backoff polict in place.
-        if res.status_code == 429:
-            raise RetryableServerError(
+        # We don't retry 429s and 500s (see _raise_http_error() when validating
+        # the response). In this case because the error is decoupled from the
+        # underlying job status, we allow a few retries up to a max of 3 consecutive
+        # capped retryable errors.
+        if res.status_code in (429, 500):
+            raise CappedRetryableServerError(
                 f"Fail to call get_fit_status: [HTTP {res.status_code}] {res.text}."
             )
         return cls._validate_response(

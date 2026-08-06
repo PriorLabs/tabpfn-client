@@ -800,7 +800,8 @@ class TestWaitForFit(unittest.TestCase):
     """Pin the `_wait_for_fit` polling contract with a fake clock: the first
     poll is immediate, sleeps run between polls following the server's
     `retry_in_secs` hint (5s fallback until the first hint), and the deadline
-    is enforced with the last sleep capped to the remainder."""
+    is a hard bound — the loop gives up as soon as the next poll could no
+    longer start before the deadline."""
 
     FIT_ID = UUID("00000000-0000-0000-0000-000000000002")
     FALLBACK_INTERVAL = 5.0
@@ -879,9 +880,10 @@ class TestWaitForFit(unittest.TestCase):
             ServiceClient._wait_for_fit(self.FIT_ID)
         self.assertEqual(fake_time.sleeps, [2.0, 2.0])
 
-    def test_deadline_caps_last_sleep_and_raises_timeout(self):
-        # timeout 12, interval 5: polls at t=0/5/10, the last sleep is capped
-        # to the 2s remaining, and a final poll at the deadline still runs.
+    def test_deadline_is_a_hard_bound_and_raises_timeout(self):
+        # timeout 12, interval 5: polls at t=0/5/10. After the t=10 poll only
+        # 2s remain — not enough for another full interval — so the loop gives
+        # up without sleeping to the deadline and polling once more past it.
         with self._patched(
             lambda **kwargs: _fit_status(FitStatus.PENDING), poll_timeout=12.0
         ) as (fake_time, mock):
@@ -890,8 +892,8 @@ class TestWaitForFit(unittest.TestCase):
         self.assertIn("did not reach a terminal state", str(cm.exception))
         # The fit was genuinely still pending: no poll error to chain.
         self.assertIsNone(cm.exception.__cause__)
-        self.assertEqual(fake_time.sleeps, [5.0, 5.0, 2.0])
-        self.assertEqual(mock.call_count, 4)
+        self.assertEqual(fake_time.sleeps, [5.0, 5.0])
+        self.assertEqual(mock.call_count, 3)
 
     def test_failed_fit_raises_runtime_error_without_sleeping(self):
         with self._patched([_fit_status(FitStatus.FAILED, error="boom")]) as (
@@ -906,6 +908,8 @@ class TestWaitForFit(unittest.TestCase):
     def test_transient_errors_retry_until_deadline(self):
         # Each swallowed error is logged, and the TimeoutError chains the last
         # one so the real cause of a failing poll loop is not discarded.
+        # timeout 10, interval 5: polls at t=0/5 fail; after the t=5 poll the
+        # 5s remaining can't fit another full interval, so the loop gives up.
         with self._patched(httpx.ConnectError("down"), poll_timeout=10.0) as (
             fake_time,
             mock,
@@ -915,11 +919,11 @@ class TestWaitForFit(unittest.TestCase):
                 self.assertRaises(TimeoutError) as cm,
             ):
                 ServiceClient._wait_for_fit(self.FIT_ID)
-        self.assertEqual(fake_time.sleeps, [5.0, 5.0])
-        self.assertEqual(mock.call_count, 3)
+        self.assertEqual(fake_time.sleeps, [5.0])
+        self.assertEqual(mock.call_count, 2)
         self.assertIsInstance(cm.exception.__cause__, httpx.ConnectError)
         self.assertIn("The last status poll failed: down", str(cm.exception))
-        self.assertEqual(len(logs.output), 3)
+        self.assertEqual(len(logs.output), 2)
         self.assertIn(str(self.FIT_ID), logs.output[0])
         self.assertIn("down", logs.output[0])
 
