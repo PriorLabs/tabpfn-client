@@ -10,8 +10,9 @@ import numpy as np
 from tabpfn_client import init, reset
 from tabpfn_client import TabPFNClassifier
 from tests.mock_tabpfn_server import with_mock_server
+from tabpfn_client.client import ServiceClient
 from tabpfn_client.service_wrapper import UserAuthenticationClient
-from tabpfn_client.options import get_opts
+from tabpfn_client.api_models import AsyncSettings
 
 
 class TestTabPFNClassifier(unittest.TestCase):
@@ -90,8 +91,8 @@ class TestTabPFNClassifier(unittest.TestCase):
     @with_mock_server()
     def test_use_remote_tabpfn_classifier_async_mode(self, mock_server):
         # End-to-end async-mode flow: POST /tabpfn/fit returns status=pending and
-        # the client polls GET /tabpfn/fit/{id} until the fit is completed before
-        # predict can run.
+        # the client polls POST /tabpfn/get_fit_status until the fit is completed
+        # before predict can run.
         token_file = UserAuthenticationClient.CACHED_TOKEN_FILE
         token_file.parent.mkdir(parents=True, exist_ok=True)
         token_file.write_text("dummy token")
@@ -119,11 +120,16 @@ class TestTabPFNClassifier(unittest.TestCase):
             json={"fitted_train_set_id": fitted_train_set_id, "status": "pending"},
         )
         # ... and the client polls until the fit reaches a terminal state.
-        status_route = mock_server.router.get(f"/tabpfn/fit/{fitted_train_set_id}")
+        # retry_in_secs=0 keeps the poll loop from sleeping between attempts.
+        status_route = mock_server.router.post("/tabpfn/get_fit_status")
         status_route.side_effect = [
             httpx.Response(
                 200,
-                json={"fitted_train_set_id": fitted_train_set_id, "status": "pending"},
+                json={
+                    "fitted_train_set_id": fitted_train_set_id,
+                    "status": "pending",
+                    "retry_in_secs": 0,
+                },
             ),
             httpx.Response(
                 200,
@@ -134,7 +140,14 @@ class TestTabPFNClassifier(unittest.TestCase):
             ),
         ]
 
-        with patch.object(get_opts(), "TABPFN_CLIENT_POLL_INTERVAL", 0):
+        with patch.object(
+            ServiceClient,
+            "_resolve_async_settings",
+            return_value=AsyncSettings(
+                use_above_trainset_size_bytes=50 * 1024 * 1024,
+                poll_timeout_secs=7200.0,
+            ),
+        ):
             tabpfn.fit(self.X_train, self.y_train)
 
         self.assertEqual(status_route.call_count, 2)

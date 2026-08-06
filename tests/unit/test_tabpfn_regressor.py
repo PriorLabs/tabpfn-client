@@ -21,14 +21,14 @@ from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client import config
 import json
 from tabpfn_client.client import (
-    GetModelLimitsResponse,
+    GetSettingsResponse,
     PredictionResult,
     ServiceClient,
 )
 from tabpfn_client.api_models import RegressorTabPFNConfig
 
 
-def _model_limits_payload(
+def _api_settings_payload(
     max_cells=100_000_000,
     max_cols=2_000,
     max_size_bytes=100_000_000,
@@ -46,12 +46,17 @@ def _model_limits_payload(
         "test_set_max_rows_w_full_regression_output": max_rows,
         "max_cols": max_cols,
         "max_classes": max_classes,
+        "predict_row_pairs_budget": 250_000 * 1_000_000,
     }
     return {
         "default_model_version": "v2.5",
         "max_model_limit": model_limit,
         "model_limits": {"v2.5": model_limit},
         "dataset_max_size_bytes": max_size_bytes,
+        "async_settings": {
+            "use_above_trainset_size_bytes": 50 * 1024 * 1024,
+            "poll_timeout_secs": 7200.0,
+        },
     }
 
 
@@ -62,7 +67,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         # set up dummy data
         reset()
         ServiceClient.reset_authorization()
-        ServiceClient._model_limits = None
+        ServiceClient._api_settings = None
         X, y = load_diabetes(return_X_y=True)
         self.X_train, self.X_test, self.y_train, self.y_test = cast(
             "tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]",
@@ -70,7 +75,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         )
 
     def tearDown(self):
-        ServiceClient._model_limits = None
+        ServiceClient._api_settings = None
         # remove cache dir
         shutil.rmtree(CACHE_DIR, ignore_errors=True)
 
@@ -117,9 +122,9 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_model_limits").respond(
+        mock_server.router.get("/tabpfn/get_settings").respond(
             200,
-            json=_model_limits_payload(),
+            json=_api_settings_payload(),
         )
 
         metric = "mean"
@@ -163,9 +168,9 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_model_limits").respond(
+        mock_server.router.get("/tabpfn/get_settings").respond(
             200,
-            json=_model_limits_payload(),
+            json=_api_settings_payload(),
         )
 
         # create dummy token file
@@ -208,9 +213,9 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_model_limits").respond(
+        mock_server.router.get("/tabpfn/get_settings").respond(
             200,
-            json=_model_limits_payload(),
+            json=_api_settings_payload(),
         )
         init(use_server=True)
 
@@ -291,9 +296,9 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_model_limits").respond(
+        mock_server.router.get("/tabpfn/get_settings").respond(
             200,
-            json=_model_limits_payload(),
+            json=_api_settings_payload(),
         )
 
         # Ensure no cached token so we go through the full login flow
@@ -404,14 +409,14 @@ class TestTabPFNRegressorInference(unittest.TestCase):
     def setUp(self):
         # skip init
         config.Config.is_initialized = True
-        ServiceClient._model_limits = GetModelLimitsResponse(
-            **_model_limits_payload(max_cells=100_000)
+        ServiceClient._api_settings = GetSettingsResponse(
+            **_api_settings_payload(max_cells=100_000)
         )
-        ServiceClient._model_limits_ts = time.monotonic()
+        ServiceClient._api_settings_ts = time.monotonic()
 
     def tearDown(self):
-        ServiceClient._model_limits = None
-        ServiceClient._model_limits_ts = 0.0
+        ServiceClient._api_settings = None
+        ServiceClient._api_settings_ts = 0.0
         # undo setUp
         config.reset()
 
@@ -447,7 +452,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
         tabpfn = TabPFNRegressor()
 
         # skip fitting
-        tabpfn.fitted_ = True
+        tabpfn.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
 
         # test oversized cells
         with self.assertRaises(ValueError):
@@ -458,7 +463,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
         tabpfn = TabPFNRegressor()
 
         # skip fitting
-        tabpfn.fitted_ = True
+        tabpfn.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
 
         # mock prediction
         with patch.object(InferenceClient, "predict") as mock_predict:
@@ -491,10 +496,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
         )
 
         # Skip fitting
-        regressor.fitted_ = True
-        regressor._last_fitted_train_set_id = UUID(
-            "00000000-0000-0000-0000-000000000000"
-        )
+        regressor.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
 
         test_X = np.random.randn(10, 5)
 
@@ -533,7 +535,9 @@ class TestTabPFNRegressorInference(unittest.TestCase):
     def test_predict_params_output_type(self):
         """Test that predict_params contains correct output_type and quantiles."""
         regressor = TabPFNRegressor()
-        regressor.fitted_ = True  # Skip fitting
+        regressor.model_id_ = UUID(
+            "00000000-0000-0000-0000-000000000000"
+        )  # Skip fitting
         test_X = np.random.randn(10, 5)
 
         # Test default predict() sets output_type to "mean"
@@ -563,7 +567,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
         """Server returns a stacked (n_quantiles, n_samples) array; predict()
         normalizes it to a list of per-quantile arrays, matching local tabpfn."""
         regressor = TabPFNRegressor()
-        regressor.fitted_ = True
+        regressor.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
         test_X = np.random.randn(20, 5)
         quantiles = [0.1, 0.5, 0.9]
 
@@ -585,7 +589,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
         """A single quantile may arrive squeezed to 1D; it must still become a
         list of one (n_samples,) array, matching local tabpfn."""
         regressor = TabPFNRegressor()
-        regressor.fitted_ = True
+        regressor.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
         test_X = np.random.randn(20, 5)
 
         with patch.object(InferenceClient, "predict") as mock_predict:
@@ -601,12 +605,8 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
     def test_predict_full_adds_criterion_with_optional_dependencies(self):
         regressor = TabPFNRegressor()
-        regressor.fitted_ = True
-        regressor._last_fitted_train_set_id = UUID(
-            "00000000-0000-0000-0000-000000000000"
-        )
+        regressor.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
         regressor._last_train_X = np.random.randn(5, 2)
-        regressor._last_train_y = np.random.randn(5)
 
         test_X = np.random.randn(3, 2)
         dummy_output = {"borders": [0.0, 1.0], "mean": np.random.randn(3)}
@@ -650,12 +650,8 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
     def test_predict_full_missing_optional_dependencies_logs_warning(self):
         regressor = TabPFNRegressor()
-        regressor.fitted_ = True
-        regressor._last_fitted_train_set_id = UUID(
-            "00000000-0000-0000-0000-000000000000"
-        )
+        regressor.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
         regressor._last_train_X = np.random.randn(5, 2)
-        regressor._last_train_y = np.random.randn(5)
 
         test_X = np.random.randn(3, 2)
         dummy_output = {"borders": [0.0, 1.0], "mean": np.random.randn(3)}
@@ -687,7 +683,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
         """Test predictions with long text (>2500 chars) and text containing commas."""
         # Skip initialization
         tabpfn = TabPFNRegressor()
-        tabpfn.fitted_ = True
+        tabpfn.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
 
         # Create test data with a mix of numeric and text features
         n_samples = 5
@@ -774,7 +770,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
 
         # Skip initialization
         tabpfn = TabPFNRegressor()
-        tabpfn.fitted_ = True
+        tabpfn.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
 
         # Create test data
         n_samples = 5

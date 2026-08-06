@@ -20,14 +20,14 @@ from tests.mock_tabpfn_server import with_mock_server
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client import config
 from tabpfn_client.client import (
-    GetModelLimitsResponse,
+    GetSettingsResponse,
     PredictionResult,
     ServiceClient,
 )
 from tabpfn_client.api_models import ClassifierTabPFNConfig
 
 
-def _model_limits_payload(
+def _api_settings_payload(
     max_cells=100_000_000,
     max_cols=2_000,
     max_size_bytes=100_000_000,
@@ -45,12 +45,17 @@ def _model_limits_payload(
         "test_set_max_rows_w_full_regression_output": max_rows,
         "max_cols": max_cols,
         "max_classes": max_classes,
+        "predict_row_pairs_budget": 250_000 * 1_000_000,
     }
     return {
         "default_model_version": "v2.5",
         "max_model_limit": model_limit,
         "model_limits": {"v2.5": model_limit},
         "dataset_max_size_bytes": max_size_bytes,
+        "async_settings": {
+            "use_above_trainset_size_bytes": 50 * 1024 * 1024,
+            "poll_timeout_secs": 7200.0,
+        },
     }
 
 
@@ -61,7 +66,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         # set up dummy data
         reset()
         ServiceClient.reset_authorization()
-        ServiceClient._model_limits = None
+        ServiceClient._api_settings = None
         X, y = load_breast_cancer(return_X_y=True)
         self.X_train, self.X_test, self.y_train, self.y_test = cast(
             "tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]",
@@ -69,7 +74,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         )
 
     def tearDown(self):
-        ServiceClient._model_limits = None
+        ServiceClient._api_settings = None
         # remove cache dir
         shutil.rmtree(CACHE_DIR, ignore_errors=True)
 
@@ -117,9 +122,9 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_model_limits").respond(
+        mock_server.router.get("/tabpfn/get_settings").respond(
             200,
-            json=_model_limits_payload(),
+            json=_api_settings_payload(),
         )
 
         mock_predict_response = [1, 0, 1]
@@ -162,9 +167,9 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_model_limits").respond(
+        mock_server.router.get("/tabpfn/get_settings").respond(
             200,
-            json=_model_limits_payload(),
+            json=_api_settings_payload(),
         )
 
         # create dummy token file
@@ -207,9 +212,9 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_model_limits").respond(
+        mock_server.router.get("/tabpfn/get_settings").respond(
             200,
-            json=_model_limits_payload(),
+            json=_api_settings_payload(),
         )
         init(use_server=True)
 
@@ -296,9 +301,9 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
-        mock_server.router.get("/tabpfn/get_model_limits").respond(
+        mock_server.router.get("/tabpfn/get_settings").respond(
             200,
-            json=_model_limits_payload(),
+            json=_api_settings_payload(),
         )
 
         mock_server.router.post(mock_server.endpoints.predict.path).respond(
@@ -408,14 +413,14 @@ class TestTabPFNClassifierInference(unittest.TestCase):
     def setUp(self):
         # skip init
         config.Config.is_initialized = True
-        ServiceClient._model_limits = GetModelLimitsResponse(
-            **_model_limits_payload(max_cells=100_000)
+        ServiceClient._api_settings = GetSettingsResponse(
+            **_api_settings_payload(max_cells=100_000)
         )
-        ServiceClient._model_limits_ts = time.monotonic()
+        ServiceClient._api_settings_ts = time.monotonic()
 
     def tearDown(self):
-        ServiceClient._model_limits = None
-        ServiceClient._model_limits_ts = 0.0
+        ServiceClient._api_settings = None
+        ServiceClient._api_settings_ts = 0.0
         # undo setUp
         config.reset()
 
@@ -451,7 +456,7 @@ class TestTabPFNClassifierInference(unittest.TestCase):
         tabpfn = TabPFNClassifier()
 
         # skip fitting
-        tabpfn.fitted_ = True
+        tabpfn.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
 
         # test oversized cells
         with self.assertRaises(ValueError):
@@ -462,7 +467,7 @@ class TestTabPFNClassifierInference(unittest.TestCase):
         tabpfn = TabPFNClassifier()
 
         # skip fitting
-        tabpfn.fitted_ = True
+        tabpfn.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
         tabpfn.classes_ = np.array([0, 1])
 
         # mock prediction
@@ -497,10 +502,7 @@ class TestTabPFNClassifierInference(unittest.TestCase):
         )
 
         # Skip fitting
-        classifier.fitted_ = True
-        classifier._last_fitted_train_set_id = UUID(
-            "00000000-0000-0000-0000-000000000000"
-        )
+        classifier.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
 
         test_X = np.random.randn(10, 5)
 
@@ -539,7 +541,9 @@ class TestTabPFNClassifierInference(unittest.TestCase):
     def test_predict_params_output_type(self):
         """Test that predict_params contains correct output_type."""
         classifier = TabPFNClassifier()
-        classifier.fitted_ = True  # Skip fitting
+        classifier.model_id_ = UUID(
+            "00000000-0000-0000-0000-000000000000"
+        )  # Skip fitting
         test_X = np.random.randn(10, 5)
 
         # Test predict() sets output_type to "preds"
@@ -610,7 +614,7 @@ class TestTabPFNClassifierInference(unittest.TestCase):
         """Test predictions with long text (>2500 chars) and text containing commas."""
         # Skip initialization
         tabpfn = TabPFNClassifier()
-        tabpfn.fitted_ = True
+        tabpfn.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
         tabpfn.classes_ = np.array([0, 1])  # Binary classification
 
         # Create test data with a mix of numeric and text features
@@ -749,7 +753,7 @@ class TestTabPFNClassifierInference(unittest.TestCase):
 
         # Skip initialization
         tabpfn = TabPFNClassifier()
-        tabpfn.fitted_ = True
+        tabpfn.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
         tabpfn.classes_ = np.array([0, 1])
 
         # Create test data

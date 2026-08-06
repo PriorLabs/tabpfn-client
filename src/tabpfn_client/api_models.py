@@ -13,10 +13,10 @@
 # default smart mode would land known values in the wider branch.
 # Discriminator `const` fields are intentionally left non-forward-compatible.
 #
-# Nullified-defaults note: every field with a literal default is projected
-# as `<type> | None = None`. The server's concrete defaults are intentionally
-# dropped so an omitted (None) value lets the server apply its own. `const`
-# discriminator and `default_factory` fields keep their original shape.
+# Nullified-defaults note: every non-required field is projected as
+# `<type> | None = None`. The server's defaults (literal or default_factory)
+# are intentionally dropped so an omitted (None) value lets the server apply
+# its own. `const` discriminator fields keep their fixed value.
 
 from __future__ import annotations
 
@@ -41,6 +41,20 @@ class UnknownEnum(str):
         return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
+DatasetFileType = Literal["csv", "parquet"]
+
+
+TabPFNSystem = Literal["preprocessing", "text", "thinking"]
+
+
+ThinkingEffort = Literal["medium", "high"]
+
+
+class AsyncSettings(BaseModel):
+    use_above_trainset_size_bytes: int
+    poll_timeout_secs: float
+
+
 class ClassifierOutputType(str, Enum):
     PROBAS = "probas"
     PREDS = "preds"
@@ -50,6 +64,11 @@ class ClassifierPredictParams(BaseModel):
     output_type: (
         Annotated[ClassifierOutputType | UnknownEnum, Field(union_mode="left_to_right")] | None
     ) = None
+
+
+class FitMode(str, Enum):
+    FIT_PREPROCESSORS = "fit_preprocessors"
+    FIT_WITH_CACHE = "fit_with_cache"
 
 
 class ClassifierTabPFNConfig(BaseModel):
@@ -65,26 +84,37 @@ class ClassifierTabPFNConfig(BaseModel):
         Annotated[Literal["autocast", "auto"] | str, Field(union_mode="left_to_right")] | None
     ) = None
     ignore_pretraining_limits: bool | None = None
+    fit_mode: Annotated[FitMode | UnknownEnum, Field(union_mode="left_to_right")] | None = None
     model_path: str | None = None
     balance_probabilities: bool | None = None
 
 
+class PredictionTask(str, Enum):
+    CLASSIFICATION = "classification"
+    REGRESSION = "regression"
+
+
 class ClassifierConfig(BaseModel):
-    task: Literal["classification"] = "classification"
-    tabpfn_config: ClassifierTabPFNConfig = Field(default_factory=ClassifierTabPFNConfig)
-    predict_params: ClassifierPredictParams = Field(default_factory=ClassifierPredictParams)
+    task: Literal[PredictionTask.CLASSIFICATION] = PredictionTask.CLASSIFICATION
+    tabpfn_config: ClassifierTabPFNConfig | None = None
+    predict_params: ClassifierPredictParams | None = None
+
+
+class ClassifierFitTaskConfig(BaseModel):
+    task: Literal[PredictionTask.CLASSIFICATION] = PredictionTask.CLASSIFICATION
+    tabpfn_config: ClassifierTabPFNConfig | None = None
 
 
 class ClassifierMetadata(BaseModel):
     test_set_num_rows: int
     test_set_num_cols: int
-    task: Literal["classification"] = "classification"
+    task: Literal[PredictionTask.CLASSIFICATION] = PredictionTask.CLASSIFICATION
     package_version: str
     tabpfn_config: ClassifierTabPFNConfig
 
 
 class FileInfo(BaseModel):
-    format: Annotated[Literal["csv", "parquet"] | str, Field(union_mode="left_to_right")]
+    format: Annotated[DatasetFileType | str, Field(union_mode="left_to_right")]
     hash: str | None = Field(
         default=None, description="The crc32c hash of the file, used to deduplicate the file."
     )
@@ -117,10 +147,8 @@ class ModelLimit(BaseModel):
     max_classes: int
     max_cols: int
     test_set_max_rows_w_full_regression_output: int
+    predict_row_pairs_budget: int
     test_set_max_cells: int
-    # Optional until all deployed servers send it; estimator.py falls back to
-    # its local default when absent.
-    predict_row_pairs_budget: int | None = None
 
 
 class ModelVersion(str, Enum):
@@ -128,11 +156,6 @@ class ModelVersion(str, Enum):
     V2_5 = "v2.5"
     V2_6 = "v2.6"
     V3 = "v3"
-
-
-class PredictionTask(str, Enum):
-    CLASSIFICATION = "classification"
-    REGRESSION = "regression"
 
 
 class RegressorOutputType(str, Enum):
@@ -164,24 +187,41 @@ class RegressorTabPFNConfig(BaseModel):
         Annotated[Literal["autocast", "auto"] | str, Field(union_mode="left_to_right")] | None
     ) = None
     ignore_pretraining_limits: bool | None = None
+    fit_mode: Annotated[FitMode | UnknownEnum, Field(union_mode="left_to_right")] | None = None
     model_path: str | None = None
 
 
 class RegressorConfig(BaseModel):
-    task: Literal["regression"] = "regression"
-    tabpfn_config: RegressorTabPFNConfig = Field(default_factory=RegressorTabPFNConfig)
-    predict_params: RegressorPredictParams = Field(default_factory=RegressorPredictParams)
+    task: Literal[PredictionTask.REGRESSION] = PredictionTask.REGRESSION
+    tabpfn_config: RegressorTabPFNConfig | None = None
+    predict_params: RegressorPredictParams | None = None
+
+
+class RegressorFitTaskConfig(BaseModel):
+    task: Literal[PredictionTask.REGRESSION] = PredictionTask.REGRESSION
+    tabpfn_config: RegressorTabPFNConfig | None = None
 
 
 class RegressorMetadata(BaseModel):
     test_set_num_rows: int
     test_set_num_cols: int
-    task: Literal["regression"] = "regression"
+    task: Literal[PredictionTask.REGRESSION] = PredictionTask.REGRESSION
     package_version: str
     tabpfn_config: RegressorTabPFNConfig
 
 
+class ThinkingConfig(BaseModel):
+    effort: Annotated[ThinkingEffort | str, Field(union_mode="left_to_right")] | None = None
+    timeout_secs: float | None = None
+    metric: str | None = None
+
+
 Prediction = Union[list[Any], list[list[Any]], dict[str, Union[list[Any], list[list[Any]]]]]
+
+
+FitTaskConfig = Annotated[
+    Union[ClassifierFitTaskConfig, RegressorFitTaskConfig], Field(discriminator="task")
+]
 
 
 Metadata = Annotated[Union[ClassifierMetadata, RegressorMetadata], Field(discriminator="task")]
@@ -194,7 +234,6 @@ class DuplicateTestSetErrorResponse(BaseModel):
     message: str
     error_code: str = "DUPLICATE_TEST_SET_UPLOAD"
     trace_id: UUID | None = None
-    detail: str | None = None
     test_set_upload_id: UUID
 
 
@@ -202,35 +241,14 @@ class DuplicateTrainSetErrorResponse(BaseModel):
     message: str
     error_code: str = "DUPLICATE_TRAIN_SET_UPLOAD"
     trace_id: UUID | None = None
-    detail: str | None = None
     train_set_upload_id: UUID
 
 
 class FitRequest(BaseModel):
+    task_config: FitTaskConfig
+    tabpfn_systems: list[Annotated[TabPFNSystem | str, Field(union_mode="left_to_right")]] | None = None
+    thinking_config: ThinkingConfig | None = None
     train_set_upload_id: UUID
-    task: Annotated[PredictionTask | UnknownEnum, Field(union_mode="left_to_right")]
-    tabpfn_systems: (
-        list[
-            Annotated[
-                Literal["preprocessing", "text", "thinking"] | str, Field(union_mode="left_to_right")
-            ]
-        ]
-        | None
-    ) = None
-    tabpfn_config: dict[str, Any] | None = None
-    thinking_effort: (
-        Annotated[Literal["medium", "high"] | str, Field(union_mode="left_to_right")] | None
-    ) = None
-    thinking_timeout_s: float | None = None
-    thinking_effort_metric: str | None = None
-    force_refit: bool | None = Field(
-        default=None,
-        description="Deprecated, ignored: every fit creates a fresh fitted train set and runs unconditionally. Reuse fits by keeping the fitted_train_set_id (estimator save_model/load_model).",
-    )
-    async_mode: bool | None = Field(
-        default=None,
-        description="Submit the fit and return immediately with status=pending; poll GET /tabpfn/fit/{fitted_train_set_id} for the outcome. Defaults to the blocking behaviour.",
-    )
 
 
 class FitResponse(BaseModel):
@@ -238,36 +256,38 @@ class FitResponse(BaseModel):
     status: Annotated[FitStatus | UnknownEnum, Field(union_mode="left_to_right")]
 
 
-class FitStatusResponse(BaseModel):
+class GetFitStatusRequest(BaseModel):
+    fitted_train_set_id: UUID
+
+
+class GetFitStatusResponse(BaseModel):
     fitted_train_set_id: UUID
     status: Annotated[FitStatus | UnknownEnum, Field(union_mode="left_to_right")]
+    retry_in_secs: float | None = None
     error: str | None = None
+    error_code: str | None = None
 
 
-class GetModelLimitsResponse(BaseModel):
+class GetSettingsResponse(BaseModel):
     default_model_version: Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")]
     max_model_limit: ModelLimit
     model_limits: dict[
         Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")], ModelLimit
     ]
     dataset_max_size_bytes: int
+    async_settings: AsyncSettings
 
 
 class NotFoundErrorResponse(BaseModel):
     message: str
     error_code: str = "NOT_FOUND"
     trace_id: UUID | None = None
-    detail: str | None = None
 
 
 class PredictRequest(BaseModel):
     test_set_upload_id: UUID
     fitted_train_set_id: UUID
     task_config: TaskConfig
-    force_refit: bool | None = Field(
-        default=None,
-        description="Whether to force the fitting of the test set even if a fittedtest set and transform states already exist.",
-    )
 
 
 class PredictResponse(BaseModel):
@@ -303,3 +323,14 @@ class PrepareTrainSetUploadResponse(BaseModel):
     train_set_upload_id: UUID
     x_train_info: FileUploadInfo
     y_train_info: FileUploadInfo
+
+
+class SubmitFitJobRequest(BaseModel):
+    task_config: FitTaskConfig
+    tabpfn_systems: list[Annotated[TabPFNSystem | str, Field(union_mode="left_to_right")]] | None = None
+    thinking_config: ThinkingConfig | None = None
+    train_set_upload_id: UUID
+
+
+class SubmitFitJobResponse(BaseModel):
+    fitted_train_set_id: UUID

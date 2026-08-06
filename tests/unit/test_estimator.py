@@ -31,6 +31,7 @@ from tabpfn_client.api_models import (
     RegressorPredictParams,
     UnknownEnum,
 )
+from tabpfn_client.models import TabPFNConfig
 
 
 def _normalize_type(tp: object) -> object:
@@ -72,7 +73,7 @@ _ALLOWED_NON_NULL_DEFAULT_TABPFN_CONFIG_PARAMS = [
 )
 def test_client_config_includes_server_config(
     estimator: Type[TabPFNClassifier | TabPFNRegressor],
-    config_model: Type[ClassifierTabPFNConfig | RegressorTabPFNConfig],
+    config_model: Type[TabPFNConfig],
 ):
     init_sig = inspect.signature(estimator.__init__).parameters
     init_params = set(init_sig) - {"self"}
@@ -225,7 +226,7 @@ def test_sklearn_compatible(
             patch.object(
                 estimator_module.InferenceClient, "predict", side_effect=fake.predict
             ),
-            patch.object(ServiceClient, "get_model_limits", return_value=None),
+            patch.object(ServiceClient, "get_settings", return_value=None),
         ):
             check_estimator(
                 estimator(),

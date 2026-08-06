@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Iterator
 
 from rich.console import Console
 from rich.logging import RichHandler
@@ -78,7 +78,7 @@ def info(message: str) -> None:
 
 
 @contextmanager
-def status(message: str) -> Iterator[None]:
+def status(message: str) -> Generator[None]:
     with console.status(f"[bold]{message}[/bold]"):
         yield
 

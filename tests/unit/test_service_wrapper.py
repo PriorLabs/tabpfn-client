@@ -46,7 +46,7 @@ class TestUserAuthClient(unittest.TestCase):
     def test_set_token_by_invalid_login(self, mock_server):
         # mock invalid login response
         mock_server.router.post(mock_server.endpoints.login.path).respond(
-            401, json={"detail": "Incorrect email or password"}
+            401, json={"message": "Incorrect email or password"}
         )
         self.assertEqual(
             (None, "Incorrect email or password", 401),
@@ -86,7 +86,7 @@ class TestUserAuthClient(unittest.TestCase):
     def test_set_token_by_invalid_registration(self, mock_server):
         # mock invalid registration response
         mock_server.router.post(mock_server.endpoints.register.path).respond(
-            401, json={"detail": "Password mismatch"}
+            401, json={"message": "Password mismatch"}
         )
         self.assertEqual(
             (False, "Password mismatch", None),
