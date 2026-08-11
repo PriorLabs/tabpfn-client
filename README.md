@@ -109,8 +109,8 @@ from tabpfn_client import TabPFNRegressor
 model = TabPFNRegressor(fit_mode="fit_with_cache")
 model.fit(X_train, y_train)
 
-model.predict(X_test)     # first predict warms the cache
-model.predict(X_other)    # subsequent predicts are faster
+model.predict(X_test)     # served from the cache built during fit()
+model.predict(X_other)
 ```
 
 `fit()` records the id of the fitted model as `model_id_`. Assign it to a fresh estimator to predict against the same fit without re-uploading your training data — from another process or another machine:
