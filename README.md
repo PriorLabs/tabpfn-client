@@ -99,6 +99,34 @@ Notes:
 - Thinking-mode fits take longer than regular fits (often several minutes).
 - Thinking-mode fits draw from a **separate, smaller budget** than regular fits — they do not count against your regular prediction allowance, and you cannot use your regular allowance for them. The number of thinking-mode fits you can run per day is limited. If you need more capacity, request an increase via [ux.priorlabs.ai](https://ux.priorlabs.ai).
 
+## KV Cache
+
+`fit_mode="fit_with_cache"` caches the fit so repeated predictions against it are faster. Use it when you fit once and predict many times.
+
+```python
+from tabpfn_client import TabPFNRegressor
+
+model = TabPFNRegressor(fit_mode="fit_with_cache")
+model.fit(X_train, y_train)
+
+model.predict(X_test)     # first predict warms the cache
+model.predict(X_other)    # subsequent predicts are faster
+```
+
+`fit()` records the id of the fitted model as `model_id_`. Assign it to a fresh estimator to predict against the same fit without re-uploading your training data — from another process or another machine:
+
+```python
+later = TabPFNRegressor(fit_mode="fit_with_cache")
+later.model_id_ = model.model_id_
+later.predict(X_test)
+```
+
+Notes:
+
+- `fit_mode` accepts `"fit_preprocessors"` (the default) or `"fit_with_cache"`.
+- Predictions are the same either way — caching changes the speed, not the model.
+- Not compatible with thinking mode.
+
 ## Authentication
 
 ### Load Your Token
