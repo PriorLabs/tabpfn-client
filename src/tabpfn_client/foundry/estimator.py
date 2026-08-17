@@ -28,6 +28,74 @@ from tabpfn_client.models import FitModeLiteral
 
 ThinkingEffort = Literal["medium", "high"]
 
+# The endpoint validates these server-side and answers an out-of-range value
+# with an opaque HTTP 424, so we mirror the accepted sets here to fail fast
+# with an actionable message instead.
+_VALID_THINKING_EFFORTS: tuple = ("medium", "high")
+_VALID_THINKING_METRICS: Dict[str, tuple] = {
+    "classification": ("accuracy", "log_loss", "balanced_accuracy"),
+    "regression": ("rmse", "mse", "mae", "r2"),
+}
+
+
+class FoundryEndpointError(httpx.HTTPStatusError):
+    """A non-2xx answer from the Foundry endpoint, with its error payload.
+
+    Subclasses `httpx.HTTPStatusError`, so callers that already catch that
+    keep working. The endpoint reports failures as a JSON body carrying
+    `error_code` and `trace_id`; both are surfaced on the exception (and in
+    its message) because the `trace_id` is what the endpoint provider needs
+    in order to look the failure up server-side.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        request: Any,
+        response: Any,
+        error_code: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ):
+        super().__init__(message, request=request, response=response)
+        self.error_code = error_code
+        self.trace_id = trace_id
+
+
+def _raise_for_status(resp: httpx.Response) -> None:
+    """Raise `FoundryEndpointError` carrying the endpoint's error payload."""
+    if not resp.is_error:
+        return
+
+    detail, error_code, trace_id = "", None, None
+    try:
+        payload = resp.json()
+    except Exception:
+        detail = resp.text[:500]
+    else:
+        if isinstance(payload, dict):
+            error_code = payload.get("error_code")
+            trace_id = payload.get("trace_id")
+            detail = payload.get("message") or ""
+        else:
+            detail = str(payload)[:500]
+
+    message = f"Foundry endpoint returned HTTP {resp.status_code}"
+    if error_code:
+        message += f" ({error_code})"
+    if detail:
+        message += f": {detail}"
+    if trace_id:
+        message += f" [trace_id={trace_id}]"
+
+    raise FoundryEndpointError(
+        message,
+        request=resp.request,
+        response=resp,
+        error_code=error_code,
+        trace_id=trace_id,
+    )
+
 
 def _to_jsonable(X: Any) -> list:
     """Coerce numpy / pandas inputs to plain Python lists for JSON."""
@@ -150,6 +218,29 @@ class _FoundryBase(BaseEstimator):
                     "fit_mode='fit_with_cache' (or leave fit_mode unset)."
                 )
 
+        if (
+            self.thinking_effort is not None
+            and self.thinking_effort not in _VALID_THINKING_EFFORTS
+        ):
+            raise ValueError(
+                f"thinking_effort must be one of "
+                f"{list(_VALID_THINKING_EFFORTS)}; got {self.thinking_effort!r}."
+            )
+
+        if self.thinking_metric is not None:
+            allowed = _VALID_THINKING_METRICS.get(self._task, ())
+            if self.thinking_metric not in allowed:
+                raise ValueError(
+                    f"thinking_metric={self.thinking_metric!r} is not supported "
+                    f"for task={self._task!r}; expected one of {list(allowed)}."
+                )
+
+        if self.thinking_timeout_s is not None and self.thinking_timeout_s < 0:
+            raise ValueError(
+                f"thinking_timeout_s must be >= 0 (0 means no client-requested "
+                f"limit); got {self.thinking_timeout_s!r}."
+            )
+
     @property
     def _thinking_active(self) -> bool:
         return self.thinking_mode or self.thinking_effort is not None
@@ -186,7 +277,17 @@ class _FoundryBase(BaseEstimator):
         return cfg
 
     def _build_thinking_block(self) -> Dict[str, Any]:
-        """Top-level wire fields for thinking-mode. Empty when inactive."""
+        """Top-level wire fields for thinking-mode. Empty when inactive.
+
+        The endpoint only accepts these keys at the top level of the request
+        body — nesting them under `task_config` / `tabpfn_config` /
+        `predict_params` is rejected the same way an unknown field is.
+
+        Note that `thinking_timeout_s` is a budget the server must be able to
+        meet: a value too small for the dataset makes the request fail rather
+        than return a cheaper answer, so leave it unset (or 0) unless you
+        specifically need to bound the call.
+        """
         if not self._thinking_active:
             return {}
         block: Dict[str, Any] = {
@@ -265,7 +366,7 @@ class _FoundryBase(BaseEstimator):
             json=body,
             headers=self._headers(),
         )
-        resp.raise_for_status()
+        _raise_for_status(resp)
         payload = resp.json()
         if self._cache_active:
             self._cached_model_id = payload.get("model_id") or self._cached_model_id

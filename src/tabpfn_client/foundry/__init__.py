@@ -5,7 +5,11 @@
 from tabpfn_client.foundry import TabPFNClassifier, TabPFNRegressor
 """
 
-from tabpfn_client.foundry.estimator import TabPFNClassifier, TabPFNRegressor
+from tabpfn_client.foundry.estimator import (
+    FoundryEndpointError,
+    TabPFNClassifier,
+    TabPFNRegressor,
+)
 
 
-__all__ = ["TabPFNClassifier", "TabPFNRegressor"]
+__all__ = ["FoundryEndpointError", "TabPFNClassifier", "TabPFNRegressor"]
