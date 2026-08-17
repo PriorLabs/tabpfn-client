@@ -10,19 +10,23 @@ The training data is shipped to the endpoint on the next `predict*`
 call, where the actual fit runs.
 
 This client sends requests as `application/json` only (Foundry also
-accepts `multipart/form-data`, but we don't use it here) and does not
-currently support thinking mode.
+accepts `multipart/form-data`, but we don't use it here).
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Literal, Optional, cast
 
 import httpx
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.utils.validation import check_is_fitted
+
+from tabpfn_client.models import FitModeLiteral
+
+
+ThinkingEffort = Literal["medium", "high"]
 
 
 def _to_jsonable(X: Any) -> list:
@@ -42,12 +46,17 @@ def _build_request_body(
     X_train: Optional[Any] = None,
     y_train: Optional[Any] = None,
     cached_model_id: Optional[str] = None,
+    thinking_block: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Assemble a Foundry `/predict` JSON body.
 
     When `cached_model_id` is provided, the body targets the V3 cache-hit
     path: `X_train` / `y_train` are omitted and a `context.model_id` is
     sent instead. Otherwise training data is shipped inline.
+
+    When `thinking_block` is provided (non-empty), its fields are merged
+    at the top level of the request body (e.g. `thinking_effort`,
+    `thinking_timeout_s`, `thinking_metric`).
     """
     body: Dict[str, Any] = {
         "task_config": {
@@ -57,6 +66,8 @@ def _build_request_body(
         },
         "x_test": _to_jsonable(X_test),
     }
+    if thinking_block:
+        body.update(thinking_block)
 
     # Build up the KV-cache context if we have a model_id,
     # otherwise ship the training data
@@ -91,7 +102,12 @@ class _FoundryBase(BaseEstimator):
         random_state: Optional[int] = 0,
         inference_config: Optional[Dict[str, Any]] = None,
         paper_version: bool = False,
+        thinking_mode: bool = False,
+        thinking_effort: Optional[ThinkingEffort] = None,
+        thinking_timeout_s: Optional[float] = None,
+        thinking_metric: Optional[str] = None,
         use_kv_cache: bool = False,
+        fit_mode: Optional[FitModeLiteral] = None,
         timeout_s: float = 300.0,
     ):
         self.endpoint_url = endpoint_url
@@ -106,8 +122,51 @@ class _FoundryBase(BaseEstimator):
         self.random_state = random_state
         self.inference_config = inference_config
         self.paper_version = paper_version
+        self.thinking_mode = thinking_mode
+        self.thinking_effort = thinking_effort
+        self.thinking_timeout_s = thinking_timeout_s
+        self.thinking_metric = thinking_metric
         self.use_kv_cache = use_kv_cache
+        self.fit_mode = fit_mode
         self.timeout_s = timeout_s
+        self._validate_args()
+
+    def _validate_args(self) -> None:
+        """Reject settings that would silently disable caching for a
+        configuration that plainly asked for it."""
+        if self.fit_mode == "fit_preprocessors":
+            if self.use_kv_cache:
+                raise ValueError(
+                    "Conflicting settings: fit_mode='fit_preprocessors' "
+                    "cannot be combined with use_kv_cache=True. Either drop "
+                    "use_kv_cache or set fit_mode='fit_with_cache'."
+                )
+            if self.thinking_mode or self.thinking_effort is not None:
+                raise ValueError(
+                    "Conflicting settings: fit_mode='fit_preprocessors' "
+                    "cannot be combined with thinking mode (thinking_mode=True "
+                    "or thinking_effort set). Thinking mode requires caching; "
+                    "either drop the thinking-mode params or set "
+                    "fit_mode='fit_with_cache' (or leave fit_mode unset)."
+                )
+
+    @property
+    def _thinking_active(self) -> bool:
+        return self.thinking_mode or self.thinking_effort is not None
+
+    @property
+    def _effective_fit_mode(self) -> FitModeLiteral:
+        # Explicit `fit_mode` wins; `_validate_args` guarantees it doesn't
+        # conflict with `use_kv_cache` / thinking mode.
+        if self.fit_mode is not None:
+            return cast(FitModeLiteral, self.fit_mode)
+        if self.use_kv_cache or self._thinking_active:
+            return "fit_with_cache"
+        return "fit_preprocessors"
+
+    @property
+    def _cache_active(self) -> bool:
+        return self._effective_fit_mode == "fit_with_cache"
 
     def _build_tabpfn_config(self) -> Dict[str, Any]:
         cfg: Dict[str, Any] = {
@@ -118,13 +177,28 @@ class _FoundryBase(BaseEstimator):
             "inference_precision": self.inference_precision,
             "random_state": self.random_state,
             "inference_config": self.inference_config,
-            "fit_mode": "fit_with_cache" if self.use_kv_cache else "fit_preprocessors",
+            "fit_mode": self._effective_fit_mode,
         }
 
         if self._task == "classification":
             cfg["balance_probabilities"] = self.balance_probabilities
 
         return cfg
+
+    def _build_thinking_block(self) -> Dict[str, Any]:
+        """Top-level wire fields for thinking-mode. Empty when inactive."""
+        if not self._thinking_active:
+            return {}
+        block: Dict[str, Any] = {
+            "thinking_effort": self.thinking_effort
+            if self.thinking_effort is not None
+            else "medium",
+        }
+        if self.thinking_timeout_s is not None:
+            block["thinking_timeout_s"] = self.thinking_timeout_s
+        if self.thinking_metric is not None:
+            block["thinking_metric"] = self.thinking_metric
+        return block
 
     def _headers(self) -> Dict[str, str]:
         return {
@@ -183,7 +257,8 @@ class _FoundryBase(BaseEstimator):
             X_test=X_test,
             X_train=self.X_train_,
             y_train=self.y_train_,
-            cached_model_id=self._cached_model_id if self.use_kv_cache else None,
+            cached_model_id=self._cached_model_id if self._cache_active else None,
+            thinking_block=self._build_thinking_block(),
         )
         resp = self._http_client().post(
             self.endpoint_url,
@@ -192,7 +267,7 @@ class _FoundryBase(BaseEstimator):
         )
         resp.raise_for_status()
         payload = resp.json()
-        if self.use_kv_cache:
+        if self._cache_active:
             self._cached_model_id = payload.get("model_id") or self._cached_model_id
         return payload
 
