@@ -15,7 +15,7 @@ accepts `multipart/form-data`, but we don't use it here).
 
 from __future__ import annotations
 
-from typing import Any, Dict, Literal, Optional, cast
+from typing import Any, Dict, Literal, Optional, Union, cast
 
 import httpx
 import numpy as np
@@ -104,6 +104,30 @@ def _to_jsonable(X: Any) -> list:
     if isinstance(X, pd.Series):
         return X.tolist()
     return np.asarray(X).tolist()
+
+
+def _contains_none(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, list):
+        return any(_contains_none(item) for item in value)
+    return False
+
+
+def _normalize_prediction_dict(prediction: Dict[str, Any]) -> Dict[str, np.ndarray]:
+    """Coerce a wire-format prediction dict (JSON lists) to `{str: ndarray}`.
+
+    Mirrors `tabpfn_client.client.InferenceClient.predict` so callers get the
+    same `dict[str, np.ndarray]` shape on Foundry as on the hosted client.
+    """
+    result: Dict[str, np.ndarray] = {}
+    for k, v in prediction.items():
+        if isinstance(v, list):
+            dtype = float if _contains_none(v) else None
+            result[k] = np.array(v, dtype=dtype)
+        else:
+            result[k] = v
+    return result
 
 
 def _build_request_body(
@@ -419,11 +443,24 @@ class TabPFNRegressor(_FoundryBase, RegressorMixin):
     def predict(
         self,
         X: Any,
-        output_type: str = "mean",
+        output_type: Literal[
+            "mean", "median", "mode", "quantiles", "full", "main"
+        ] = "mean",
         quantiles: Optional[list] = None,
-    ) -> np.ndarray:
+    ) -> Union[np.ndarray, list, Dict[str, np.ndarray]]:
         predict_params: Dict[str, Any] = {}
         if quantiles is not None:
             predict_params["quantiles"] = quantiles
         result = self._invoke(X, output_type=output_type, predict_params=predict_params)
-        return np.asarray(result["prediction"])
+        output = result["prediction"]
+
+        # Dispatch on wire shape rather than `output_type` so any dict-shaped
+        # response (`"full"`, `"main"`, or future ones) gets the same treatment.
+        if isinstance(output, dict):
+            return _normalize_prediction_dict(output)
+
+        if output_type == "quantiles":
+            arr = np.asarray(output)
+            return list(arr) if arr.ndim == 2 else [arr]
+
+        return np.asarray(output)
