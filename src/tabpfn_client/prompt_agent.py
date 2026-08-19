@@ -290,7 +290,11 @@ class PromptAgent:
                 )
             )
         if not is_created:
-            raise RuntimeError(f"User registration failed: {message}")
+            raise RuntimeError(
+                f"User registration failed: {message}\n"
+                f"If this looks wrong, report it at "
+                f"{URL_TABPFN_CLIENT_GITHUB_ISSUES}."
+            )
 
         console.print()
         success("Account created successfully!")

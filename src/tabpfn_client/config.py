@@ -7,13 +7,15 @@ from httpx import ConnectError
 
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.service_wrapper import UserAuthenticationClient
-from tabpfn_client.constants import CACHE_DIR
+from tabpfn_client.constants import CACHE_DIR, URL_TABPFN_CLIENT_GITHUB_ISSUES
 from tabpfn_client.prompt_agent import PromptAgent
 from tabpfn_client.options import reload_opts
 
 
 CONNECTION_ERROR = RuntimeError(
-    "TabPFN is inaccessible at the moment, please try again later."
+    "TabPFN is inaccessible at the moment, please try again later.\n"
+    "Check your network connection and any proxy or firewall in between.\n"
+    f"If it persists, report it at {URL_TABPFN_CLIENT_GITHUB_ISSUES}."
 )
 
 
@@ -72,8 +74,10 @@ def init(use_server=True):
             # The token is well-formed but the account's email is unverified,
             # which no token can work around.
             raise RuntimeError(
-                "Your TabPFN account's email address is not verified. Please "
-                "verify it before using the client."
+                "Your TabPFN account's email address is not verified.\n"
+                "Check your inbox for the verification email, or sign in at\n"
+                f"  {ServiceClient.server_config.gui_url}\n"
+                "to request a new one, then run your script again."
             )
         else:
             if not UserAuthenticationClient.is_accessible_connection():

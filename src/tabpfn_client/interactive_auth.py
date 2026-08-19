@@ -345,8 +345,10 @@ def interactive_login(
     is_valid = ServiceClient.is_auth_token_outdated(token)
     if is_valid is None:
         raise InteractiveLoginError(
-            "Your TabPFN account's email address is not verified. Please verify "
-            "it and run interactive_login() again."
+            "Your TabPFN account's email address is not verified.\n"
+            "Check your inbox for the verification email, or sign in at\n"
+            f"  {gui_url}\n"
+            "to request a new one, then run interactive_login() again."
         )
     if not is_valid:
         raise InteractiveLoginError(
