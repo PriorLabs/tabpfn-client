@@ -273,6 +273,7 @@ def _prompt_menu() -> str:
 
 def interactive_login(
     *,
+    force_relogin: bool = False,
     open_browser: bool = True,
     timeout: float = _CALLBACK_TIMEOUT_SECS,
 ) -> str:
@@ -290,6 +291,9 @@ def interactive_login(
     On success the token is verified, cached for future runs, and installed as
     the active token, so a subsequent `init()` needs no further input.
 
+    :param force_relogin: Run the login flow even when a working token is
+                          already available, for example to switch accounts.
+                          By default an existing token is returned as-is.
     :param open_browser: Open the login page in a browser. When False (or when
                          no display is detected) the URL is printed and you
                          paste the API key instead. Does not affect signup,
@@ -300,6 +304,20 @@ def interactive_login(
     :raises InteractiveLoginError: If no terminal is available, the flow was
                                    aborted, or the resulting token was rejected.
     """
+    if not force_relogin:
+        from tabpfn_client.service_wrapper import UserAuthenticationClient
+
+        existing = UserAuthenticationClient.resolve_token()
+        if existing is not None and ServiceClient.is_auth_token_outdated(existing):
+            from tabpfn_client.config import set_access_token
+
+            set_access_token(existing)
+            print(
+                "\nAlready logged in. "
+                "Pass force_relogin=True to log in as a different user.\n"
+            )
+            return existing
+
     if not _stdin_is_interactive():
         raise InteractiveLoginError(
             "interactive_login() needs an interactive terminal.\n"

@@ -7,6 +7,8 @@ import shutil
 import unittest
 from unittest.mock import patch
 
+import httpx
+
 from tabpfn_client import config, interactive_auth
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.constants import CACHE_DIR, URL_PRIOR_LABS_API_KEYS
@@ -36,6 +38,63 @@ class TestInteractiveLogin(unittest.TestCase):
         message = str(cm.exception)
         self.assertIn("interactive terminal", message)
         self.assertIn(URL_PRIOR_LABS_API_KEYS, message)
+
+    @with_mock_server()
+    def test_cached_token_short_circuits_the_prompt(self, mock_server):
+        mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
+        UserAuthenticationClient.persist_token("cached_token")
+
+        with patch.object(interactive_auth, "_prompt_menu") as mock_menu:
+            token = interactive_login()
+
+        self.assertEqual(token, "cached_token")
+        mock_menu.assert_not_called()
+
+    @with_mock_server()
+    def test_cached_token_does_not_short_circuit_a_non_tty(self, mock_server):
+        mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
+        UserAuthenticationClient.persist_token("cached_token")
+
+        with patch.object(
+            interactive_auth, "_stdin_is_interactive", return_value=False
+        ):
+            self.assertEqual(interactive_login(), "cached_token")
+
+    @with_mock_server()
+    def test_force_relogin_ignores_the_cached_token(self, mock_server):
+        mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
+        UserAuthenticationClient.persist_token("cached_token")
+
+        with patch.object(interactive_auth, "_stdin_is_interactive", return_value=True):
+            with patch.object(interactive_auth, "_prompt_menu", return_value="login"):
+                with patch.object(interactive_auth, "_has_display", return_value=False):
+                    with patch.object(
+                        interactive_auth,
+                        "_paste_only_login",
+                        return_value="fresh_token",
+                    ):
+                        token = interactive_login(force_relogin=True)
+
+        self.assertEqual(token, "fresh_token")
+
+    @with_mock_server()
+    def test_rejected_cached_token_falls_through_to_the_prompt(self, mock_server):
+        mock_server.router.get(mock_server.endpoints.protected_root.path).mock(
+            side_effect=[httpx.Response(401), httpx.Response(200)]
+        )
+        UserAuthenticationClient.persist_token("stale_token")
+
+        with patch.object(interactive_auth, "_stdin_is_interactive", return_value=True):
+            with patch.object(interactive_auth, "_prompt_menu", return_value="login"):
+                with patch.object(interactive_auth, "_has_display", return_value=False):
+                    with patch.object(
+                        interactive_auth,
+                        "_paste_only_login",
+                        return_value="fresh_token",
+                    ):
+                        token = interactive_login()
+
+        self.assertEqual(token, "fresh_token")
 
     @with_mock_server()
     def test_pasted_token_is_verified_and_installed(self, mock_server):
