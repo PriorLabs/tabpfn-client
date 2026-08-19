@@ -998,6 +998,153 @@ class ServiceClient(Singleton):
         return is_authenticated
 
     @classmethod
+    def validate_email(cls, email: str) -> tuple[bool, str]:
+        """
+        Send entered email to server that checks if it is valid and not already in use.
+
+        Parameters
+        ----------
+        email : str
+
+        Returns
+        -------
+        is_valid : bool
+            True if the email is valid.
+        message : str
+            The message returned from the server.
+        """
+        response = cls.httpx_client.post(
+            cls.server_endpoints.validate_email.path, params={"email": email}
+        )
+
+        cls._check_version(response)
+        if response.status_code == 200:
+            is_valid = True
+            message = ""
+        else:
+            is_valid = False
+            message = response.json().get("message", "")
+
+        return is_valid, message
+
+    @classmethod
+    def register(
+        cls,
+        email: str,
+        password: str,
+        password_confirm: str,
+        validation_link: str,
+        additional_info: dict,
+    ):
+        """
+        Register a new user with the provided credentials.
+
+        Parameters
+        ----------
+        email : str
+        password : str
+        password_confirm : str
+        validation_link: str
+        additional_info : dict
+
+        Returns
+        -------
+        is_created : bool
+            True if the user is created successfully.
+        message : str
+            The message returned from the server.
+        """
+
+        response = cls.httpx_client.post(
+            cls.server_endpoints.register.path,
+            json={
+                "email": email,
+                "password": password,
+                "password_confirm": password_confirm,
+                "validation_link": validation_link,
+                **additional_info,
+            },
+        )
+
+        cls._check_version(response)
+        if response.status_code == 200:
+            is_created = True
+            message = response.json().get("message", "")
+        else:
+            is_created = False
+            message = response.json().get("message", "")
+
+        access_token = response.json()["token"] if is_created else None
+        return is_created, message, access_token
+
+    @classmethod
+    def verify_email(cls, token: str, access_token: str) -> tuple[bool, str]:
+        """
+        Verify the email with the provided token.
+
+        Parameters
+        ----------
+        token : str
+        access_token : str
+
+        Returns
+        -------
+        is_verified : bool
+            True if the email is verified successfully.
+        message : str
+            The message returned from the server.
+        """
+
+        response = cls.httpx_client.get(
+            cls.server_endpoints.verify_email.path,
+            params={"token": token, "access_token": access_token},
+        )
+        cls._check_version(response)
+        if response.status_code == 200:
+            is_verified = True
+            message = response.json().get("message", "")
+        else:
+            is_verified = False
+            message = response.json().get("message", "")
+
+        return is_verified, message
+
+    @classmethod
+    def get_password_policy(cls) -> list[str]:
+        """
+        Get the password policy from the server.
+
+        Returns
+        -------
+        password_policy : {}
+            The password policy returned from the server.
+        """
+
+        response = cls.httpx_client.get(
+            cls.server_endpoints.password_policy.path,
+        )
+        cls._check_version(response)
+
+        return response.json()["requirements"]
+
+    @classmethod
+    def send_verification_email(cls, access_token: str) -> tuple[bool, str]:
+        """
+        Let the server send an email for verifying the email.
+        """
+        response = cls.httpx_client.post(
+            cls.server_endpoints.send_verification_email.path,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        if response.status_code == 200:
+            sent = True
+            message = response.json().get("message", "")
+        else:
+            sent = False
+            message = response.json().get("message", "")
+        return sent, message
+
+    @classmethod
     def retrieve_greeting_messages(cls) -> list[str]:
         """
         Retrieve greeting messages that are new for the user.

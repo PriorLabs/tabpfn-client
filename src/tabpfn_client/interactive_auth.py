@@ -101,7 +101,7 @@ def _create_callback_server(
                 body = (
                     "<h2>Login successful</h2>"
                     "<p>You can close this tab and return to your terminal.</p>"
-                    f"<script>window.location.href = \"{gui_url}/redirect-success\";</script>"
+                    f'<script>window.location.href = "{gui_url}/redirect-success";</script>'
                 )
             else:
                 body = (
@@ -113,7 +113,7 @@ def _create_callback_server(
             html = (
                 "<!DOCTYPE html><html><head><meta charset='utf-8'>"
                 "<title>Prior Labs</title></head>"
-                "<body style=\"font-family: -apple-system, Segoe UI, Roboto, sans-serif;"
+                '<body style="font-family: -apple-system, Segoe UI, Roboto, sans-serif;'
                 ' text-align: center; padding: 50px;">'
                 f"{body}</body></html>"
             )
@@ -184,7 +184,9 @@ def _paste_only_login(login_url: str, timeout: float) -> str | None:
         f"\nAfter logging in, copy your API key from\n  {URL_PRIOR_LABS_API_KEYS}\n"
     )
 
-    deadline_note = "  Type [c] then Enter to copy the URL, or paste your API key:\n\n> "
+    deadline_note = (
+        "  Type [c] then Enter to copy the URL, or paste your API key:\n\n> "
+    )
     try:
         while True:
             sys.stdout.write(deadline_note)
@@ -249,27 +251,53 @@ def _browser_login(gui_url: str, timeout: float) -> str | None:
     return token
 
 
+def _prompt_menu() -> str:
+    """Ask whether to log in or create an account. Returns 'login'/'signup'/'q'."""
+    sys.stdout.write(
+        "\n  [1] Log in to your TabPFN account"
+        "\n  [2] Create a TabPFN account"
+        "\n  [q] Quit\n"
+    )
+    sys.stdout.flush()
+    while True:
+        choice = input("\n> Choose (1/2/q): ").strip().lower()
+        if choice in ("1", "login"):
+            return "login"
+        if choice in ("2", "signup"):
+            return "signup"
+        if choice in ("q", "quit"):
+            return "q"
+        sys.stdout.write("  Please enter 1, 2, or q.\n")
+        sys.stdout.flush()
+
+
 def interactive_login(
     *,
     open_browser: bool = True,
     timeout: float = _CALLBACK_TIMEOUT_SECS,
 ) -> str:
-    """Log in or register interactively and return the resulting access token.
+    """Log in or create an account interactively, returning the access token.
 
     This is opt-in. The default authentication path never calls it: `init()`
     uses TABPFN_TOKEN, `set_access_token()`, or a cached token, and raises with
     instructions when none is available.
+
+    Offers two routes. Logging in opens the Prior Labs login page in a browser
+    (or prints the URL when there is no display) and waits for the resulting API
+    key. Creating an account runs entirely in the terminal, which is what makes
+    this usable from a hosted notebook where a browser tab is not an option.
 
     On success the token is verified, cached for future runs, and installed as
     the active token, so a subsequent `init()` needs no further input.
 
     :param open_browser: Open the login page in a browser. When False (or when
                          no display is detected) the URL is printed and you
-                         paste the API key instead.
+                         paste the API key instead. Does not affect signup,
+                         which never needs a browser.
     :param timeout: Seconds to wait for the browser callback. The paste prompt
                     stays available throughout.
     :returns: The access token.
-    :raises InteractiveLoginError: If no terminal is available, the login was
+    :raises InteractiveLoginError: If no terminal is available, the flow was
                                    aborted, or the resulting token was rejected.
     """
     if not _stdin_is_interactive():
@@ -280,9 +308,28 @@ def interactive_login(
             "  - pass it to tabpfn_client.set_access_token('<your-token>')."
         )
 
+    from tabpfn_client.prompt_agent import PromptAgent
+
+    PromptAgent.prompt_welcome()
+
+    try:
+        choice = _prompt_menu()
+    except KeyboardInterrupt:
+        sys.stdout.write("\n")
+        raise InteractiveLoginError("Login was cancelled.") from None
+
+    if choice == "q":
+        raise InteractiveLoginError("Login was cancelled.")
+
     gui_url = str(ServiceClient.server_config.gui_url)
 
-    if open_browser and _has_display():
+    if choice == "signup":
+        try:
+            token = PromptAgent.prompt_signup()
+        except KeyboardInterrupt:
+            sys.stdout.write("\n")
+            raise InteractiveLoginError("Signup was cancelled.") from None
+    elif open_browser and _has_display():
         token = _browser_login(gui_url, timeout)
     else:
         token = _paste_only_login(f"{gui_url}/login", timeout)

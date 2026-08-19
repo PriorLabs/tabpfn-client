@@ -83,6 +83,42 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
         cls.CACHED_TOKEN_FILE.write_text(access_token)
 
     @classmethod
+    def validate_email(cls, email: str) -> tuple[bool, str]:
+        return ServiceClient.validate_email(email)
+
+    @classmethod
+    def get_password_policy(cls):
+        return ServiceClient.get_password_policy()
+
+    @classmethod
+    def send_verification_email(cls, access_token: str) -> tuple[bool, str]:
+        return ServiceClient.send_verification_email(access_token)
+
+    @classmethod
+    def verify_email(cls, token: str, access_token: str) -> tuple[bool, str]:
+        return ServiceClient.verify_email(token, access_token)
+
+    @classmethod
+    def set_token_by_registration(
+        cls,
+        email: str,
+        password: str,
+        password_confirm: str,
+        validation_link: str,
+        additional_info: dict,
+    ) -> tuple[bool, str, str | None]:
+        is_created, message, access_token = ServiceClient.register(
+            email, password, password_confirm, validation_link, additional_info
+        )
+        if access_token is not None:
+            # Signing up is an explicit interactive act, so remembering the
+            # result is what the user asked for -- same rationale as
+            # interactive_login().
+            cls.set_token(access_token)
+            cls.persist_token(access_token)
+        return is_created, message, access_token
+
+    @classmethod
     def resolve_token(cls) -> str | None:
         """Find an access token without prompting, or return None.
 

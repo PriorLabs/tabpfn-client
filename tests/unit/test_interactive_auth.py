@@ -27,7 +27,9 @@ class TestInteractiveLogin(unittest.TestCase):
         shutil.rmtree(CACHE_DIR, ignore_errors=True)
 
     def test_requires_a_terminal(self):
-        with patch.object(interactive_auth, "_stdin_is_interactive", return_value=False):
+        with patch.object(
+            interactive_auth, "_stdin_is_interactive", return_value=False
+        ):
             with self.assertRaises(InteractiveLoginError) as cm:
                 interactive_login()
 
@@ -40,11 +42,14 @@ class TestInteractiveLogin(unittest.TestCase):
         mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
 
         with patch.object(interactive_auth, "_stdin_is_interactive", return_value=True):
-            with patch.object(interactive_auth, "_has_display", return_value=False):
-                with patch.object(
-                    interactive_auth, "_paste_only_login", return_value="pasted_token"
-                ):
-                    token = interactive_login()
+            with patch.object(interactive_auth, "_prompt_menu", return_value="login"):
+                with patch.object(interactive_auth, "_has_display", return_value=False):
+                    with patch.object(
+                        interactive_auth,
+                        "_paste_only_login",
+                        return_value="pasted_token",
+                    ):
+                        token = interactive_login()
 
         self.assertEqual("pasted_token", token)
         self.assertEqual("pasted_token", ServiceClient.get_access_token())
@@ -61,39 +66,88 @@ class TestInteractiveLogin(unittest.TestCase):
         mock_server.router.get(mock_server.endpoints.protected_root.path).respond(401)
 
         with patch.object(interactive_auth, "_stdin_is_interactive", return_value=True):
-            with patch.object(interactive_auth, "_has_display", return_value=False):
-                with patch.object(
-                    interactive_auth, "_paste_only_login", return_value="bad_token"
-                ):
-                    with self.assertRaises(InteractiveLoginError) as cm:
-                        interactive_login()
+            with patch.object(interactive_auth, "_prompt_menu", return_value="login"):
+                with patch.object(interactive_auth, "_has_display", return_value=False):
+                    with patch.object(
+                        interactive_auth, "_paste_only_login", return_value="bad_token"
+                    ):
+                        with self.assertRaises(InteractiveLoginError) as cm:
+                            interactive_login()
 
         self.assertIn("rejected", str(cm.exception))
         self.assertIsNone(ServiceClient.get_access_token())
 
     def test_aborted_login_raises(self):
         with patch.object(interactive_auth, "_stdin_is_interactive", return_value=True):
-            with patch.object(interactive_auth, "_has_display", return_value=False):
-                with patch.object(
-                    interactive_auth, "_paste_only_login", return_value=None
-                ):
-                    with self.assertRaises(InteractiveLoginError) as cm:
-                        interactive_login()
+            with patch.object(interactive_auth, "_prompt_menu", return_value="login"):
+                with patch.object(interactive_auth, "_has_display", return_value=False):
+                    with patch.object(
+                        interactive_auth, "_paste_only_login", return_value=None
+                    ):
+                        with self.assertRaises(InteractiveLoginError) as cm:
+                            interactive_login()
 
         self.assertIn("not completed", str(cm.exception))
 
     def test_open_browser_false_skips_the_browser(self):
         with patch.object(interactive_auth, "_stdin_is_interactive", return_value=True):
-            with patch.object(interactive_auth, "_has_display", return_value=True):
-                with patch.object(interactive_auth, "_browser_login") as mock_browser:
+            with patch.object(interactive_auth, "_prompt_menu", return_value="login"):
+                with patch.object(interactive_auth, "_has_display", return_value=True):
                     with patch.object(
-                        interactive_auth, "_paste_only_login", return_value=None
-                    ) as mock_paste:
-                        with self.assertRaises(InteractiveLoginError):
-                            interactive_login(open_browser=False)
+                        interactive_auth, "_browser_login"
+                    ) as mock_browser:
+                        with patch.object(
+                            interactive_auth, "_paste_only_login", return_value=None
+                        ) as mock_paste:
+                            with self.assertRaises(InteractiveLoginError):
+                                interactive_login(open_browser=False)
 
         mock_browser.assert_not_called()
         mock_paste.assert_called_once()
+
+    @with_mock_server()
+    def test_menu_routes_to_signup(self, mock_server):
+        mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
+
+        with patch.object(interactive_auth, "_stdin_is_interactive", return_value=True):
+            with patch.object(interactive_auth, "_prompt_menu", return_value="signup"):
+                with patch(
+                    "tabpfn_client.prompt_agent.PromptAgent.prompt_signup",
+                    return_value="signup_token",
+                ) as mock_signup:
+                    with patch.object(
+                        interactive_auth, "_browser_login"
+                    ) as mock_browser:
+                        token = interactive_login()
+
+        mock_signup.assert_called_once()
+        # Signup never needs a browser -- that is the point of it.
+        mock_browser.assert_not_called()
+        self.assertEqual("signup_token", token)
+        self.assertEqual(
+            "signup_token", UserAuthenticationClient.CACHED_TOKEN_FILE.read_text()
+        )
+
+    def test_menu_quit_raises(self):
+        with patch.object(interactive_auth, "_stdin_is_interactive", return_value=True):
+            with patch.object(interactive_auth, "_prompt_menu", return_value="q"):
+                with self.assertRaises(InteractiveLoginError) as cm:
+                    interactive_login()
+
+        self.assertIn("cancelled", str(cm.exception))
+
+    def test_abandoned_signup_raises(self):
+        """Quitting at email verification leaves no usable token."""
+        with patch.object(interactive_auth, "_stdin_is_interactive", return_value=True):
+            with patch.object(interactive_auth, "_prompt_menu", return_value="signup"):
+                with patch(
+                    "tabpfn_client.prompt_agent.PromptAgent.prompt_signup",
+                    return_value=None,
+                ):
+                    with self.assertRaises(InteractiveLoginError) as cm:
+                        interactive_login()
+
+        self.assertIn("not completed", str(cm.exception))
 
     @with_mock_server()
     def test_init_never_triggers_interactive_login(self, mock_server):
@@ -102,11 +156,15 @@ class TestInteractiveLogin(unittest.TestCase):
 
         with patch.object(interactive_auth, "_browser_login") as mock_browser:
             with patch.object(interactive_auth, "_paste_only_login") as mock_paste:
-                with self.assertRaises(RuntimeError):
-                    config.init(use_server=True)
+                with patch(
+                    "tabpfn_client.prompt_agent.PromptAgent.prompt_signup"
+                ) as mock_signup:
+                    with self.assertRaises(RuntimeError):
+                        config.init(use_server=True)
 
         mock_browser.assert_not_called()
         mock_paste.assert_not_called()
+        mock_signup.assert_not_called()
 
 
 class TestBrowserCallbackRace(unittest.TestCase):
@@ -118,7 +176,9 @@ class TestBrowserCallbackRace(unittest.TestCase):
         auth_event = threading.Event()
         received: list[str | None] = [None]
 
-        with patch.object(interactive_auth.select, "select", return_value=([1], [], [])):
+        with patch.object(
+            interactive_auth.select, "select", return_value=([1], [], [])
+        ):
             with patch.object(
                 interactive_auth.sys.stdin, "readline", return_value="typed_token\n"
             ):
