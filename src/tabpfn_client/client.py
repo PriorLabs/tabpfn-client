@@ -37,8 +37,6 @@ import pandas as pd
 import backoff
 import httpx
 from omegaconf import DictConfig, OmegaConf
-from tabpfn_client.browser_auth import BrowserAuthHandler
-from tabpfn_common_utils import utils as common_utils
 from tabpfn_common_utils.utils import Singleton
 from tabpfn_client.api_models import (
     GetSettingsResponse,
@@ -104,26 +102,8 @@ def _contains_none(value: Any) -> bool:
     return False
 
 
-class SensitiveDataFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        args = record.args
-        if (
-            "password" in record.getMessage()
-            and isinstance(args, tuple)
-            and len(args) >= 2
-        ):
-            original_query = str(args[1])
-            filtered_query = re.sub(
-                r"(password|password_confirm)=[^&]*", r"\1=[FILTERED]", original_query
-            )
-            record.args = (args[0], filtered_query, *args[2:])
-        return True
-
-
-# Apply the custom filter to the httpx logger
 httpx_logger = logging.getLogger("httpx")
 httpx_logger.setLevel(logging.WARNING)
-httpx_logger.addFilter(SensitiveDataFilter())
 
 SERVER_CONFIG_FILE = Path(__file__).parent.resolve() / "server_config.yaml"
 SERVER_CONFIG = cast(DictConfig, OmegaConf.load(SERVER_CONFIG_FILE))
@@ -1018,221 +998,6 @@ class ServiceClient(Singleton):
         return is_authenticated
 
     @classmethod
-    def validate_email(cls, email: str) -> tuple[bool, str]:
-        """
-        Send entered email to server that checks if it is valid and not already in use.
-
-        Parameters
-        ----------
-        email : str
-
-        Returns
-        -------
-        is_valid : bool
-            True if the email is valid.
-        message : str
-            The message returned from the server.
-        """
-        response = cls.httpx_client.post(
-            cls.server_endpoints.validate_email.path, params={"email": email}
-        )
-
-        cls._check_version(response)
-        if response.status_code == 200:
-            is_valid = True
-            message = ""
-        else:
-            is_valid = False
-            message = response.json().get("message", "")
-
-        return is_valid, message
-
-    @classmethod
-    def register(
-        cls,
-        email: str,
-        password: str,
-        password_confirm: str,
-        validation_link: str,
-        additional_info: dict,
-    ):
-        """
-        Register a new user with the provided credentials.
-
-        Parameters
-        ----------
-        email : str
-        password : str
-        password_confirm : str
-        validation_link: str
-        additional_info : dict
-
-        Returns
-        -------
-        is_created : bool
-            True if the user is created successfully.
-        message : str
-            The message returned from the server.
-        """
-
-        response = cls.httpx_client.post(
-            cls.server_endpoints.register.path,
-            json={
-                "email": email,
-                "password": password,
-                "password_confirm": password_confirm,
-                "validation_link": validation_link,
-                **additional_info,
-            },
-        )
-
-        cls._check_version(response)
-        if response.status_code == 200:
-            is_created = True
-            message = response.json().get("message", "")
-        else:
-            is_created = False
-            message = response.json().get("message", "")
-
-        access_token = response.json()["token"] if is_created else None
-        return is_created, message, access_token
-
-    @classmethod
-    def verify_email(cls, token: str, access_token: str) -> tuple[bool, str]:
-        """
-        Verify the email with the provided token.
-
-        Parameters
-        ----------
-        token : str
-        access_token : str
-
-        Returns
-        -------
-        is_verified : bool
-            True if the email is verified successfully.
-        message : str
-            The message returned from the server.
-        """
-
-        response = cls.httpx_client.get(
-            cls.server_endpoints.verify_email.path,
-            params={"token": token, "access_token": access_token},
-        )
-        cls._check_version(response)
-        if response.status_code == 200:
-            is_verified = True
-            message = response.json().get("message", "")
-        else:
-            is_verified = False
-            message = response.json().get("message", "")
-
-        return is_verified, message
-
-    @classmethod
-    def login(
-        cls, email: str, password: str
-    ) -> tuple[str | None, str, int, str | None]:
-        """
-        Login with the provided credentials and return the access token if successful.
-
-        Parameters
-        ----------
-        email : str
-        password : str
-
-        Returns
-        -------
-        access_token : str | None
-            The access token returned from the server. Return None if login fails.
-        message : str
-            The message returned from the server.
-        status_code : int
-            The status code returned from the server.
-        session_id : str | None
-            The session id returned from the server.
-        """
-
-        access_token = None
-        session_id = None
-        response = cls.httpx_client.post(
-            cls.server_endpoints.login.path,
-            data=common_utils.to_oauth_request_form(email, password),
-        )
-
-        cls._check_version(response)
-        if response.status_code == 200:
-            access_token = response.json()["access_token"]
-            session_id = response.cookies.get("session_id")
-            message = ""
-        elif response.status_code == 403:
-            access_token = response.headers.get("access_token")
-            message = "Email not verified"
-        else:
-            try:
-                message = response.json()["message"]
-            except (json.JSONDecodeError, KeyError):
-                message = (
-                    response.text
-                    or f"Login failed with status code {response.status_code}"
-                )
-        # status code signifies the success of the login, issues with password, and email verification
-        # 200 : success, 401 : wrong password, 403 : email not verified yet
-        return access_token, message, response.status_code, session_id
-
-    @classmethod
-    def get_password_policy(cls) -> list[str]:
-        """
-        Get the password policy from the server.
-
-        Returns
-        -------
-        password_policy : {}
-            The password policy returned from the server.
-        """
-
-        response = cls.httpx_client.get(
-            cls.server_endpoints.password_policy.path,
-        )
-        cls._check_version(response)
-
-        return response.json()["requirements"]
-
-    @classmethod
-    def send_reset_password_email(cls, email: str) -> tuple[bool, str]:
-        """
-        Let the server send an email for resetting the password.
-        """
-        response = cls.httpx_client.post(
-            cls.server_endpoints.send_reset_password_email.path,
-            params={"email": email},
-        )
-        if response.status_code == 200:
-            sent = True
-            message = response.json().get("message", "")
-        else:
-            sent = False
-            message = response.json().get("message", "")
-        return sent, message
-
-    @classmethod
-    def send_verification_email(cls, access_token: str) -> tuple[bool, str]:
-        """
-        Let the server send an email for verifying the email.
-        """
-        response = cls.httpx_client.post(
-            cls.server_endpoints.send_verification_email.path,
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        if response.status_code == 200:
-            sent = True
-            message = response.json().get("message", "")
-        else:
-            sent = False
-            message = response.json().get("message", "")
-        return sent, message
-
-    @classmethod
     def retrieve_greeting_messages(cls) -> list[str]:
         """
         Retrieve greeting messages that are new for the user.
@@ -1349,21 +1114,6 @@ class ServiceClient(Singleton):
         )
 
         cls._raise_on_error(response, "delete_user_account")
-
-    @classmethod
-    def try_browser_login(cls) -> tuple[bool, str]:
-        """
-        Attempts browser-based login flow
-        Returns (success: bool, message: str)
-        """
-        browser_auth = BrowserAuthHandler(cls.server_config.gui_url)
-        success, token = browser_auth.try_browser_login()
-
-        if success and token:
-            # Don't authorize directly, let UserAuthenticationClient handle it
-            return True, token
-
-        return False, "Browser login failed or was cancelled"
 
     @classmethod
     def get_api_usage(cls, access_token: str):

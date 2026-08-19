@@ -70,49 +70,35 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
         cls.CACHED_TOKEN_FILE.write_text(access_token)
 
     @classmethod
-    def validate_email(cls, email: str) -> tuple[bool, str]:
-        is_valid, message = ServiceClient.validate_email(email)
-        return is_valid, message
+    def resolve_token(cls) -> str | None:
+        """Find an access token without prompting, or return None.
 
-    @classmethod
-    def set_token_by_registration(
-        cls,
-        email: str,
-        password: str,
-        password_confirm: str,
-        validation_link: str,
-        additional_info: dict,
-    ) -> tuple[bool, str, str | None]:
-        is_created, message, access_token = ServiceClient.register(
-            email, password, password_confirm, validation_link, additional_info
-        )
-        if access_token is not None:
-            cls.set_token(access_token)
-        return is_created, message, access_token
+        Resolution order: a token already set on this process (via
+        `set_access_token`), then the TABPFN_TOKEN environment variable, then a
+        token cached by a previous run. The environment is read here rather than
+        at import time so that setting TABPFN_TOKEN after importing the package
+        still takes effect.
+        """
+        access_token = ServiceClient.get_access_token()
+        if access_token:
+            return access_token
 
-    @classmethod
-    def set_token_by_login(
-        cls, email: str, password: str
-    ) -> tuple[str | None, str, int]:
-        access_token, message, status_code, _ = ServiceClient.login(email, password)
+        env_token = os.environ.get("TABPFN_TOKEN")
+        if env_token:
+            return env_token.strip()
 
-        if access_token is None:
-            return None, message, status_code
+        if cls.CACHED_TOKEN_FILE.exists():
+            cached = cls.CACHED_TOKEN_FILE.read_text().strip()
+            if cached:
+                return cached
 
-        cls.set_token(access_token)
-        return access_token, message, status_code
+        return None
 
     @classmethod
     def try_reuse_existing_token(cls) -> tuple[bool, str | None]:
-        if ServiceClient.get_access_token() is None:
-            if get_opts().TABPFN_TOKEN:
-                access_token = get_opts().TABPFN_TOKEN
-            else:
-                if not cls.CACHED_TOKEN_FILE.exists():
-                    return False, None
-                access_token = cls.CACHED_TOKEN_FILE.read_text()
-        else:
-            access_token = ServiceClient.get_access_token()
+        access_token = cls.resolve_token()
+        if access_token is None:
+            return False, None
 
         is_valid = ServiceClient.is_auth_token_outdated(access_token)
         if is_valid is False:
@@ -122,15 +108,9 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
             return False, access_token
 
         logger.debug(f"Reusing existing access token? {is_valid}")
-        if access_token is None:
-            return False, None
         cls.set_token(access_token)
 
         return True, access_token
-
-    @classmethod
-    def get_password_policy(cls):
-        return ServiceClient.get_password_policy()
 
     @classmethod
     def reset_cache(cls):
@@ -149,41 +129,6 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
     @classmethod
     def retrieve_greeting_messages(cls):
         return ServiceClient.retrieve_greeting_messages()
-
-    @classmethod
-    def send_reset_password_email(cls, email: str) -> tuple[bool, str]:
-        sent, message = ServiceClient.send_reset_password_email(email)
-        return sent, message
-
-    @classmethod
-    def send_verification_email(cls, access_token: str) -> tuple[bool, str]:
-        sent, message = ServiceClient.send_verification_email(access_token)
-        return sent, message
-
-    @classmethod
-    def verify_email(cls, token: str, access_token: str) -> tuple[bool, str]:
-        verified, message = ServiceClient.verify_email(token, access_token)
-        return verified, message
-
-    @classmethod
-    def try_browser_login(cls) -> tuple[bool, str]:
-        """Try to authenticate using browser-based login"""
-
-        # Allow disabling browser login via environment variables
-        # - TABPFN_NO_BROWSER=1/true/yes/on
-        # - TABPFN_CLIENT_NO_BROWSER=1/true/yes/on (backward-compatible alias)
-        def _truthy(val: str | None) -> bool:
-            return val is not None and val.strip().lower() in {"1", "true", "yes", "on"}
-
-        if _truthy(os.environ.get("TABPFN_NO_BROWSER")) or _truthy(
-            os.environ.get("TABPFN_CLIENT_NO_BROWSER")
-        ):
-            return False, "Browser login disabled by environment variable"
-
-        success, token_or_message = ServiceClient.try_browser_login()
-        if success:
-            cls.set_token(token_or_message)
-        return success, token_or_message
 
 
 class UserDataClient(ServiceClientWrapper, Singleton):

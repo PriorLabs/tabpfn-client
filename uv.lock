@@ -710,18 +710,6 @@ wheels = [
 ]
 
 [[package]]
-name = "password-strength"
-version = "0.0.3.post2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "six" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/db/f1/6165ebcca27fca3f1d63f8c3a45805c2ed8568be4d09219a2aa45e792c14/password_strength-0.0.3.post2.tar.gz", hash = "sha256:bf4df10a58fcd3abfa182367307b4fd7b1cec518121dd83bf80c1c42ba796762", size = 12857, upload-time = "2019-01-04T13:41:29.711Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/1c/d6/08fd888c980589e4e27c2a4177e972481e8881600138e63afb785fe52630/password_strength-0.0.3.post2-py2.py3-none-any.whl", hash = "sha256:6739357c2863d707b7c7f247ff7c6882a70904a18d12c9aaf98f8b95da176fb9", size = 12167, upload-time = "2019-01-04T13:41:27.497Z" },
-]
-
-[[package]]
 name = "platformdirs"
 version = "4.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1435,7 +1423,6 @@ dependencies = [
     { name = "httpx" },
     { name = "omegaconf" },
     { name = "pandas" },
-    { name = "password-strength" },
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -1471,10 +1458,9 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.25.0,<=0.28.1" },
     { name = "omegaconf", specifier = ">=2.1.2,<=2.3.0" },
     { name = "pandas", specifier = ">=2.1.2,<=2.3.3" },
-    { name = "password-strength", specifier = "<=0.0.3.post2,>=0.0.3.post2" },
     { name = "pyarrow", specifier = ">=14.0.0,<=23.0.1" },
     { name = "pydantic", specifier = ">=2.11.7,<=2.13.4" },
-    { name = "pydantic-settings", specifier = "<=2.14.2,>=2.14.2" },
+    { name = "pydantic-settings", specifier = ">=2.14.2,<=2.14.2" },
     { name = "rich", specifier = ">=13.7.0,<=15.0.0" },
     { name = "scikit-learn", specifier = ">=1.3.1,<=1.9.0" },
     { name = "sseclient-py", specifier = ">=1.8.0,<=1.9.0" },

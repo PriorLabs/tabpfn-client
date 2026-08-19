@@ -145,65 +145,6 @@ class TestServiceClient(unittest.TestCase):
         self.assertTrue(str(cm.exception).startswith("Client version too old."))
 
     @with_mock_server()
-    def test_validate_email(self, mock_server):
-        mock_server.router.post(mock_server.endpoints.validate_email.path).respond(
-            200, json={"message": "dummy_message"}
-        )
-        self.assertEqual(ServiceClient.validate_email("dummy_email"), (True, ""))
-
-    @with_mock_server()
-    def test_validate_email_invalid(self, mock_server):
-        mock_server.router.post(mock_server.endpoints.validate_email.path).respond(
-            401, json={"message": "dummy_message"}
-        )
-        self.assertEqual(
-            ServiceClient.validate_email("dummy_email"),
-            (False, "dummy_message"),
-        )
-
-    @with_mock_server()
-    def test_register_user(self, mock_server):
-        mock_server.router.post(mock_server.endpoints.register.path).respond(
-            200, json={"message": "dummy_message", "token": "DUMMY_TOKEN"}
-        )
-        self.assertEqual(
-            ServiceClient.register(
-                "dummy_email",
-                "dummy_password",
-                "dummy_password",
-                "dummy_validation",
-                {
-                    "company": "dummy_company",
-                    "use_case": "dummy_usecase",
-                    "role": "dummy_role",
-                    "contact_via_email": False,
-                },
-            ),
-            (True, "dummy_message", "DUMMY_TOKEN"),
-        )
-
-    @with_mock_server()
-    def test_register_user_with_invalid_email(self, mock_server):
-        mock_server.router.post(mock_server.endpoints.register.path).respond(
-            401, json={"message": "dummy_message", "token": None}
-        )
-        self.assertEqual(
-            ServiceClient.register(
-                "dummy_email",
-                "dummy_password",
-                "dummy_password",
-                "dummy_validation",
-                {
-                    "company": "dummy_company",
-                    "use_case": "dummy_usecase",
-                    "role": "dummy_role",
-                    "contact_via_email": False,
-                },
-            ),
-            (False, "dummy_message", None),
-        )
-
-    @with_mock_server()
     def test_invalid_auth_token(self, mock_server):
         mock_server.router.get(mock_server.endpoints.protected_root.path).respond(401)
         self.assertFalse(ServiceClient.is_auth_token_outdated("fake_token"))
@@ -212,26 +153,6 @@ class TestServiceClient(unittest.TestCase):
     def test_valid_auth_token(self, mock_server):
         mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
         self.assertTrue(ServiceClient.is_auth_token_outdated("true_token"))
-
-    @with_mock_server()
-    def test_send_reset_password_email(self, mock_server):
-        mock_server.router.post(
-            mock_server.endpoints.send_reset_password_email.path
-        ).respond(200, json={"message": "Password reset email sent!"})
-        self.assertEqual(
-            ServiceClient.send_reset_password_email("test"),
-            (True, "Password reset email sent!"),
-        )
-
-    @with_mock_server()
-    def test_send_verification_email(self, mock_server):
-        mock_server.router.post(
-            mock_server.endpoints.send_verification_email.path
-        ).respond(200, json={"message": "Verification Email sent!"})
-        self.assertEqual(
-            ServiceClient.send_verification_email("test"),
-            (True, "Verification Email sent!"),
-        )
 
     @with_mock_server()
     def test_retrieve_greeting_messages(self, mock_server):

@@ -15,40 +15,6 @@ endpoints:
     methods: [ "GET" ]
     description: "Root endpoint"
 
-  password_policy:
-    path: "/auth/password_policy/"
-    methods: [ "GET" ]
-    description: "Password policy"
-
-  validate_email:
-    path: "/auth/validate_email/"
-    methods: [ "POST" ]
-    description: "Validate email"
-
-  register:
-    path: "/auth/register/"
-    methods: [ "POST" ]
-    description: "User registration"
-
-  login:
-    path: "/auth/login/"
-    methods: [ "POST" ]
-    description: "User login"
-
-  send_verification_email:
-    path: "/auth/send_verification_email/"
-    methods: [ "POST" ]
-    description: "Send verifiaction email or for reverification"
-
-  verify_email:
-    path: "/auth/verify_email/"
-    methods: [ "GET" ]
-    description: "Verify email"
-
-  send_reset_password_email:
-    path: "/auth/send_reset_password_email/"
-    methods: [ "POST" ]
-    description: "Send reset password email"
 
   retrieve_greeting_messages:
     path: "/retrieve_greeting_messages/"

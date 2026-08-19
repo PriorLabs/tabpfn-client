@@ -18,7 +18,7 @@ import tabpfn_client.options as options
 
 @pytest.fixture(autouse=True)
 def _restore_global_client_state():  # pyright: ignore[reportUnusedFunction]
-    saved_opts = options._opts.model_copy(deep=True)
+    saved_opts = options.get_opts().model_copy(deep=True)
     saved_token = os.environ.get("TABPFN_TOKEN")
     try:
         yield

@@ -6,6 +6,7 @@ from pathlib import Path
 CACHE_DIR = Path(__file__).parent.resolve() / ".tabpfn"
 
 URL_TABPFN_CLIENT_GITHUB_ISSUES = "https://github.com/priorlabs/tabpfn-client/issues"
+URL_PRIOR_LABS_API_KEYS = "https://ux.priorlabs.ai/account/api-keys"
 URL_PRIOR_LABS_TERMS_AND_CONDITIONS = (
     "https://priorlabs.ai/general-terms-and-conditions"
 )

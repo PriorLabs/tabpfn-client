@@ -129,17 +129,52 @@ Notes:
 
 ## Authentication
 
+Authentication is token-based. Generate a token at
+[ux.priorlabs.ai/account/api-keys](https://ux.priorlabs.ai/account/api-keys), then supply it
+in one of two ways.
+
+Via the environment, which needs no code changes:
+
+```bash
+export TABPFN_TOKEN="<your-token>"
+```
+
+Or in code, before the first fit or predict:
+
+```python
+import tabpfn_client
+tabpfn_client.set_access_token("<your-token>")
+```
+
+If neither is set, an interactive session asks you to paste a token (and remembers it for
+subsequent runs); a non-interactive one raises a `RuntimeError` explaining where to get one.
+
+### Interactive Login (opt-in)
+
+If you would rather log in or register through the browser than copy a token by hand, call
+`interactive_login()` explicitly:
+
+```python
+from tabpfn_client import interactive_login
+interactive_login()
+```
+
+It opens the Prior Labs login page — where you can log in, register, or use SSO — and waits
+for the resulting API key, which it verifies and caches for future runs. A local callback
+receives the key automatically; if that does not come through (some identity providers drop
+the callback), you can paste the key at the prompt instead, and over SSH the flow prints the
+URL and waits for a paste. Pass `open_browser=False` to skip the browser entirely.
+
+This is **opt-in only**. `init()`, `fit()`, and `predict()` never trigger it — they use the
+token sources above and fail with instructions when none is available.
+
 ### Load Your Token
+
+To read back the token in use, for example to pass it to another machine:
 
 ```python
 import tabpfn_client
 token = tabpfn_client.get_access_token()
-```
-
-and login (on another machine) using your access token, skipping the interactive flow, use:
-
-```python
-tabpfn_client.set_access_token(token)
 ```
 
 ## AWS SageMaker (BYOC)

@@ -20,7 +20,7 @@ class Options(BaseSettings):
     TABPFN_CLIENT_ASYNC_POLL_TIMEOUT: float = 7200.0
 
 
-_opts: Options = Options()
+_opts: Options | None = None
 
 
 # TODO(refactor): Some opts are used in the http client which is initialized as a class
@@ -31,4 +31,9 @@ def reload_opts() -> None:
 
 
 def get_opts() -> Options:
+    # Constructed on first use rather than at import time, so that environment
+    # variables set after `import tabpfn_client` are still picked up.
+    global _opts
+    if _opts is None:
+        _opts = Options()
     return _opts

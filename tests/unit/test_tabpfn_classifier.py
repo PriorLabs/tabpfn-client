@@ -78,16 +78,14 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         # remove cache dir
         shutil.rmtree(CACHE_DIR, ignore_errors=True)
 
-    @patch("tabpfn_client.browser_auth.webbrowser.open", return_value=False)
-    @patch("tabpfn_client.prompt_agent.PromptAgent.prompt_and_set_token")
+    @patch("tabpfn_client.config._prompt_and_set_token")
     @with_mock_server()
     def test_init_remote_classifier(
         self,
         mock_server,
         mock_prompt_and_set_token,
-        mock_webbrowser_open,
     ):
-        def _set_token_and_return_true():
+        def _set_token_and_return_true(**kwargs):
             UserAuthenticationClient.set_token(self.dummy_token)
             return True
 
@@ -184,7 +182,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         self.assertTrue(UserAuthenticationClient.CACHED_TOKEN_FILE.exists())
 
     @with_mock_server()
-    @patch("tabpfn_client.prompt_agent.PromptAgent.prompt_and_set_token")
+    @patch("tabpfn_client.config._prompt_and_set_token")
     def test_invalid_saved_access_token(self, mock_server, mock_prompt_and_set_token):
         mock_prompt_and_set_token.side_effect = [RuntimeError]
 
@@ -230,41 +228,17 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         # check if config is reset
         self.assertFalse(config.Config.is_initialized)
 
-    @patch(
-        "tabpfn_client.prompt_agent.PromptAgent.prompt_terms_and_cond",
-        return_value=False,
-    )
-    @patch("tabpfn_client.browser_auth.webbrowser.open", return_value=False)
-    @patch("rich.console.Console.input", side_effect=["1"])
-    @with_mock_server()  # TODO (leo): investigate why this needs to be the last decorator
-    def test_decline_terms_and_cond(
-        self,
-        mock_server,
-        mock_input,
-        mock_webbrowser_open,
-        mock_prompt_for_terms_and_cond,
-    ):
-        # mock connection
-        mock_server.router.get(mock_server.endpoints.root.path).respond(200)
-
-        self.assertRaises(RuntimeError, init, use_server=True)
-        self.assertTrue(mock_prompt_for_terms_and_cond.called)
-
     @with_mock_server()
-    @patch("tabpfn_client.prompt_agent.PromptAgent.prompt_and_set_token")
-    @patch(
-        "tabpfn_client.prompt_agent.PromptAgent.prompt_terms_and_cond",
-        return_value=True,
-    )
+    @patch("tabpfn_client.config._prompt_and_set_token")
     def test_cache_based_on_paper_version(
-        self, mock_server, mock_prompt_for_terms_and_cond, mock_prompt_and_set_token
+        self, mock_server, mock_prompt_and_set_token
     ):
         """
         Check that the dataset cached is different for different paper_version
         and similar for the same paper_version
         """
 
-        def _set_token_and_return_true():
+        def _set_token_and_return_true(**kwargs):
             UserAuthenticationClient.set_token(self.dummy_token)
             return True
 

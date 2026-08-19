@@ -1,3 +1,4 @@
+import os
 import unittest
 import zipfile
 from unittest.mock import patch
@@ -22,41 +23,29 @@ class TestUserAuthClient(unittest.TestCase):
     def tearDown(self):
         UserAuthenticationClient.CACHED_TOKEN_FILE.unlink(missing_ok=True)
 
-    @with_mock_server()
-    def test_set_token_by_valid_login(self, mock_server):
-        # mock valid login response
-        dummy_token = "dummy_token"
-        dummy_session_id = "dummy_session_id"
-        mock_server.router.post(mock_server.endpoints.login.path).respond(
-            200,
-            json={"access_token": dummy_token},
-            cookies={"session_id": dummy_session_id},
-        )
+    def test_resolve_token_reads_env_after_import(self):
+        # The environment must be consulted at resolution time, not at import
+        # time, so that setting TABPFN_TOKEN after `import tabpfn_client` works.
+        with patch.dict(os.environ, {"TABPFN_TOKEN": "late_env_token"}):
+            self.assertEqual("late_env_token", UserAuthenticationClient.resolve_token())
 
-        self.assertTrue(
-            UserAuthenticationClient.set_token_by_login(
-                "dummy_email", "dummy_password"
-            )[0]
-        )
+    def test_resolve_token_prefers_set_token_over_env(self):
+        ServiceClient.authorize("explicit_token")
+        with patch.dict(os.environ, {"TABPFN_TOKEN": "env_token"}):
+            self.assertEqual("explicit_token", UserAuthenticationClient.resolve_token())
 
-        # assert token is set
-        self.assertEqual(dummy_token, ServiceClient.get_access_token())
+    def test_resolve_token_falls_back_to_cache(self):
+        token_file = UserAuthenticationClient.CACHED_TOKEN_FILE
+        token_file.parent.mkdir(parents=True, exist_ok=True)
+        token_file.write_text("cached_token")
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TABPFN_TOKEN", None)
+            self.assertEqual("cached_token", UserAuthenticationClient.resolve_token())
 
-    @with_mock_server()
-    def test_set_token_by_invalid_login(self, mock_server):
-        # mock invalid login response
-        mock_server.router.post(mock_server.endpoints.login.path).respond(
-            401, json={"message": "Incorrect email or password"}
-        )
-        self.assertEqual(
-            (None, "Incorrect email or password", 401),
-            UserAuthenticationClient.set_token_by_login(
-                "dummy_email", "dummy_password"
-            ),
-        )
-
-        # assert token is not set
-        self.assertIsNone(ServiceClient.get_access_token())
+    def test_resolve_token_returns_none_when_absent(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TABPFN_TOKEN", None)
+            self.assertIsNone(UserAuthenticationClient.resolve_token())
 
     @with_mock_server()
     def test_try_reusing_existing_token(self, mock_server):
@@ -78,31 +67,6 @@ class TestUserAuthClient(unittest.TestCase):
     def test_try_reusing_non_existing_token(self):
         # assert no exception is raised
         UserAuthenticationClient.try_reuse_existing_token()
-
-        # assert token is not set
-        self.assertIsNone(ServiceClient.get_access_token())
-
-    @with_mock_server()
-    def test_set_token_by_invalid_registration(self, mock_server):
-        # mock invalid registration response
-        mock_server.router.post(mock_server.endpoints.register.path).respond(
-            401, json={"message": "Password mismatch"}
-        )
-        self.assertEqual(
-            (False, "Password mismatch", None),
-            UserAuthenticationClient.set_token_by_registration(
-                "dummy_email",
-                "dummy_password",
-                "dummy_password",
-                "dummy_validation",
-                {
-                    "company": "dummy_company",
-                    "use_case": "dummy_usecase",
-                    "role": "dummy_role",
-                    "contact_via_email": False,
-                },
-            ),
-        )
 
         # assert token is not set
         self.assertIsNone(ServiceClient.get_access_token())
@@ -131,7 +95,7 @@ class TestUserAuthClient(unittest.TestCase):
     @with_mock_server()
     def test_reset_cache_unsets_tabpfn_token_constant(self, mock_server):
         # Ensure we take the env-token path (no cached token file).
-        with patch.object(get_opts(), "TABPFN_TOKEN", "dummy_env_token"):
+        with patch.dict(os.environ, {"TABPFN_TOKEN": "dummy_env_token"}):
             # Make the token invalid so that the reset path is triggered.
             mock_server.router.get(mock_server.endpoints.protected_root.path).respond(
                 401
