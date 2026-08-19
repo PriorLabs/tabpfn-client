@@ -18,6 +18,7 @@ from tabpfn_client.service_wrapper import UserAuthenticationClient
 from tabpfn_client.ui import (
     console,
     fail,
+    notify,
     status,
     success,
     warn,
@@ -62,10 +63,6 @@ class PromptAgent:
         indent_factor = 2
         indent_str = " " * indent_factor
         return textwrap.indent(text, indent_str)
-
-    @staticmethod
-    def _print(text: str) -> None:
-        console.print(PromptAgent.indent(text))
 
     @classmethod
     def prompt_welcome(cls):
@@ -359,12 +356,12 @@ class PromptAgent:
 
     @classmethod
     def prompt_reusing_existing_token(cls):
-        success("Found existing access token, reusing it for authentication.")
+        notify("Found existing access token, reusing it for authentication.")
 
     @classmethod
     def prompt_retrieved_greeting_messages(cls, greeting_messages: list[str]):
         for message in greeting_messages:
-            cls._print(message)
+            notify(cls.indent(message))
 
     CONFIRM_DELETION_PHRASE = "confirm deletion"
 

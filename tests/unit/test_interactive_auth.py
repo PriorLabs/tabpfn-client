@@ -2,6 +2,7 @@
 #  Licensed under the Apache License, Version 2.0
 """interactive_login() is opt-in and never runs on the default auth path."""
 
+import io
 import os
 import shutil
 import unittest
@@ -49,6 +50,17 @@ class TestInteractiveLogin(unittest.TestCase):
 
         self.assertEqual(token, "cached_token")
         mock_menu.assert_not_called()
+
+    @with_mock_server()
+    def test_already_logged_in_stays_off_stdout_when_not_a_tty(self, mock_server):
+        mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
+        UserAuthenticationClient.persist_token("cached_token")
+
+        buffer = io.StringIO()  # not a tty
+        with patch("sys.stdout", buffer):
+            interactive_login()
+
+        self.assertNotIn("Already logged in", buffer.getvalue())
 
     @with_mock_server()
     def test_cached_token_does_not_short_circuit_a_non_tty(self, mock_server):

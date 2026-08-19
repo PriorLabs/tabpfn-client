@@ -36,6 +36,7 @@ import webbrowser
 
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.constants import URL_PRIOR_LABS_API_KEYS
+from tabpfn_client.ui import notify
 
 logger = logging.getLogger(__name__)
 
@@ -312,9 +313,9 @@ def interactive_login(
             from tabpfn_client.config import set_access_token
 
             set_access_token(existing)
-            print(
-                "\nAlready logged in. "
-                "Pass force_relogin=True to log in as a different user.\n"
+            notify(
+                "Already logged in. "
+                "Pass force_relogin=True to log in as a different user."
             )
             return existing
 
