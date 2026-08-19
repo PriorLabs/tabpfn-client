@@ -23,6 +23,17 @@ class TestUserAuthClient(unittest.TestCase):
     def tearDown(self):
         UserAuthenticationClient.CACHED_TOKEN_FILE.unlink(missing_ok=True)
 
+    def test_set_token_does_not_touch_the_cache(self):
+        UserAuthenticationClient.set_token("in_process_only")
+        self.assertEqual("in_process_only", ServiceClient.get_access_token())
+        self.assertFalse(UserAuthenticationClient.CACHED_TOKEN_FILE.exists())
+
+    def test_persist_token_writes_the_cache(self):
+        UserAuthenticationClient.persist_token("remembered")
+        self.assertEqual(
+            "remembered", UserAuthenticationClient.CACHED_TOKEN_FILE.read_text()
+        )
+
     def test_resolve_token_reads_env_after_import(self):
         # The environment must be consulted at resolution time, not at import
         # time, so that setting TABPFN_TOKEN after `import tabpfn_client` works.

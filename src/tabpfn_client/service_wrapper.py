@@ -55,8 +55,21 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
 
     @classmethod
     def set_token(cls, access_token: str):
+        """Use *access_token* for this process. Does not touch the token cache.
+
+        A token supplied through TABPFN_TOKEN or `set_access_token()` belongs to
+        the caller, so we never copy it to disk behind their back. Only
+        `interactive_login()` persists, via `persist_token`.
+        """
         ServiceClient.authorize(access_token)
 
+    @classmethod
+    def persist_token(cls, access_token: str):
+        """Cache *access_token* so later runs authenticate without prompting.
+
+        The sole caller is `interactive_login()`: the user explicitly logged in,
+        so remembering the result is what they asked for.
+        """
         # Mitigate parallel writes by checking if the token is already set to
         # the same value. We'll consider using fcntl if this problem persists.
         try:

@@ -79,21 +79,17 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         # remove cache dir
         shutil.rmtree(CACHE_DIR, ignore_errors=True)
 
-    @patch("tabpfn_client.config._prompt_and_set_token")
     @with_mock_server()
     def test_init_remote_regressor(
         self,
         mock_server,
-        mock_prompt_and_set_token,
     ):
-        def _set_token_and_return_true(**kwargs):
-            UserAuthenticationClient.set_token(self.dummy_token)
-            return True
+        # init() authenticates from a token only; there is no prompt to hook.
+        token_file = UserAuthenticationClient.CACHED_TOKEN_FILE
+        token_file.parent.mkdir(parents=True, exist_ok=True)
+        token_file.write_text(self.dummy_token)
 
-        mock_prompt_and_set_token.side_effect = _set_token_and_return_true
-
-        # mock server connection
-        mock_server.router.get(mock_server.endpoints.root.path).respond(200)
+        mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
         mock_server.router.post("/tabpfn/prepare_train_set_upload").respond(
             409,
             json={
@@ -143,12 +139,10 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         )
 
         init(use_server=True)
-        self.assertTrue(mock_prompt_and_set_token.called)
 
         tabpfn = TabPFNRegressor(n_estimators=10)
         self.assertRaises(NotFittedError, tabpfn.predict, self.X_test)
         tabpfn.fit(self.X_train, self.y_train)
-        self.assertTrue(mock_prompt_and_set_token.called)
 
         y_pred = tabpfn.predict(self.X_test, output_type=metric)
         self.assertTrue(np.all(np.array(response) == y_pred))
@@ -183,9 +177,7 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         self.assertTrue(UserAuthenticationClient.CACHED_TOKEN_FILE.exists())
 
     @with_mock_server()
-    @patch("tabpfn_client.config._prompt_and_set_token")
-    def test_invalid_saved_access_token(self, mock_server, mock_prompt_and_set_token):
-        mock_prompt_and_set_token.side_effect = [RuntimeError]
+    def test_invalid_saved_access_token(self, mock_server):
 
         # mock connection and invalid authentication
         mock_server.router.get(mock_server.endpoints.root.path).respond(200)
@@ -197,7 +189,6 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         token_file.write_text("invalid_token")
 
         self.assertRaises(RuntimeError, init, use_server=True)
-        self.assertTrue(mock_prompt_and_set_token.called)
 
     @with_mock_server()
     def test_reset_on_remote_regressor(self, mock_server):
@@ -230,18 +221,13 @@ class TestTabPFNRegressorInit(unittest.TestCase):
         self.assertFalse(config.Config.is_initialized)
 
     @with_mock_server()
-    @patch("tabpfn_client.config._prompt_and_set_token")
-    def test_cache_based_on_paper_version(
-        self, mock_server, mock_prompt_and_set_token
-    ):
-        def _set_token_and_return_true(**kwargs):
-            UserAuthenticationClient.set_token(self.dummy_token)
-            return True
+    def test_cache_based_on_paper_version(self, mock_server):
+        # init() authenticates from a token only; there is no prompt to hook.
+        token_file = UserAuthenticationClient.CACHED_TOKEN_FILE
+        token_file.parent.mkdir(parents=True, exist_ok=True)
+        token_file.write_text(self.dummy_token)
 
-        mock_prompt_and_set_token.side_effect = _set_token_and_return_true
-
-        # mock server connection
-        mock_server.router.get(mock_server.endpoints.root.path).respond(200)
+        mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
         mock_server.router.post("/tabpfn/prepare_train_set_upload").respond(
             409,
             json={
@@ -274,10 +260,6 @@ class TestTabPFNRegressorInit(unittest.TestCase):
             200,
             json=_api_settings_payload(),
         )
-
-        # Ensure no cached token so we go through the full login flow
-        UserAuthenticationClient.CACHED_TOKEN_FILE.unlink(missing_ok=True)
-        ServiceClient.reset_authorization()
 
         predict_route = mock_server.router.post(mock_server.endpoints.predict.path)
         predict_route.respond(

@@ -78,21 +78,17 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         # remove cache dir
         shutil.rmtree(CACHE_DIR, ignore_errors=True)
 
-    @patch("tabpfn_client.config._prompt_and_set_token")
     @with_mock_server()
     def test_init_remote_classifier(
         self,
         mock_server,
-        mock_prompt_and_set_token,
     ):
-        def _set_token_and_return_true(**kwargs):
-            UserAuthenticationClient.set_token(self.dummy_token)
-            return True
+        # init() authenticates from a token only; there is no prompt to hook.
+        token_file = UserAuthenticationClient.CACHED_TOKEN_FILE
+        token_file.parent.mkdir(parents=True, exist_ok=True)
+        token_file.write_text(self.dummy_token)
 
-        mock_prompt_and_set_token.side_effect = _set_token_and_return_true
-
-        # mock server connection
-        mock_server.router.get(mock_server.endpoints.root.path).respond(200)
+        mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
         mock_server.router.post("/tabpfn/prepare_train_set_upload").respond(
             409,
             json={
@@ -142,12 +138,10 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         )
 
         init(use_server=True)
-        self.assertTrue(mock_prompt_and_set_token.called)
 
         tabpfn = TabPFNClassifier(n_estimators=10)
         self.assertRaises(NotFittedError, tabpfn.predict, self.X_test)
         tabpfn.fit(self.X_train, self.y_train)
-        self.assertTrue(mock_prompt_and_set_token.called)
         result = tabpfn.predict(self.X_test)
         print(f"result: {type(result)} {result}")
         self.assertTrue(np.all(mock_predict_response == result))
@@ -182,9 +176,7 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         self.assertTrue(UserAuthenticationClient.CACHED_TOKEN_FILE.exists())
 
     @with_mock_server()
-    @patch("tabpfn_client.config._prompt_and_set_token")
-    def test_invalid_saved_access_token(self, mock_server, mock_prompt_and_set_token):
-        mock_prompt_and_set_token.side_effect = [RuntimeError]
+    def test_invalid_saved_access_token(self, mock_server):
 
         # mock connection and invalid authentication
         mock_server.router.get(mock_server.endpoints.root.path).respond(200)
@@ -196,7 +188,6 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         token_file.write_text("invalid_token")
 
         self.assertRaises(RuntimeError, init, use_server=True)
-        self.assertTrue(mock_prompt_and_set_token.called)
 
     @with_mock_server()
     def test_reset_on_remote_classifier(self, mock_server):
@@ -229,24 +220,18 @@ class TestTabPFNClassifierInit(unittest.TestCase):
         self.assertFalse(config.Config.is_initialized)
 
     @with_mock_server()
-    @patch("tabpfn_client.config._prompt_and_set_token")
-    def test_cache_based_on_paper_version(
-        self, mock_server, mock_prompt_and_set_token
-    ):
+    def test_cache_based_on_paper_version(self, mock_server):
         """
         Check that the dataset cached is different for different paper_version
         and similar for the same paper_version
         """
 
-        def _set_token_and_return_true(**kwargs):
-            UserAuthenticationClient.set_token(self.dummy_token)
-            return True
+        # init() authenticates from a token only; there is no prompt to hook.
+        token_file = UserAuthenticationClient.CACHED_TOKEN_FILE
+        token_file.parent.mkdir(parents=True, exist_ok=True)
+        token_file.write_text(self.dummy_token)
 
-        # a bit out of place but we don't want to skip init for this test
-        mock_prompt_and_set_token.side_effect = _set_token_and_return_true
-
-        # mock server connection
-        mock_server.router.get(mock_server.endpoints.root.path).respond(200)
+        mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
         mock_server.router.post("/tabpfn/prepare_train_set_upload").respond(
             409,
             json={
@@ -293,10 +278,6 @@ class TestTabPFNClassifierInit(unittest.TestCase):
                 },
             },
         )
-
-        # Ensure no cached token so we go through the full login flow
-        UserAuthenticationClient.CACHED_TOKEN_FILE.unlink(missing_ok=True)
-        ServiceClient.reset_authorization()
 
         init(use_server=True)
 

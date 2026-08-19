@@ -82,35 +82,6 @@ class PromptAgent:
         )
 
     @classmethod
-    def prompt_for_token(cls) -> str | None:
-        """Ask the user to paste an access token.
-
-        Returns the token, or None if the user aborted. Only called when stdin
-        is interactive; non-interactive callers get `token_instructions()` as an
-        error instead.
-        """
-        console.print()
-        warn("No TabPFN access token found.")
-        console.print(
-            f"  Please generate a token at [link={URL_PRIOR_LABS_API_KEYS}]"
-            f"{URL_PRIOR_LABS_API_KEYS}[/link] and paste it here."
-        )
-        console.print(
-            "  [cyan]Set TABPFN_TOKEN in your environment to skip this prompt.[/cyan]"
-        )
-        console.print("  [cyan]Press Ctrl+C to abort.[/cyan]")
-
-        while True:
-            token = console.input("\n[bold cyan]→[/bold cyan] Access token: ").strip()
-            if token:
-                return token
-            warn("An access token is required.")
-
-    @classmethod
-    def prompt_token_accepted(cls):
-        success("Access token accepted.")
-
-    @classmethod
     def prompt_reusing_existing_token(cls):
         success("Found existing access token, reusing it for authentication.")
 

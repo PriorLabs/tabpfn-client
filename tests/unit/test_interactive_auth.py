@@ -11,6 +11,7 @@ from tabpfn_client import config, interactive_auth
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.constants import CACHE_DIR, URL_PRIOR_LABS_API_KEYS
 from tabpfn_client.interactive_auth import InteractiveLoginError, interactive_login
+from tabpfn_client.service_wrapper import UserAuthenticationClient
 from tests.mock_tabpfn_server import with_mock_server
 
 
@@ -49,6 +50,11 @@ class TestInteractiveLogin(unittest.TestCase):
         self.assertEqual("pasted_token", ServiceClient.get_access_token())
         # A later init() finds the token without prompting.
         self.assertTrue(config.Config.is_initialized)
+        # interactive_login is the sole writer of the token cache, so a later
+        # process picks the token up with no prompt.
+        self.assertEqual(
+            "pasted_token", UserAuthenticationClient.CACHED_TOKEN_FILE.read_text()
+        )
 
     @with_mock_server()
     def test_rejected_token_raises(self, mock_server):
@@ -94,11 +100,10 @@ class TestInteractiveLogin(unittest.TestCase):
         """The default path stays token-only."""
         mock_server.router.get(mock_server.endpoints.root.path).respond(200)
 
-        with patch.object(config, "_stdin_is_interactive", return_value=False):
-            with patch.object(interactive_auth, "_browser_login") as mock_browser:
-                with patch.object(interactive_auth, "_paste_only_login") as mock_paste:
-                    with self.assertRaises(RuntimeError):
-                        config.init(use_server=True)
+        with patch.object(interactive_auth, "_browser_login") as mock_browser:
+            with patch.object(interactive_auth, "_paste_only_login") as mock_paste:
+                with self.assertRaises(RuntimeError):
+                    config.init(use_server=True)
 
         mock_browser.assert_not_called()
         mock_paste.assert_not_called()

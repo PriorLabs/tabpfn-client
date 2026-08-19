@@ -146,8 +146,9 @@ import tabpfn_client
 tabpfn_client.set_access_token("<your-token>")
 ```
 
-If neither is set, an interactive session asks you to paste a token (and remembers it for
-subsequent runs); a non-interactive one raises a `RuntimeError` explaining where to get one.
+If neither is set, `init()` raises a `RuntimeError` explaining where to get a token. It
+never prompts — this is a library, so authentication is not allowed to block on input.
+The one exception is `interactive_login()` below, which you call yourself.
 
 ### Interactive Login (opt-in)
 
@@ -167,6 +168,10 @@ URL and waits for a paste. Pass `open_browser=False` to skip the browser entirel
 
 This is **opt-in only**. `init()`, `fit()`, and `predict()` never trigger it — they use the
 token sources above and fail with instructions when none is available.
+
+`interactive_login()` is also the only thing that writes the token cache. A token supplied
+through `TABPFN_TOKEN` or `set_access_token()` stays in memory for that process and is
+never copied to disk.
 
 ### Load Your Token
 

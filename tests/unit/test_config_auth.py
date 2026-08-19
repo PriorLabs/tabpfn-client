@@ -4,6 +4,7 @@
 
 import os
 import shutil
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -12,6 +13,7 @@ from tabpfn_client.client import ServiceClient
 from tabpfn_client.config import init, set_access_token
 from tabpfn_client.constants import CACHE_DIR, URL_PRIOR_LABS_API_KEYS
 from tabpfn_client.service_wrapper import UserAuthenticationClient
+from tabpfn_client.ui import console
 from tests.mock_tabpfn_server import with_mock_server
 
 
@@ -35,19 +37,18 @@ class TestTokenOnlyAuth(unittest.TestCase):
         ).respond(200, json={"messages": []})
 
         with patch.dict(os.environ, {"TABPFN_TOKEN": "env_token"}):
-            with patch.object(config, "_prompt_and_set_token") as mock_prompt:
+            with patch.object(console, "input") as mock_input:
                 init(use_server=True)
 
-        mock_prompt.assert_not_called()
+        mock_input.assert_not_called()
         self.assertEqual("env_token", ServiceClient.get_access_token())
 
     @with_mock_server()
-    def test_non_interactive_without_token_explains_how_to_get_one(self, mock_server):
+    def test_without_token_explains_how_to_get_one(self, mock_server):
         mock_server.router.get(mock_server.endpoints.root.path).respond(200)
 
-        with patch.object(config, "_stdin_is_interactive", return_value=False):
-            with self.assertRaises(RuntimeError) as cm:
-                init(use_server=True)
+        with self.assertRaises(RuntimeError) as cm:
+            init(use_server=True)
 
         message = str(cm.exception)
         self.assertIn(URL_PRIOR_LABS_API_KEYS, message)
@@ -60,42 +61,50 @@ class TestTokenOnlyAuth(unittest.TestCase):
         mock_server.router.get(mock_server.endpoints.protected_root.path).respond(401)
 
         with patch.dict(os.environ, {"TABPFN_TOKEN": "stale_token"}):
-            with patch.object(config, "_stdin_is_interactive", return_value=False):
-                with self.assertRaises(RuntimeError) as cm:
-                    init(use_server=True)
+            with self.assertRaises(RuntimeError) as cm:
+                init(use_server=True)
 
         message = str(cm.exception)
         self.assertIn("rejected", message)
         self.assertIn(URL_PRIOR_LABS_API_KEYS, message)
 
     @with_mock_server()
-    def test_interactive_prompt_accepts_pasted_token(self, mock_server):
+    def test_tty_session_raises_instead_of_prompting(self, mock_server):
+        """A terminal is not a licence to prompt: this is a library."""
         mock_server.router.get(mock_server.endpoints.root.path).respond(200)
-        # No token resolves, so the only protected-root call is the validation
-        # of the pasted token.
+
+        with patch.object(sys.stdin, "isatty", return_value=True):
+            with patch.object(console, "input") as mock_input:
+                with self.assertRaises(RuntimeError) as cm:
+                    init(use_server=True)
+
+        mock_input.assert_not_called()
+        self.assertIn(URL_PRIOR_LABS_API_KEYS, str(cm.exception))
+        self.assertIn("interactive_login", str(cm.exception))
+
+    @with_mock_server()
+    def test_env_token_is_not_written_to_cache(self, mock_server):
+        """A token from the environment belongs to the caller, not to our cache."""
         mock_server.router.get(mock_server.endpoints.protected_root.path).respond(200)
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path
         ).respond(200, json={"messages": []})
 
-        with patch.object(config, "_stdin_is_interactive", return_value=True):
-            with patch(
-                "tabpfn_client.prompt_agent.PromptAgent.prompt_for_token",
-                return_value="pasted_token",
-            ):
-                init(use_server=True)
+        with patch.dict(os.environ, {"TABPFN_TOKEN": "env_token"}):
+            init(use_server=True)
 
-        self.assertEqual("pasted_token", ServiceClient.get_access_token())
-        # The pasted token is cached so the next run does not re-prompt.
-        self.assertEqual(
-            "pasted_token", UserAuthenticationClient.CACHED_TOKEN_FILE.read_text()
-        )
+        self.assertFalse(UserAuthenticationClient.CACHED_TOKEN_FILE.exists())
+
+    def test_set_access_token_does_not_write_cache(self):
+        set_access_token("explicit_token")
+        self.assertEqual("explicit_token", ServiceClient.get_access_token())
+        self.assertFalse(UserAuthenticationClient.CACHED_TOKEN_FILE.exists())
 
     @with_mock_server()
     def test_set_access_token_skips_init_entirely(self, mock_server):
         set_access_token("explicit_token")
         self.assertEqual("explicit_token", ServiceClient.get_access_token())
 
-        with patch.object(config, "_prompt_and_set_token") as mock_prompt:
+        with patch.object(UserAuthenticationClient, "resolve_token") as mock_resolve:
             init(use_server=True)
-        mock_prompt.assert_not_called()
+        mock_resolve.assert_not_called()

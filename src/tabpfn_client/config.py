@@ -2,28 +2,19 @@
 #  Licensed under the Apache License, Version 2.0
 
 import shutil
-import sys
 
 from httpx import ConnectError
 
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.service_wrapper import UserAuthenticationClient
-from tabpfn_client.constants import CACHE_DIR, URL_PRIOR_LABS_API_KEYS
-from tabpfn_client.prompt_agent import PromptAgent, maybe_graceful_exit
-from tabpfn_client.ui import console, warn
+from tabpfn_client.constants import CACHE_DIR
+from tabpfn_client.prompt_agent import PromptAgent
 from tabpfn_client.options import reload_opts
 
 
 CONNECTION_ERROR = RuntimeError(
     "TabPFN is inaccessible at the moment, please try again later."
 )
-
-
-def _stdin_is_interactive() -> bool:
-    try:
-        return sys.stdin is not None and sys.stdin.isatty()
-    except (AttributeError, ValueError):
-        return False
 
 
 class Config:
@@ -36,20 +27,19 @@ class Config:
 
     is_initialized = False
     use_server = False
-    token: str | None = None
 
 
 def init(use_server=True):
     """
     Initializes the TabPFN client and authenticates with the TabPFN cloud service.
 
-    Authentication is token-based. The token is taken from the TABPFN_TOKEN
-    environment variable, or from a token previously passed to
-    `set_access_token()`. If neither is available and the session is
-    interactive, you are asked to paste a token; otherwise a RuntimeError
-    explains how to obtain one.
+    Authentication is token-based and never interactive. The token comes from
+    `set_access_token()` or the TABPFN_TOKEN environment variable, or from a
+    token cached by an earlier `interactive_login()`. If none is available this
+    raises, explaining how to obtain one -- it will not prompt.
 
-    Generate a token at https://ux.priorlabs.ai/account/api-keys
+    Generate a token at https://ux.priorlabs.ai/account/api-keys, or call
+    `tabpfn_client.interactive_login()` to log in through the browser.
 
     :param use_server: Whether to use the TabPFN cloud service. Currently, only
                        True is supported.
@@ -88,9 +78,10 @@ def init(use_server=True):
         else:
             if not UserAuthenticationClient.is_accessible_connection():
                 raise CONNECTION_ERROR
-            if not _prompt_and_set_token(token_was_rejected=had_token):
-                # User interrupted - don't mark as initialized
-                return
+            # Never prompt from the default path: this is a library, so a
+            # missing token is an error the caller resolves, either by
+            # supplying one or by calling interactive_login() explicitly.
+            raise RuntimeError(PromptAgent.token_instructions(rejected=had_token))
 
         # Print new greeting messages. If there are no new messages, nothing will be printed.
         PromptAgent.prompt_retrieved_greeting_messages(
@@ -103,55 +94,6 @@ def init(use_server=True):
         Config.is_initialized = True
     else:
         raise RuntimeError("Local inference is not supported yet.")
-
-
-def _prompt_and_set_token(token_was_rejected: bool = False) -> bool:
-    """Ask for an access token interactively and validate it against the server.
-
-    Returns True once a valid token is set, False if the user interrupted.
-    Raises RuntimeError when the session is non-interactive, since there is no
-    way to obtain a token without input.
-    """
-    if not _stdin_is_interactive():
-        raise RuntimeError(PromptAgent.token_instructions(rejected=token_was_rejected))
-
-    if token_was_rejected:
-        warn("Your TabPFN access token was rejected by the server.")
-        console.print(
-            f"  [cyan]Generate a new one at {URL_PRIOR_LABS_API_KEYS}.[/cyan]"
-        )
-    else:
-        PromptAgent.prompt_welcome()
-
-    try:
-        while True:
-            token = PromptAgent.prompt_for_token()
-            if token is None:
-                return False
-
-            try:
-                is_valid = ServiceClient.is_auth_token_outdated(token)
-            except ConnectError:
-                raise CONNECTION_ERROR
-
-            if is_valid is None:
-                raise RuntimeError(
-                    "Your TabPFN account's email address is not verified. Please "
-                    "verify it before using the client."
-                )
-            if is_valid:
-                UserAuthenticationClient.set_token(token)
-                PromptAgent.prompt_token_accepted()
-                return True
-
-            warn("That access token was not accepted by the server.")
-            console.print(
-                f"  [cyan]Check that you copied it in full from {URL_PRIOR_LABS_API_KEYS}.[/cyan]"
-            )
-    except KeyboardInterrupt:
-        console.print("\n\n[yellow]Interrupted. Goodbye![/yellow]")
-        maybe_graceful_exit()
-        return False
 
 
 def reset():

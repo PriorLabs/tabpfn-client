@@ -309,7 +309,12 @@ def interactive_login(
 
     # Imported here to keep the module importable without pulling in config.
     from tabpfn_client.config import set_access_token
+    from tabpfn_client.service_wrapper import UserAuthenticationClient
 
     set_access_token(token)
+    # The only place the token cache is written. A token supplied via
+    # TABPFN_TOKEN or set_access_token() stays in-process; an explicit login is
+    # the one case where persisting is what the user asked for.
+    UserAuthenticationClient.persist_token(token)
     print("\nLogin successful. The API key is cached for future runs.\n")
     return token
