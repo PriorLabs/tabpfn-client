@@ -10,19 +10,91 @@ The training data is shipped to the endpoint on the next `predict*`
 call, where the actual fit runs.
 
 This client sends requests as `application/json` only (Foundry also
-accepts `multipart/form-data`, but we don't use it here) and does not
-currently support thinking mode.
+accepts `multipart/form-data`, but we don't use it here).
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Literal, Optional, Union, cast
 
 import httpx
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.utils.validation import check_is_fitted
+
+from tabpfn_client.models import FitModeLiteral
+
+
+ThinkingEffort = Literal["medium", "high"]
+
+# The endpoint validates these server-side and answers an out-of-range value
+# with an opaque HTTP 424, so we mirror the accepted sets here to fail fast
+# with an actionable message instead.
+_VALID_THINKING_EFFORTS: tuple = ("medium", "high")
+_VALID_THINKING_METRICS: Dict[str, tuple] = {
+    "classification": ("accuracy", "log_loss", "balanced_accuracy"),
+    "regression": ("rmse", "mse", "mae", "r2"),
+}
+
+
+class FoundryEndpointError(httpx.HTTPStatusError):
+    """A non-2xx answer from the Foundry endpoint, with its error payload.
+
+    Subclasses `httpx.HTTPStatusError`, so callers that already catch that
+    keep working. The endpoint reports failures as a JSON body carrying
+    `error_code` and `trace_id`; both are surfaced on the exception (and in
+    its message) because the `trace_id` is what the endpoint provider needs
+    in order to look the failure up server-side.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        request: Any,
+        response: Any,
+        error_code: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ):
+        super().__init__(message, request=request, response=response)
+        self.error_code = error_code
+        self.trace_id = trace_id
+
+
+def _raise_for_status(resp: httpx.Response) -> None:
+    """Raise `FoundryEndpointError` carrying the endpoint's error payload."""
+    if not resp.is_error:
+        return
+
+    detail, error_code, trace_id = "", None, None
+    try:
+        payload = resp.json()
+    except Exception:
+        detail = resp.text[:500]
+    else:
+        if isinstance(payload, dict):
+            error_code = payload.get("error_code")
+            trace_id = payload.get("trace_id")
+            detail = payload.get("message") or ""
+        else:
+            detail = str(payload)[:500]
+
+    message = f"Foundry endpoint returned HTTP {resp.status_code}"
+    if error_code:
+        message += f" ({error_code})"
+    if detail:
+        message += f": {detail}"
+    if trace_id:
+        message += f" [trace_id={trace_id}]"
+
+    raise FoundryEndpointError(
+        message,
+        request=resp.request,
+        response=resp,
+        error_code=error_code,
+        trace_id=trace_id,
+    )
 
 
 def _to_jsonable(X: Any) -> list:
@@ -34,6 +106,30 @@ def _to_jsonable(X: Any) -> list:
     return np.asarray(X).tolist()
 
 
+def _contains_none(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, list):
+        return any(_contains_none(item) for item in value)
+    return False
+
+
+def _normalize_prediction_dict(prediction: Dict[str, Any]) -> Dict[str, np.ndarray]:
+    """Coerce a wire-format prediction dict (JSON lists) to `{str: ndarray}`.
+
+    Mirrors `tabpfn_client.client.InferenceClient.predict` so callers get the
+    same `dict[str, np.ndarray]` shape on Foundry as on the hosted client.
+    """
+    result: Dict[str, np.ndarray] = {}
+    for k, v in prediction.items():
+        if isinstance(v, list):
+            dtype = float if _contains_none(v) else None
+            result[k] = np.array(v, dtype=dtype)
+        else:
+            result[k] = v
+    return result
+
+
 def _build_request_body(
     task: str,
     tabpfn_config: Dict[str, Any],
@@ -42,12 +138,17 @@ def _build_request_body(
     X_train: Optional[Any] = None,
     y_train: Optional[Any] = None,
     cached_model_id: Optional[str] = None,
+    thinking_block: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Assemble a Foundry `/predict` JSON body.
 
     When `cached_model_id` is provided, the body targets the V3 cache-hit
     path: `X_train` / `y_train` are omitted and a `context.model_id` is
     sent instead. Otherwise training data is shipped inline.
+
+    When `thinking_block` is provided (non-empty), its fields are merged
+    at the top level of the request body (e.g. `thinking_effort`,
+    `thinking_timeout_s`, `thinking_metric`).
     """
     body: Dict[str, Any] = {
         "task_config": {
@@ -57,6 +158,8 @@ def _build_request_body(
         },
         "x_test": _to_jsonable(X_test),
     }
+    if thinking_block:
+        body.update(thinking_block)
 
     # Build up the KV-cache context if we have a model_id,
     # otherwise ship the training data
@@ -91,7 +194,12 @@ class _FoundryBase(BaseEstimator):
         random_state: Optional[int] = 0,
         inference_config: Optional[Dict[str, Any]] = None,
         paper_version: bool = False,
+        thinking_mode: bool = False,
+        thinking_effort: Optional[ThinkingEffort] = None,
+        thinking_timeout_s: Optional[float] = None,
+        thinking_metric: Optional[str] = None,
         use_kv_cache: bool = False,
+        fit_mode: Optional[FitModeLiteral] = None,
         timeout_s: float = 300.0,
     ):
         self.endpoint_url = endpoint_url
@@ -106,8 +214,74 @@ class _FoundryBase(BaseEstimator):
         self.random_state = random_state
         self.inference_config = inference_config
         self.paper_version = paper_version
+        self.thinking_mode = thinking_mode
+        self.thinking_effort = thinking_effort
+        self.thinking_timeout_s = thinking_timeout_s
+        self.thinking_metric = thinking_metric
         self.use_kv_cache = use_kv_cache
+        self.fit_mode = fit_mode
         self.timeout_s = timeout_s
+        self._validate_args()
+
+    def _validate_args(self) -> None:
+        """Reject settings that would silently disable caching for a
+        configuration that plainly asked for it."""
+        if self.fit_mode == "fit_preprocessors":
+            if self.use_kv_cache:
+                raise ValueError(
+                    "Conflicting settings: fit_mode='fit_preprocessors' "
+                    "cannot be combined with use_kv_cache=True. Either drop "
+                    "use_kv_cache or set fit_mode='fit_with_cache'."
+                )
+            if self.thinking_mode or self.thinking_effort is not None:
+                raise ValueError(
+                    "Conflicting settings: fit_mode='fit_preprocessors' "
+                    "cannot be combined with thinking mode (thinking_mode=True "
+                    "or thinking_effort set). Thinking mode requires caching; "
+                    "either drop the thinking-mode params or set "
+                    "fit_mode='fit_with_cache' (or leave fit_mode unset)."
+                )
+
+        if (
+            self.thinking_effort is not None
+            and self.thinking_effort not in _VALID_THINKING_EFFORTS
+        ):
+            raise ValueError(
+                f"thinking_effort must be one of "
+                f"{list(_VALID_THINKING_EFFORTS)}; got {self.thinking_effort!r}."
+            )
+
+        if self.thinking_metric is not None:
+            allowed = _VALID_THINKING_METRICS.get(self._task, ())
+            if self.thinking_metric not in allowed:
+                raise ValueError(
+                    f"thinking_metric={self.thinking_metric!r} is not supported "
+                    f"for task={self._task!r}; expected one of {list(allowed)}."
+                )
+
+        if self.thinking_timeout_s is not None and self.thinking_timeout_s < 0:
+            raise ValueError(
+                f"thinking_timeout_s must be >= 0 (0 means no client-requested "
+                f"limit); got {self.thinking_timeout_s!r}."
+            )
+
+    @property
+    def _thinking_active(self) -> bool:
+        return self.thinking_mode or self.thinking_effort is not None
+
+    @property
+    def _effective_fit_mode(self) -> FitModeLiteral:
+        # Explicit `fit_mode` wins; `_validate_args` guarantees it doesn't
+        # conflict with `use_kv_cache` / thinking mode.
+        if self.fit_mode is not None:
+            return cast(FitModeLiteral, self.fit_mode)
+        if self.use_kv_cache or self._thinking_active:
+            return "fit_with_cache"
+        return "fit_preprocessors"
+
+    @property
+    def _cache_active(self) -> bool:
+        return self._effective_fit_mode == "fit_with_cache"
 
     def _build_tabpfn_config(self) -> Dict[str, Any]:
         cfg: Dict[str, Any] = {
@@ -118,13 +292,38 @@ class _FoundryBase(BaseEstimator):
             "inference_precision": self.inference_precision,
             "random_state": self.random_state,
             "inference_config": self.inference_config,
-            "fit_mode": "fit_with_cache" if self.use_kv_cache else "fit_preprocessors",
+            "fit_mode": self._effective_fit_mode,
         }
 
         if self._task == "classification":
             cfg["balance_probabilities"] = self.balance_probabilities
 
         return cfg
+
+    def _build_thinking_block(self) -> Dict[str, Any]:
+        """Top-level wire fields for thinking-mode. Empty when inactive.
+
+        The endpoint only accepts these keys at the top level of the request
+        body — nesting them under `task_config` / `tabpfn_config` /
+        `predict_params` is rejected the same way an unknown field is.
+
+        Note that `thinking_timeout_s` is a budget the server must be able to
+        meet: a value too small for the dataset makes the request fail rather
+        than return a cheaper answer, so leave it unset (or 0) unless you
+        specifically need to bound the call.
+        """
+        if not self._thinking_active:
+            return {}
+        block: Dict[str, Any] = {
+            "thinking_effort": self.thinking_effort
+            if self.thinking_effort is not None
+            else "medium",
+        }
+        if self.thinking_timeout_s is not None:
+            block["thinking_timeout_s"] = self.thinking_timeout_s
+        if self.thinking_metric is not None:
+            block["thinking_metric"] = self.thinking_metric
+        return block
 
     def _headers(self) -> Dict[str, str]:
         return {
@@ -183,16 +382,17 @@ class _FoundryBase(BaseEstimator):
             X_test=X_test,
             X_train=self.X_train_,
             y_train=self.y_train_,
-            cached_model_id=self._cached_model_id if self.use_kv_cache else None,
+            cached_model_id=self._cached_model_id if self._cache_active else None,
+            thinking_block=self._build_thinking_block(),
         )
         resp = self._http_client().post(
             self.endpoint_url,
             json=body,
             headers=self._headers(),
         )
-        resp.raise_for_status()
+        _raise_for_status(resp)
         payload = resp.json()
-        if self.use_kv_cache:
+        if self._cache_active:
             self._cached_model_id = payload.get("model_id") or self._cached_model_id
         return payload
 
@@ -243,11 +443,24 @@ class TabPFNRegressor(_FoundryBase, RegressorMixin):
     def predict(
         self,
         X: Any,
-        output_type: str = "mean",
+        output_type: Literal[
+            "mean", "median", "mode", "quantiles", "full", "main"
+        ] = "mean",
         quantiles: Optional[list] = None,
-    ) -> np.ndarray:
+    ) -> Union[np.ndarray, list, Dict[str, np.ndarray]]:
         predict_params: Dict[str, Any] = {}
         if quantiles is not None:
             predict_params["quantiles"] = quantiles
         result = self._invoke(X, output_type=output_type, predict_params=predict_params)
-        return np.asarray(result["prediction"])
+        output = result["prediction"]
+
+        # Dispatch on wire shape rather than `output_type` so any dict-shaped
+        # response (`"full"`, `"main"`, or future ones) gets the same treatment.
+        if isinstance(output, dict):
+            return _normalize_prediction_dict(output)
+
+        if output_type == "quantiles":
+            arr = np.asarray(output)
+            return list(arr) if arr.ndim == 2 else [arr]
+
+        return np.asarray(output)
