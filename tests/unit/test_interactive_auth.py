@@ -313,9 +313,7 @@ class TestReviewFindings(unittest.TestCase):
     def test_notebook_counts_as_interactive(self):
         """A kernel has no TTY but can still ask the user a question."""
         with patch.object(interactive_auth, "_in_notebook", return_value=True):
-            with patch.object(
-                interactive_auth.sys.stdin, "isatty", return_value=False
-            ):
+            with patch.object(interactive_auth.sys.stdin, "isatty", return_value=False):
                 self.assertTrue(interactive_auth._stdin_is_interactive())
 
     def test_notebook_skips_the_localhost_callback(self):
