@@ -119,39 +119,50 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
         return is_created, message, access_token
 
     @classmethod
-    def resolve_token(cls) -> str | None:
-        """Find an access token without prompting, or return None.
+    def resolve_token_with_source(cls) -> tuple[str | None, str | None]:
+        """Find an access token without prompting, and say where it came from.
 
         Resolution order: a token already set on this process (via
         `set_access_token`), then the TABPFN_TOKEN environment variable, then a
         token cached by a previous run. The environment is read here rather than
         at import time so that setting TABPFN_TOKEN after importing the package
         still takes effect.
+
+        The source matters when a token turns out to be bad: only the source
+        that produced it may be discarded.
         """
         access_token = ServiceClient.get_access_token()
         if access_token:
-            return access_token
+            return access_token, "process"
 
         env_token = os.environ.get("TABPFN_TOKEN")
         if env_token:
-            return env_token.strip()
+            return env_token.strip(), "env"
 
         if cls.CACHED_TOKEN_FILE.exists():
             cached = cls.CACHED_TOKEN_FILE.read_text().strip()
             if cached:
-                return cached
+                return cached, "cache"
 
-        return None
+        return None, None
+
+    @classmethod
+    def resolve_token(cls) -> str | None:
+        """Find an access token without prompting, or return None."""
+        return cls.resolve_token_with_source()[0]
 
     @classmethod
     def try_reuse_existing_token(cls) -> tuple[bool, str | None]:
-        access_token = cls.resolve_token()
+        access_token, source = cls.resolve_token_with_source()
         if access_token is None:
             return False, None
 
         is_valid = ServiceClient.is_auth_token_outdated(access_token)
         if is_valid is False:
-            cls._reset_token()  # it will also unset the TABPFN_TOKEN var
+            # Discard only what actually failed. A bad TABPFN_TOKEN must not
+            # take the cached token from an earlier login down with it, or
+            # unsetting the variable would leave the user with nothing.
+            cls._discard_token(source)
             return False, None
         elif is_valid is None:
             return False, access_token
@@ -164,6 +175,17 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
     @classmethod
     def reset_cache(cls):
         cls._reset_token()
+
+    @classmethod
+    def _discard_token(cls, source: str | None) -> None:
+        """Drop the rejected token, leaving the other sources intact."""
+        ServiceClient.reset_authorization()
+        if source == "cache":
+            cls.CACHED_TOKEN_FILE.unlink(missing_ok=True)
+        elif source == "env":
+            # The variable is set outside the client; here it can only be used
+            # or unset, never set.
+            get_opts().TABPFN_TOKEN = None
 
     @classmethod
     def _reset_token(cls):

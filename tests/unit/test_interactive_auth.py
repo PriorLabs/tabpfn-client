@@ -5,6 +5,7 @@
 import io
 import os
 import shutil
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -278,3 +279,94 @@ class TestBrowserCallbackRace(unittest.TestCase):
             token = interactive_auth._poll_for_token(auth_event, received, 1.0)
 
         self.assertIsNone(token)
+
+
+class TestReviewFindings(unittest.TestCase):
+    """Regression guards for the issues raised in review of #352."""
+
+    def test_callback_server_binds_loopback_only(self):
+        """An all-interfaces bind lets anyone on the network inject a token."""
+        auth_event = threading.Event()
+        received: list = [None]
+        httpd, _ = interactive_auth._create_callback_server(
+            "https://ux.priorlabs.ai", auth_event, received
+        )
+        try:
+            self.assertEqual("127.0.0.1", httpd.socket.getsockname()[0])
+        finally:
+            httpd.server_close()
+
+    def test_windows_does_not_select_on_stdin(self):
+        """select() accepts only sockets on Windows; stdin needs its own thread."""
+        with patch.object(interactive_auth.sys, "platform", "win32"):
+            with patch.object(
+                interactive_auth.select, "select", side_effect=OSError(10038, "nope")
+            ):
+                with patch.object(
+                    interactive_auth, "_read_line", return_value="typed_token"
+                ):
+                    token = interactive_auth._poll_for_token(
+                        threading.Event(), [None], 5.0
+                    )
+        self.assertEqual("typed_token", token)
+
+    def test_notebook_counts_as_interactive(self):
+        """A kernel has no TTY but can still ask the user a question."""
+        with patch.object(interactive_auth, "_in_notebook", return_value=True):
+            with patch.object(
+                interactive_auth.sys.stdin, "isatty", return_value=False
+            ):
+                self.assertTrue(interactive_auth._stdin_is_interactive())
+
+    def test_notebook_skips_the_localhost_callback(self):
+        """A kernel's localhost is not necessarily the reader's browser."""
+        with patch.object(interactive_auth, "_stdin_is_interactive", return_value=True):
+            with patch.object(interactive_auth, "_in_notebook", return_value=True):
+                with patch.object(interactive_auth, "_has_display", return_value=True):
+                    with patch.object(
+                        interactive_auth, "_prompt_menu", return_value="login"
+                    ):
+                        with patch.object(
+                            interactive_auth, "_browser_login"
+                        ) as mock_browser:
+                            with patch.object(
+                                interactive_auth,
+                                "_paste_only_login",
+                                return_value=None,
+                            ) as mock_paste:
+                                with self.assertRaises(InteractiveLoginError):
+                                    interactive_login(force_relogin=True)
+
+        mock_browser.assert_not_called()
+        mock_paste.assert_called_once()
+
+    def test_unreachable_server_falls_through_to_login(self):
+        """The already-logged-in shortcut must not surface a transport error."""
+        with patch.object(
+            UserAuthenticationClient, "resolve_token", return_value="some_token"
+        ):
+            with patch.object(
+                interactive_auth.ServiceClient,
+                "is_auth_token_outdated",
+                side_effect=httpx.ConnectError("unreachable"),
+            ):
+                with patch.object(
+                    interactive_auth, "_stdin_is_interactive", return_value=False
+                ):
+                    # Falls through to the TTY guard rather than raising ConnectError.
+                    with self.assertRaises(InteractiveLoginError) as cm:
+                        interactive_login()
+
+        self.assertIn("interactive terminal", str(cm.exception))
+
+    def test_failed_browser_open_is_reported(self):
+        """Say so when no browser opened, instead of silently waiting."""
+        auth_event = threading.Event()
+        auth_event.set()  # resolve immediately; we only care about the message
+
+        with patch.object(interactive_auth.webbrowser, "open", return_value=False):
+            with patch.object(interactive_auth, "_poll_for_token", return_value="tok"):
+                with patch("sys.stdout", new=io.StringIO()) as fake_out:
+                    interactive_auth._browser_login("https://ux.priorlabs.ai", 1.0)
+
+        self.assertIn("Could not open a browser", fake_out.getvalue())

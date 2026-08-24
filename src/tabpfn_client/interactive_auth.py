@@ -34,6 +34,8 @@ import threading
 import urllib.parse
 import webbrowser
 
+import httpx
+
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.constants import URL_PRIOR_LABS_API_KEYS
 from tabpfn_client.ui import notify
@@ -62,11 +64,43 @@ def _has_display() -> bool:
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
+def _in_notebook() -> bool:
+    """True inside an IPython kernel (Jupyter, Colab, VS Code, ...).
+
+    A kernel has no TTY but does have a working `input()`, routed to the
+    frontend, so it can drive the terminal signup.
+    """
+    try:
+        from IPython import get_ipython  # type: ignore
+    except ImportError:
+        return False
+    shell = get_ipython()
+    return shell is not None and shell.__class__.__name__ == "ZMQInteractiveShell"
+
+
 def _stdin_is_interactive() -> bool:
+    """Whether we can ask the user a question and get an answer back."""
+    if _in_notebook():
+        return True
     try:
         return sys.stdin is not None and sys.stdin.isatty()
     except (AttributeError, ValueError):
         return False
+
+
+def _read_line(prompt: str) -> str | None:
+    """Read one line, or None at EOF.
+
+    Uses `input()` rather than `sys.stdin.readline()`: under an IPython kernel
+    the latter returns an empty string immediately, which would read as EOF and
+    abandon the flow.
+    """
+    try:
+        return input(prompt)
+    except EOFError:
+        return None
+    except OSError:
+        return None
 
 
 def _copy_osc52(text: str) -> None:
@@ -125,7 +159,9 @@ def _create_callback_server(
         def log_message(self, format: str, *args: object) -> None:
             pass  # silence request logs
 
-    httpd = socketserver.TCPServer(("", 0), _CallbackHandler)
+    # Loopback only: an empty host binds every interface, which lets anyone
+    # who can reach this machine post a token of their choosing.
+    httpd = socketserver.TCPServer(("127.0.0.1", 0), _CallbackHandler)
     port = httpd.server_address[1]
     return httpd, port
 
@@ -149,6 +185,12 @@ def _poll_for_token(
 ) -> str | None:
     """Read a token from stdin or the browser callback, whichever arrives first."""
     prompt = "API key (or press Enter to keep waiting): "
+
+    if sys.platform == "win32":
+        # select() accepts only sockets on Windows, so stdin has to be watched
+        # from its own thread.
+        return _poll_for_token_threaded(auth_event, received_token, timeout, prompt)
+
     sys.stdout.write(prompt)
     sys.stdout.flush()
 
@@ -173,14 +215,59 @@ def _poll_for_token(
     return received_token[0]
 
 
+def _poll_for_token_threaded(
+    auth_event: threading.Event,
+    received_token: list[str | None],
+    timeout: float,
+    prompt: str,
+) -> str | None:
+    """The same race, for platforms where select() cannot watch stdin.
+
+    The reader sits on a daemon thread so that a callback arriving first is not
+    blocked behind an unanswered prompt.
+    """
+    pasted: list[str | None] = [None]
+    got_input = threading.Event()
+
+    def read_stdin() -> None:
+        while not auth_event.is_set():
+            line = _read_line(prompt)
+            if line is None:  # EOF
+                break
+            token = line.strip()
+            if token:
+                pasted[0] = token
+                got_input.set()
+                return
+
+    threading.Thread(target=read_stdin, daemon=True).start()
+
+    waited = 0.0
+    while waited < timeout:
+        if auth_event.wait(0.5):
+            return received_token[0]
+        if got_input.is_set():
+            return pasted[0]
+        waited += 0.5
+
+    sys.stdout.write("\nTimed out waiting for login.\n")
+    sys.stdout.flush()
+    return None
+
+
 def _paste_only_login(login_url: str, timeout: float) -> str | None:
     """Token acquisition without a browser, e.g. over SSH.
 
     Shows the login URL, offers clipboard copy via OSC 52, and waits for a
     pasted key.
     """
+    lead = (
+        "Open this URL in your browser:"
+        if _in_notebook()
+        else "No display detected. Open this URL in a browser on another device:"
+    )
     print(
-        "\nNo display detected. Open this URL in a browser on another device:\n"
+        f"\n{lead}\n"
         f"\n  {login_url}\n"
         f"\nAfter logging in, copy your API key from\n  {URL_PRIOR_LABS_API_KEYS}\n"
     )
@@ -190,10 +277,8 @@ def _paste_only_login(login_url: str, timeout: float) -> str | None:
     )
     try:
         while True:
-            sys.stdout.write(deadline_note)
-            sys.stdout.flush()
-            line = sys.stdin.readline()
-            if not line:  # EOF
+            line = _read_line(deadline_note)
+            if line is None:  # EOF
                 return None
             text = line.strip()
             if text.lower() == "c":
@@ -228,10 +313,15 @@ def _browser_login(gui_url: str, timeout: float) -> str | None:
     )
     server_thread.start()
 
-    webbrowser.open(login_url)
+    opened = webbrowser.open(login_url)
 
+    headline = (
+        "Opening your browser to log in or register."
+        if opened
+        else "Could not open a browser. Open this URL yourself:"
+    )
     print(
-        "\nOpening your browser to log in or register.\n"
+        f"\n{headline}\n"
         f"\n  {login_url}\n"
         "\nWaiting for login to complete...\n"
         "\nHaving trouble? You can also authenticate manually:\n"
@@ -309,15 +399,24 @@ def interactive_login(
         from tabpfn_client.service_wrapper import UserAuthenticationClient
 
         existing = UserAuthenticationClient.resolve_token()
-        if existing is not None and ServiceClient.is_auth_token_outdated(existing):
-            from tabpfn_client.config import set_access_token
+        if existing is not None:
+            try:
+                already_valid = ServiceClient.is_auth_token_outdated(existing)
+            except httpx.HTTPError:
+                # Unreachable server: fall through to the login flow rather
+                # than surfacing a transport traceback from what is only a
+                # shortcut past work the user asked for anyway.
+                logger.debug("Could not check the existing token", exc_info=True)
+                already_valid = False
+            if already_valid:
+                from tabpfn_client.config import set_access_token
 
-            set_access_token(existing)
-            notify(
-                "Already logged in. "
-                "Pass force_relogin=True to log in as a different user."
-            )
-            return existing
+                set_access_token(existing)
+                notify(
+                    "Already logged in. "
+                    "Pass force_relogin=True to log in as a different user."
+                )
+                return existing
 
     if not _stdin_is_interactive():
         raise InteractiveLoginError(
@@ -348,9 +447,12 @@ def interactive_login(
         except KeyboardInterrupt:
             sys.stdout.write("\n")
             raise InteractiveLoginError("Signup was cancelled.") from None
-    elif open_browser and _has_display():
+    elif open_browser and _has_display() and not _in_notebook():
         token = _browser_login(gui_url, timeout)
     else:
+        # No callback server under a kernel: the browser that opens the login
+        # page is the reader's, and its localhost is not necessarily this
+        # process's. Pasting the key back is the route that always works.
         token = _paste_only_login(f"{gui_url}/login", timeout)
 
     if not token:
