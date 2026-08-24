@@ -7,10 +7,20 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: release-tag-${{ github.event.pull_request.head.ref }}
+  cancel-in-progress: false
+
 jobs:
   tag:
+    name: Tag the release
+    # The branch condition alone would also match a fork branch named
+    # release/v..., and the workflow file itself comes from the PR's merge
+    # commit. Forks never enter this job.
     if: |
+      github.repository == 'PriorLabs/tabpfn-client' &&
       github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
       startsWith(github.event.pull_request.head.ref, 'release/v')
     runs-on: ubuntu-latest
     environment: release

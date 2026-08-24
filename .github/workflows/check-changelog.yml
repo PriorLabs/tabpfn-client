@@ -11,10 +11,15 @@ permissions: {}
 jobs:
   check:
     name: Changelog entry
+    # The release-branch exemption applies to this repository's own branches
+    # only. `head_ref` is the head branch's name wherever it lives, so a fork
+    # branch called release/v... would otherwise skip the check -- and a
+    # skipped required check reports as passing.
     if: >-
       github.event_name == 'pull_request' &&
       github.actor != 'dependabot[bot]' &&
-      !startsWith(github.head_ref, 'release/v')
+      !(github.event.pull_request.head.repo.full_name == github.repository &&
+        startsWith(github.head_ref, 'release/v'))
     runs-on: ubuntu-latest
     permissions:
       contents: read

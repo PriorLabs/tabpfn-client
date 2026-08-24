@@ -23,6 +23,8 @@ concurrency:
 
 jobs:
   release_pr:
+    name: Open the release PR
+    if: github.repository == 'PriorLabs/tabpfn-client'
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -50,6 +52,22 @@ jobs:
           }
           echo "RELEASE_BRANCH=release/v${VERSION}" >> "$GITHUB_ENV"
 
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: false
+
+      # Installed at a pinned version, and before the checkout below: from that
+      # point on the working tree holds a credential in .git/config, and
+      # nothing else may execute alongside it.
+      - name: Install towncrier
+        run: uv pip install --system 'towncrier==25.8.0'
+
       # RELEASE_BOT_TOKEN rather than GITHUB_TOKEN: a pull request opened with
       # the GITHUB_TOKEN does not start workflow runs, which would leave the
       # release PR without CI.
@@ -58,17 +76,6 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_BOT_TOKEN }}
-
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.12"
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
-
-      - name: Install towncrier
-        run: uv pip install --system towncrier
 
       - name: Create release branch from base ref
         run: |
@@ -128,5 +135,11 @@ jobs:
             --body "Automated release PR for v${VERSION}, cut from ${BASE_REF}.
 
           Merging this tags \`v${VERSION}\` and starts the publish workflow, which
-          uploads to TestPyPI, installs from there to verify, and then waits for a
-          review on the \`pypi\` environment before touching PyPI."
+          uploads to TestPyPI, installs the result from there to verify it, and
+          then publishes to PyPI.
+
+          The PyPI step runs in the \`pypi\` environment. Whether it pauses for a
+          review depends on that environment carrying a required reviewer, which
+          is repository configuration rather than anything this workflow can
+          assert -- an environment with no protection rules publishes
+          unattended."
