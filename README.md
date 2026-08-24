@@ -45,6 +45,15 @@ pip install --upgrade tabpfn-client
 
 ### Basic Usage
 
+Set a token first — `fit()` raises without one and never prompts. Generate it at
+[ux.priorlabs.ai/account/api-keys](https://ux.priorlabs.ai/account/api-keys):
+
+```bash
+export TABPFN_TOKEN="<your-token>"
+```
+
+See [Authentication](#authentication) for the alternatives.
+
 ```python
 from tabpfn_client import init, TabPFNClassifier, TabPFNRegressor
 from sklearn.datasets import load_breast_cancer
@@ -129,17 +138,63 @@ Notes:
 
 ## Authentication
 
+Authentication is token-based. Generate a token at
+[ux.priorlabs.ai/account/api-keys](https://ux.priorlabs.ai/account/api-keys), then supply it
+in one of two ways.
+
+Via the environment, which needs no code changes:
+
+```bash
+export TABPFN_TOKEN="<your-token>"
+```
+
+Or in code, before the first fit or predict:
+
+```python
+import tabpfn_client
+tabpfn_client.set_access_token("<your-token>")
+```
+
+If neither is set, `init()` raises a `RuntimeError` explaining where to get a token. It
+never prompts — this is a library, so authentication is not allowed to block on input.
+The one exception is `interactive_login()` below, which you call yourself.
+
+### Interactive Login (opt-in)
+
+If you would rather not copy a token by hand, call `interactive_login()` explicitly:
+
+```python
+from tabpfn_client import interactive_login
+interactive_login()
+```
+
+It offers two routes:
+
+- **Log in** — opens the Prior Labs login page, where you can sign in or use SSO, and waits
+  for the resulting API key. A local callback receives the key automatically; if that does
+  not come through (some identity providers drop the callback), you can paste the key at the
+  prompt instead. Over SSH the flow prints the URL and waits for a paste. Pass
+  `open_browser=False` to skip the browser entirely.
+- **Create an account** — runs entirely in the terminal: email and password, a short
+  profile, then an emailed verification code. No browser required, which makes it usable
+  from a hosted notebook where opening a tab is not an option.
+
+Either way the token is verified and cached, so later runs need no input.
+
+This is **opt-in only**. `init()`, `fit()`, and `predict()` never trigger it — they use the
+token sources above and fail with instructions when none is available.
+
+`interactive_login()` is also the only thing that writes the token cache. A token supplied
+through `TABPFN_TOKEN` or `set_access_token()` stays in memory for that process and is
+never copied to disk.
+
 ### Load Your Token
+
+To read back the token in use, for example to pass it to another machine:
 
 ```python
 import tabpfn_client
 token = tabpfn_client.get_access_token()
-```
-
-and login (on another machine) using your access token, skipping the interactive flow, use:
-
-```python
-tabpfn_client.set_access_token(token)
 ```
 
 ## AWS SageMaker (BYOC)

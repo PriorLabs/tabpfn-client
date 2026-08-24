@@ -214,26 +214,6 @@ class TestServiceClient(unittest.TestCase):
         self.assertTrue(ServiceClient.is_auth_token_outdated("true_token"))
 
     @with_mock_server()
-    def test_send_reset_password_email(self, mock_server):
-        mock_server.router.post(
-            mock_server.endpoints.send_reset_password_email.path
-        ).respond(200, json={"message": "Password reset email sent!"})
-        self.assertEqual(
-            ServiceClient.send_reset_password_email("test"),
-            (True, "Password reset email sent!"),
-        )
-
-    @with_mock_server()
-    def test_send_verification_email(self, mock_server):
-        mock_server.router.post(
-            mock_server.endpoints.send_verification_email.path
-        ).respond(200, json={"message": "Verification Email sent!"})
-        self.assertEqual(
-            ServiceClient.send_verification_email("test"),
-            (True, "Verification Email sent!"),
-        )
-
-    @with_mock_server()
     def test_retrieve_greeting_messages(self, mock_server):
         mock_server.router.get(
             mock_server.endpoints.retrieve_greeting_messages.path

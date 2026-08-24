@@ -61,6 +61,21 @@ def header(title: str, subtitle: str | None = None) -> None:
     )
 
 
+logger = logging.getLogger(__name__)
+
+
+def notify(message: str) -> None:
+    """Status text for a human at a terminal, a log record anywhere else.
+
+    Output that is not part of an interactive prompt goes through here, so a
+    script or batch job gets a quiet stdout it can redirect and parse.
+    """
+    if sys.stdout.isatty():
+        console.print(message)
+    else:
+        logger.info(message)
+
+
 def success(message: str) -> None:
     console.print(f"[bold green]{message}[/bold green]")
 
