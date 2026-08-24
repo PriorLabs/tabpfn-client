@@ -1,0 +1,250 @@
+name: Release to PyPI
+run-name: "publish ${{ github.ref_name }}"
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions: {}
+
+concurrency:
+  group: release-publish-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read version from tag
+        id: version
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG_NAME#v}"
+          printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?(\.post[0-9]+)?$' || {
+            echo "Tag $TAG_NAME does not carry a valid release version"
+            exit 1
+          }
+
+          if printf '%s' "$VERSION" | grep -Eq '(a|b|rc)[0-9]+$'; then
+            PRERELEASE=true
+          else
+            PRERELEASE=false
+          fi
+
+          {
+            echo "version=$VERSION"
+            echo "prerelease=$PRERELEASE"
+          } >> "$GITHUB_OUTPUT"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "Releasing $VERSION (prerelease: $PRERELEASE)"
+
+      - name: Verify tag matches pyproject.toml
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          tag_version = os.environ["VERSION"]
+          text = Path("pyproject.toml").read_text(encoding="utf-8")
+          match = re.search(
+              r'(?ms)^\[project\]\s*\n.*?^\s*version\s*=\s*"([^"]+)"', text
+          )
+          if not match:
+              raise SystemExit("Could not find [project].version in pyproject.toml")
+
+          file_version = match.group(1).strip()
+          if tag_version != file_version:
+              raise SystemExit(
+                  f"Version mismatch: tag={tag_version} pyproject={file_version}"
+              )
+          print("Tag matches pyproject version:", tag_version)
+          PY
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+
+      - name: Build sdist and wheel
+        run: |
+          rm -rf dist
+          uv build
+
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          text = Path("CHANGELOG.md").read_text(encoding="utf-8")
+
+          pattern = (
+              rf"(?ms)^##\s+\[{re.escape(version)}\]\s+-\s+"
+              rf"\d{{4}}-\d{{2}}-\d{{2}}\s*\n(.*?)(?=^##\s+\[|\Z)"
+          )
+          match = re.search(pattern, text)
+          if not match:
+              raise SystemExit(
+                  f"No changelog section for {version} in CHANGELOG.md"
+              )
+
+          Path("release_notes.md").write_text(
+              match.group(1).strip() + "\n", encoding="utf-8"
+          )
+          print("Wrote release_notes.md")
+          PY
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release_notes
+          path: release_notes.md
+          retention-days: 7
+
+  publish-testpypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/tabpfn-client/${{ needs.build.outputs.version }}/
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      # Trusted publishing over OIDC. There is no API token to leak, and the
+      # PyPI side is bound to this repository, this workflow file, and the
+      # environment named above.
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          print-hash: true
+          skip-existing: true
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+
+      - name: Wait for TestPyPI to index the release
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl -sf "https://test.pypi.org/simple/tabpfn-client/" \
+              | grep -qF "tabpfn_client-${VERSION}.tar.gz"; then
+              echo "Indexed after $((attempt * 10))s"
+              exit 0
+            fi
+            echo "  not indexed yet (attempt ${attempt}/30)"
+            sleep 10
+          done
+          echo "Timed out after 5 minutes waiting for the TestPyPI index"
+          exit 1
+
+      - name: Install from TestPyPI and verify the version
+        run: |
+          workdir="$(mktemp -d)"
+          cd "$workdir"
+          uv venv
+          # --refresh-package bypasses uv's HTTP cache, which setup-uv restores
+          # across runs and which otherwise serves a simple-index page predating
+          # this upload.
+          uv pip install \
+            --index-url https://test.pypi.org/simple/ \
+            --extra-index-url https://pypi.org/simple/ \
+            --index-strategy unsafe-best-match \
+            --refresh-package tabpfn-client \
+            "tabpfn-client==${VERSION}"
+
+          uv run python - <<'PY'
+          import os
+
+          import tabpfn_client
+
+          expected = os.environ["VERSION"]
+          assert tabpfn_client.__version__ == expected, (
+              f"expected {expected!r}, got {tabpfn_client.__version__!r}"
+          )
+          print("Installed tabpfn_client.__version__ ==", tabpfn_client.__version__)
+          PY
+
+  publish-pypi:
+    needs: [build, publish-testpypi]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/tabpfn-client/${{ needs.build.outputs.version }}/
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      PRERELEASE: ${{ needs.build.outputs.prerelease }}
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          print-hash: true
+          skip-existing: true
+
+      - name: Checkout tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download release notes
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release_notes
+          path: .
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "$PRERELEASE" = "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+          else
+            PRERELEASE_FLAG=""
+          fi
+
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --notes-file release_notes.md \
+            --verify-tag \
+            $PRERELEASE_FLAG \
+            dist/*

@@ -1,0 +1,132 @@
+name: Create Release PR
+run-name: "create release PR for v${{ inputs.version }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. 0.5.0 or 0.5.0rc1"
+        required: true
+      base_ref:
+        description: "Full 40-character commit SHA to release from"
+        required: true
+      base_branch:
+        description: "Branch to open the PR against"
+        required: false
+        default: "main"
+
+permissions: {}
+
+concurrency:
+  group: release-create-pr
+  cancel-in-progress: false
+
+jobs:
+  release_pr:
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ inputs.version }}
+      BASE_REF: ${{ inputs.base_ref }}
+      BASE_BRANCH: ${{ inputs.base_branch }}
+    steps:
+      # Inputs reach the shell through the environment, never through ${{ }}
+      # interpolation, and every one of them is constrained here before use.
+      - name: Validate inputs
+        run: |
+          printf '%s' "$BASE_REF" | grep -Eq '^[0-9a-f]{40}$' || {
+            echo "base_ref must be a full 40-character commit SHA, got: $BASE_REF"
+            exit 1
+          }
+          printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?(\.post[0-9]+)?$' || {
+            echo "version must be a PEP 440 release or pre-release, e.g. 0.5.0 or 0.5.0rc1, got: $VERSION"
+            exit 1
+          }
+          printf '%s' "$BASE_BRANCH" | grep -Eq '^[A-Za-z0-9._/-]+$' || {
+            echo "base_branch contains unexpected characters, got: $BASE_BRANCH"
+            exit 1
+          }
+          echo "RELEASE_BRANCH=release/v${VERSION}" >> "$GITHUB_ENV"
+
+      # RELEASE_BOT_TOKEN rather than GITHUB_TOKEN: a pull request opened with
+      # the GITHUB_TOKEN does not start workflow runs, which would leave the
+      # release PR without CI.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_BOT_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: Install towncrier
+        run: uv pip install --system towncrier
+
+      - name: Create release branch from base ref
+        run: |
+          git checkout --detach "$BASE_REF"
+          git checkout -b "$RELEASE_BRANCH"
+
+      - name: Bump version in pyproject.toml
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          path = Path("pyproject.toml")
+          text = path.read_text(encoding="utf-8")
+
+          pattern = r'(?ms)(^\[project\]\s*\n.*?^\s*version\s*=\s*")([^"]+)(")'
+          match = re.search(pattern, text)
+          if not match:
+              raise SystemExit("Could not find [project].version in pyproject.toml")
+
+          path.write_text(
+              text[: match.start(2)] + version + text[match.end(2) :], encoding="utf-8"
+          )
+          print(f"Bumped [project].version from {match.group(2)} to {version}")
+          PY
+
+      - name: Build changelog
+        run: towncrier build --version "$VERSION" --yes
+
+      - name: Commit release changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add pyproject.toml CHANGELOG.md changelog
+
+          if git diff --cached --quiet; then
+            echo "Nothing staged. Are there changelog fragments in changelog/ to release?"
+            exit 1
+          fi
+
+          git commit -m "Release v${VERSION}"
+
+      - name: Push branch
+        run: git push --set-upstream origin "$RELEASE_BRANCH"
+
+      - name: Open pull request
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+        run: |
+          gh pr create \
+            --base "$BASE_BRANCH" \
+            --head "$RELEASE_BRANCH" \
+            --title "Release v${VERSION}" \
+            --body "Automated release PR for v${VERSION}, cut from ${BASE_REF}.
+
+          Merging this tags \`v${VERSION}\` and starts the publish workflow, which
+          uploads to TestPyPI, installs from there to verify, and then waits for a
+          review on the \`pypi\` environment before touching PyPI."

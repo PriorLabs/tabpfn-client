@@ -1,0 +1,76 @@
+name: Tag Release Branch on PR Merge
+run-name: "tag from ${{ github.event.pull_request.head.ref }}"
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions: {}
+
+jobs:
+  tag:
+    if: |
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'release/v')
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    env:
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+    steps:
+      # RELEASE_BOT_TOKEN rather than GITHUB_TOKEN: a tag pushed with the
+      # GITHUB_TOKEN does not start workflow runs, so release-publish.yml
+      # would never fire.
+      - name: Checkout merge commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_BOT_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Read version from pyproject.toml
+        run: |
+          python - <<'PY' >> "$GITHUB_ENV"
+          import re
+          from pathlib import Path
+
+          text = Path("pyproject.toml").read_text(encoding="utf-8")
+          match = re.search(
+              r'(?ms)^\[project\]\s*\n.*?^\s*version\s*=\s*"([^"]+)"', text
+          )
+          if not match:
+              raise SystemExit("Could not find [project].version in pyproject.toml")
+
+          version = match.group(1).strip()
+          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?(\.post[0-9]+)?", version):
+              raise SystemExit(f"Version in pyproject.toml is not a valid release: {version}")
+          print(f"VERSION={version}")
+          PY
+
+      # The branch name is the human intent; pyproject.toml is what gets built.
+      # A mismatch means the release PR was edited after it was opened.
+      - name: Verify the branch name agrees with pyproject.toml
+        run: |
+          if [ "$HEAD_REF" != "release/v${VERSION}" ]; then
+            echo "Branch $HEAD_REF does not match pyproject version $VERSION"
+            exit 1
+          fi
+
+      - name: Create and push tag
+        run: |
+          TAG="v${VERSION}"
+          git fetch --tags
+
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists, nothing to do."
+            exit 0
+          fi
+
+          git tag "$TAG"
+          git push origin "$TAG"
