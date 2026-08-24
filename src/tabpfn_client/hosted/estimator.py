@@ -28,17 +28,29 @@ only sent when set; some deployments reject overrides.
 `model_id` lives on the constructor (not on `predict`) so the sklearn
 estimator contract stays intact: `predict(X)` / `predict_proba(X)` work
 with `Pipeline`, `GridSearchCV`, `cross_validate`, etc.
+
+`payload_format="parquet"` sends the datasets as multipart Parquet files
+instead of inline JSON. Encoding dominates request time on large tables,
+and Parquet also carries missing values natively, which JSON cannot.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+import io
+import json
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import httpx
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.utils.validation import check_is_fitted
+
+
+# Multipart form field name -> JSON body key for the same dataset.
+_JSON_DATASET_KEYS = {"x_train": "X_train", "y_train": "y_train", "x_test": "X_test"}
+
+_PARQUET_MIME = "application/vnd.apache.parquet"
 
 
 def _to_jsonable(X: Any) -> list:
@@ -50,6 +62,14 @@ def _to_jsonable(X: Any) -> list:
     if isinstance(X, list):
         return X
     return np.asarray(X).tolist()
+
+
+def _to_parquet_part(X: Any, name: str) -> Tuple[str, bytes, str]:
+    """Serialize one dataset to a multipart Parquet file part."""
+    frame = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
+    buf = io.BytesIO()
+    frame.to_parquet(buf, index=False, compression="zstd")
+    return (f"{name}.parquet", buf.getvalue(), _PARQUET_MIME)
 
 
 class _HostedBase(BaseEstimator):
@@ -78,6 +98,7 @@ class _HostedBase(BaseEstimator):
         memory_saving_mode: Optional[bool | Literal["auto"]] = None,
         categorical_features_indices: Optional[List[int]] = None,
         timeout_s: float = 300.0,
+        payload_format: Literal["json", "parquet"] = "json",
     ):
         self.endpoint_url = endpoint_url
         self.api_key = api_key
@@ -96,6 +117,7 @@ class _HostedBase(BaseEstimator):
         self.memory_saving_mode = memory_saving_mode
         self.categorical_features_indices = categorical_features_indices
         self.timeout_s = timeout_s
+        self.payload_format = payload_format
 
     def _build_tabpfn_config(self) -> Dict[str, Any]:
         cfg: Dict[str, Any] = {
@@ -120,10 +142,9 @@ class _HostedBase(BaseEstimator):
         return cfg
 
     def _headers(self) -> Dict[str, str]:
-        headers: Dict[str, str] = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
+        headers: Dict[str, str] = {"Accept": "application/json"}
+        if self.payload_format == "json":
+            headers["Content-Type"] = "application/json"
         # The API key is optional because some deployments do not require it
         if self.api_key is not None:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -176,14 +197,14 @@ class _HostedBase(BaseEstimator):
         if predict_params:
             params.update(predict_params)
 
-        body: Dict[str, Any] = {
+        request: Dict[str, Any] = {
             "task_config": {
                 "task": self._TASK,
                 "tabpfn_config": self._build_tabpfn_config(),
                 "predict_params": params,
-            },
-            "X_test": _to_jsonable(X_test),
+            }
         }
+        datasets: Dict[str, Any] = {"x_test": X_test}
 
         # Precedence: a completed fit() wins over the constructor's model_id.
         # Rationale — if the caller ran fit(new_X, new_y) on an estimator that
@@ -196,19 +217,15 @@ class _HostedBase(BaseEstimator):
             y_arr = np.asarray(self.y_train_)
             if y_arr.ndim == 1:
                 y_arr = y_arr.reshape(-1, 1)
-            body["X_train"] = _to_jsonable(self.X_train_)
-            body["y_train"] = y_arr.tolist()
+            datasets["x_train"] = self.X_train_
+            datasets["y_train"] = y_arr
         elif self.model_id is not None:
-            body["context"] = {"model_id": self.model_id}
+            request["context"] = {"model_id": self.model_id}
         else:
             # Neither path available — raise the standard sklearn error.
             check_is_fitted(self, ["X_train_", "y_train_"])
 
-        resp = self._http_client().post(
-            self.endpoint_url,
-            json=body,
-            headers=self._headers(),
-        )
+        resp = self._post(request, datasets)
         resp.raise_for_status()
         payload = resp.json()
 
@@ -217,6 +234,29 @@ class _HostedBase(BaseEstimator):
             self.model_id_ = returned_id
 
         return payload
+
+    def _post(
+        self, request: Dict[str, Any], datasets: Dict[str, Any]
+    ) -> httpx.Response:
+        """POST the request, with the datasets inline or as Parquet files."""
+        if self.payload_format == "parquet":
+            return self._http_client().post(
+                self.endpoint_url,
+                data={"request": json.dumps(request)},
+                files={
+                    name: _to_parquet_part(value, name)
+                    for name, value in datasets.items()
+                },
+                headers=self._headers(),
+            )
+        body = dict(request)
+        for name, value in datasets.items():
+            body[_JSON_DATASET_KEYS[name]] = _to_jsonable(value)
+        return self._http_client().post(
+            self.endpoint_url,
+            json=body,
+            headers=self._headers(),
+        )
 
 
 class TabPFNClassifier(_HostedBase, ClassifierMixin):
