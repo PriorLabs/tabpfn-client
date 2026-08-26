@@ -242,8 +242,108 @@ jobs:
       name: pypi
       url: https://pypi.org/project/tabpfn-client/${{ needs.build.outputs.version }}/
     permissions:
-      contents: write
+      contents: read
       id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      # No skip-existing here: on the real index a version that is already
+      # present means the release is not what this run built, and the run must
+      # stop rather than go on to cut a GitHub release for it.
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          print-hash: true
+
+  # The index users actually install from, exercised the way they install from
+  # it: a plain `pip install tabpfn-client==<version>` resolving every
+  # dependency from PyPI. Nothing can be unpublished by the time this runs, so
+  # a failure here is a signal to yank, not a gate -- but it is the difference
+  # between finding out now and finding out from a bug report.
+  #
+  # Installing runs the dependencies' own code, so this job holds no token:
+  # no OIDC, no GITHUB_TOKEN, and no cache a later job could restore.
+  verify-pypi:
+    name: Verify the PyPI release
+    if: github.repository == 'PriorLabs/tabpfn-client'
+    needs: [build, publish-pypi]
+    runs-on: ubuntu-latest
+    permissions: {}
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - name: Set up uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: false
+
+      - name: Install from PyPI and smoke test
+        run: |
+          workdir="$(mktemp -d)"
+          cd "$workdir"
+          uv venv
+
+          # Same retry as the TestPyPI check: a just-uploaded file is not
+          # immediately consistent across the index's caches.
+          for attempt in $(seq 1 30); do
+            if uv pip install \
+              --refresh-package tabpfn-client \
+              "tabpfn-client==${VERSION}"; then
+              echo "Installed on attempt ${attempt}"
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "tabpfn-client==${VERSION} never became installable from PyPI"
+              exit 1
+            fi
+            echo "  not installable yet (attempt ${attempt}/30), retrying"
+            sleep 10
+          done
+
+          VERSION="$VERSION" .venv/bin/python - <<'PY'
+          import os
+
+          import tabpfn_client
+          from tabpfn_client import TabPFNClassifier, TabPFNRegressor
+
+          expected = os.environ["VERSION"]
+          assert tabpfn_client.__version__ == expected, (
+              f"expected {expected!r}, got {tabpfn_client.__version__!r}"
+          )
+
+          # The documented surface, so a packaging change that drops a module
+          # fails here rather than for a user.
+          for name in (
+              "init",
+              "reset",
+              "get_access_token",
+              "set_access_token",
+              "get_api_usage",
+              "interactive_login",
+              "TabPFNClassifier",
+              "TabPFNRegressor",
+              "UserDataClient",
+          ):
+              assert hasattr(tabpfn_client, name), f"missing from public API: {name}"
+
+          # Constructing an estimator touches no network and no credentials.
+          TabPFNClassifier()
+          TabPFNRegressor()
+
+          print("Smoke test passed for", tabpfn_client.__version__)
+          PY
+
+  github-release:
+    name: Create the GitHub release
+    if: github.repository == 'PriorLabs/tabpfn-client'
+    needs: [build, verify-pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       VERSION: ${{ needs.build.outputs.version }}
       PRERELEASE: ${{ needs.build.outputs.prerelease }}
@@ -260,14 +360,6 @@ jobs:
         with:
           name: dist
           path: dist/
-
-      # No skip-existing here: on the real index a version that is already
-      # present means the release is not what this run built, and the run must
-      # stop rather than go on to cut a GitHub release for it.
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
-        with:
-          print-hash: true
 
       - name: Download release notes
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
