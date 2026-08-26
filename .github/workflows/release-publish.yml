@@ -170,20 +170,6 @@ jobs:
     env:
       VERSION: ${{ needs.build.outputs.version }}
     steps:
-      - name: Wait for TestPyPI to index the release
-        run: |
-          for attempt in $(seq 1 30); do
-            if curl -sf "https://test.pypi.org/simple/tabpfn-client/" \
-              | grep -qF "tabpfn_client-${VERSION}.tar.gz"; then
-              echo "Indexed after $((attempt * 10))s"
-              exit 0
-            fi
-            echo "  not indexed yet (attempt ${attempt}/30)"
-            sleep 10
-          done
-          echo "Timed out after 5 minutes waiting for the TestPyPI index"
-          exit 1
-
       - name: Set up uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
@@ -198,13 +184,27 @@ jobs:
           cd "$workdir"
           uv venv
 
-          # --refresh-package bypasses uv's HTTP cache, which would otherwise
-          # serve a simple-index page predating this upload.
-          uv pip install \
-            --index-url https://test.pypi.org/simple/ \
-            --no-deps \
-            --refresh-package tabpfn-client \
-            "tabpfn-client==${VERSION}"
+          # Retry rather than probe the index first: a probe and uv's own
+          # resolution are separate requests, and TestPyPI can answer them from
+          # different caches, so a probe that succeeds proves nothing about the
+          # request that follows it. --refresh-package covers uv's local cache;
+          # the loop covers the rest.
+          for attempt in $(seq 1 30); do
+            if uv pip install \
+              --index-url https://test.pypi.org/simple/ \
+              --no-deps \
+              --refresh-package tabpfn-client \
+              "tabpfn-client==${VERSION}"; then
+              echo "Installed on attempt ${attempt}"
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "tabpfn-client==${VERSION} never became installable from TestPyPI"
+              exit 1
+            fi
+            echo "  not installable yet (attempt ${attempt}/30), retrying"
+            sleep 10
+          done
 
           .venv/bin/python - <<'PY' > requirements.txt
           from importlib.metadata import requires
