@@ -1,0 +1,62 @@
+name: Check Changelog
+run-name: "changelog check on ${{ github.head_ref || github.ref_name }}"
+
+on:
+  pull_request:
+    types: [opened, synchronize, labeled, unlabeled]
+  merge_group:
+
+permissions: {}
+
+jobs:
+  check:
+    name: Changelog entry
+    # The release-branch exemption applies to this repository's own branches
+    # only. `head_ref` is the head branch's name wherever it lives, so a fork
+    # branch called release/v... would otherwise skip the check -- and a
+    # skipped required check reports as passing.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.actor != 'dependabot[bot]' &&
+      !(github.event.pull_request.head.repo.full_name == github.repository &&
+        startsWith(github.head_ref, 'release/v'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check changelog entry
+        id: changelog_check
+        uses: scientific-python/action-towncrier-changelog@f9c7df9a9f8b55cb0c12d94d14b281e9bcd101c0 # v2.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BOT_USERNAME: changelog-bot
+
+      - name: Show instructions on failure
+        if: failure() && steps.changelog_check.outcome == 'failure'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          cat <<EOF
+
+          ─────────────────────────────────────────────────────────────
+          Missing changelog entry.
+
+          Add a file: changelog/${PR_NUMBER}.<category>.md
+          Categories: breaking, added, changed, fixed, deprecated
+
+          For example:
+            uvx towncrier create ${PR_NUMBER}.added.md --content "What changed, for a user"
+
+          A change that needs no entry — a version bump, a CI-only edit —
+          can carry the "no changelog needed" label instead.
+          See changelog/README.md.
+          ─────────────────────────────────────────────────────────────
+
+          EOF
+          exit 1
