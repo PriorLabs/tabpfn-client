@@ -289,7 +289,7 @@ class TestReviewFindings(unittest.TestCase):
         auth_event = threading.Event()
         received: list = [None]
         httpd, _ = interactive_auth._create_callback_server(
-            "https://ux.priorlabs.ai", auth_event, received
+            "https://platform.priorlabs.ai", auth_event, received
         )
         try:
             self.assertEqual("127.0.0.1", httpd.socket.getsockname()[0])
@@ -365,6 +365,6 @@ class TestReviewFindings(unittest.TestCase):
         with patch.object(interactive_auth.webbrowser, "open", return_value=False):
             with patch.object(interactive_auth, "_poll_for_token", return_value="tok"):
                 with patch("sys.stdout", new=io.StringIO()) as fake_out:
-                    interactive_auth._browser_login("https://ux.priorlabs.ai", 1.0)
+                    interactive_auth._browser_login("https://platform.priorlabs.ai", 1.0)
 
         self.assertIn("Could not open a browser", fake_out.getvalue())

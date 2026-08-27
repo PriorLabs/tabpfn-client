@@ -8,7 +8,7 @@ protocol: "https"
 host: "api.priorlabs.ai"
 port: "443"
 
-gui_url: "https://ux.priorlabs.ai"
+gui_url: "https://platform.priorlabs.ai"
 endpoints:
   root:
     path: "/"
