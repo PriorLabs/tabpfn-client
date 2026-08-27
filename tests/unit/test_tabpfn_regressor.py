@@ -982,3 +982,132 @@ class TestTabPFNModelSelection(unittest.TestCase):
         tabpfn_false.fit(X, y)
         y_pred_false = tabpfn_false.predict(test_X)
         self.assertIsNotNone(y_pred_false)
+
+
+class TestFullOutputChunking(unittest.TestCase):
+    """`output_type="full"` splits into per-chunk calls above the server cap."""
+
+    FULL_OUTPUT_MAX_ROWS = 4
+    N_BARS = 6
+    N_QUANTILES = 9
+
+    def setUp(self):
+        # skip init
+        config.Config.is_initialized = True
+        payload = _api_settings_payload()
+        for limit in [payload["max_model_limit"], *payload["model_limits"].values()]:
+            limit["test_set_max_rows_w_full_regression_output"] = (
+                self.FULL_OUTPUT_MAX_ROWS
+            )
+        ServiceClient._api_settings = GetSettingsResponse(**payload)
+        ServiceClient._api_settings_ts = time.monotonic()
+
+        self.borders = np.linspace(0.0, 1.0, self.N_BARS + 1)
+        self.regressor = TabPFNRegressor(model_path="v2.5_default")
+        self.regressor.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
+        self.regressor._last_train_X = np.random.randn(5, 2)
+
+    def tearDown(self):
+        ServiceClient._api_settings = None
+        ServiceClient._api_settings_ts = 0.0
+        # undo setUp
+        config.reset()
+
+    def _full_output(self, n_rows: int, offset: int) -> dict[str, np.ndarray]:
+        """A full-output payload whose values encode each row's global index."""
+        rows = np.arange(offset, offset + n_rows, dtype=float)
+        return {
+            "mean": rows,
+            "median": rows + 0.1,
+            "mode": rows + 0.2,
+            "quantiles": rows + np.arange(self.N_QUANTILES)[:, None],
+            "logits": rows[:, None] + np.arange(self.N_BARS)[None, :],
+            "borders": self.borders,
+        }
+
+    def _predict(self, n_test_rows: int):
+        """Predict `n_test_rows` rows, serving each request from its own chunk."""
+        served = []
+
+        def fake_predict(X, **kwargs):
+            offset = sum(len(x) for x in served)
+            served.append(X)
+            return PredictionResult(
+                y_pred=cast(Any, self._full_output(len(X), offset)), metadata={}
+            )
+
+        with patch.object(InferenceClient, "predict", side_effect=fake_predict):
+            output = cast(
+                "dict[str, Any]",
+                self.regressor.predict(
+                    np.random.randn(n_test_rows, 2), output_type="full"
+                ),
+            )
+        return output, served
+
+    def test_stays_a_single_call_at_the_limit(self):
+        _, served = self._predict(self.FULL_OUTPUT_MAX_ROWS)
+        self.assertEqual([len(x) for x in served], [self.FULL_OUTPUT_MAX_ROWS])
+
+    def test_splits_into_chunks_of_at_most_the_limit(self):
+        _, served = self._predict(self.FULL_OUTPUT_MAX_ROWS * 2 + 1)
+        self.assertEqual(
+            [len(x) for x in served],
+            [self.FULL_OUTPUT_MAX_ROWS, self.FULL_OUTPUT_MAX_ROWS, 1],
+        )
+
+    def test_merged_output_matches_a_single_unsplit_call(self):
+        n_rows = self.FULL_OUTPUT_MAX_ROWS * 2 + 1
+        output, _ = self._predict(n_rows)
+        expected = self._full_output(n_rows, 0)
+        for key, value in expected.items():
+            np.testing.assert_allclose(output[key], value, err_msg=key)
+
+    def test_rejects_output_it_cannot_merge(self):
+        def fake_predict(X, **kwargs):
+            payload = self._full_output(len(X), 0)
+            payload["surprise"] = np.zeros(len(X))
+            return PredictionResult(y_pred=cast(Any, payload), metadata={})
+
+        with patch.object(InferenceClient, "predict", side_effect=fake_predict):
+            with self.assertRaisesRegex(RuntimeError, "surprise"):
+                self.regressor.predict(
+                    np.random.randn(self.FULL_OUTPUT_MAX_ROWS + 1, 2),
+                    output_type="full",
+                )
+
+    def test_masked_bars_come_back_as_negative_infinity(self):
+        """Null logits mark bars outside a row's support, i.e. -inf."""
+
+        def fake_predict(X, **kwargs):
+            payload = self._full_output(len(X), 0)
+            payload["logits"] = payload["logits"].copy()
+            payload["logits"][:, -2:] = np.nan
+            return PredictionResult(y_pred=cast(Any, payload), metadata={})
+
+        with patch.object(InferenceClient, "predict", side_effect=fake_predict):
+            output = cast(
+                "dict[str, Any]",
+                self.regressor.predict(
+                    np.random.randn(self.FULL_OUTPUT_MAX_ROWS + 1, 2),
+                    output_type="full",
+                ),
+            )
+
+        logits = output["logits"]
+        self.assertFalse(np.isnan(logits).any())
+        self.assertTrue(np.isneginf(logits[:, -2:]).all())
+        self.assertTrue(np.isfinite(logits[:, :-2]).all())
+
+    def test_other_output_types_keep_the_row_limit(self):
+        """The cap only applies to `full`, so `mean` is never split."""
+        served = []
+
+        def fake_predict(X, **kwargs):
+            served.append(X)
+            return PredictionResult(y_pred=np.zeros(len(X)), metadata={})
+
+        n_rows = self.FULL_OUTPUT_MAX_ROWS * 3
+        with patch.object(InferenceClient, "predict", side_effect=fake_predict):
+            self.regressor.predict(np.random.randn(n_rows, 2), output_type="mean")
+        self.assertEqual([len(x) for x in served], [n_rows])

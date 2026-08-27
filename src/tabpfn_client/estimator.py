@@ -29,6 +29,7 @@ from tabpfn_client.api_models import ModelVersion
 from tabpfn_client.utils import model_limit_from_version, model_version_from_path
 from tabpfn_client.service_wrapper import InferenceClient
 from tabpfn_client.api_models import (
+    ModelLimit,
     RegressorTabPFNConfig,
     ClassifierTabPFNConfig,
     RegressorPredictParams,
@@ -794,6 +795,16 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             predict_params=predict_params,
         )
 
+        # A full-output response carries one logit per histogram bar for every
+        # test row, so the server caps the rows a single response may cover.
+        # Splitting the call here keeps the returned arrays identical to what
+        # one unrestricted call would have produced.
+        rows_per_call = (
+            _full_output_row_limit(tabpfn_config.model_path)
+            if output_type == "full"
+            else None
+        )
+        chunked = rows_per_call is not None and X.shape[0] > rows_per_call
         validate_test_set(
             X,
             output_type,
@@ -801,8 +812,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             train_rows=self._last_train_X.shape[0]
             if self._last_train_X is not None
             else None,
+            split_full_output=chunked,
         )
-        X_clean = _clean_text_features(X)
 
         # NOTE(@trace_id)
         # If this instance reuses a previous fit via a directly-assigned
@@ -816,34 +827,58 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         ):
             self.client_options.headers["sentry-trace"] = self._last_trace_id
 
-        def predict_task() -> PredictionResult:
-            return InferenceClient.predict(
-                X_clean,
-                fitted_train_set_id=self.model_id_,
-                task_config=task_config,
-                client_options=self.client_options,
+        def predict_rows(X_rows: Any) -> PredictionResult:
+            X_clean = _clean_text_features(X_rows)
+
+            def predict_task() -> PredictionResult:
+                return InferenceClient.predict(
+                    X_clean,
+                    fitted_train_set_id=self.model_id_,
+                    task_config=task_config,
+                    client_options=self.client_options,
+                )
+
+            return run_task(predict_task, "Predicting")
+
+        if chunked:
+            rows_per_call = cast(int, rows_per_call)
+            results = [
+                predict_rows(_row_slice(X, start, start + rows_per_call))
+                for start in range(0, X.shape[0], rows_per_call)
+            ]
+            # Metadata describes the request, and every chunk shares the same
+            # config; the last one stands for the whole prediction.
+            self._last_meta = results[-1].metadata
+            output = _merge_full_outputs(
+                [cast("dict[str, np.ndarray]", r.y_pred) for r in results]
             )
+        else:
+            result = predict_rows(X)
+            # Unpack and store metadata
+            self._last_meta = result.metadata
+            output = result.y_pred
 
-        result = run_task(predict_task, "Predicting")
-        # Unpack and store metadata
-        self._last_meta = result.metadata
-
-        output = result.y_pred
         if output_type == "quantiles" and isinstance(output, np.ndarray):
             return list(output) if output.ndim == 2 else [output]
         if output_type == "full":
+            # `criterion` is a bar distribution rather than an array, so the
+            # full output is looser than the declared `dict[str, np.ndarray]`.
+            full = cast("dict[str, Any]", output)
+            if "logits" in full:
+                full["logits"] = _restore_masked_logits(full["logits"])
             try:
                 from tabpfn.regressor import FullSupportBarDistribution  # type: ignore
                 import torch  # type: ignore
 
-                output["criterion"] = FullSupportBarDistribution(
-                    borders=torch.tensor(output["borders"])
+                full["criterion"] = FullSupportBarDistribution(
+                    borders=torch.tensor(full["borders"])
                 )
             except ImportError:
                 logger.warning(
                     "Optional dependencies 'tabpfn' and 'torch' are required to "
                     "construct the criterion when output_type='full'. Skipping criterion."
                 )
+            return full
 
         return output
 
@@ -906,23 +941,39 @@ def validate_train_set(
         )
 
 
+def _limit_for_model_path(model_path: str | None) -> ModelLimit | None:
+    """Return the row/cell caps for `model_path`, or None if unknown."""
+    api_settings = ServiceClient.get_settings()
+    if api_settings is None:
+        return None
+    if not model_path:
+        return api_settings.model_limits[api_settings.default_model_version]
+    model_version = model_version_from_path(model_path)
+    return model_limit_from_version(model_version, api_settings.model_limits)
+
+
+def _full_output_row_limit(model_path: str | None) -> int | None:
+    """Rows a single `output_type="full"` response may cover, None if unknown."""
+    limit = _limit_for_model_path(model_path)
+    return limit.test_set_max_rows_w_full_regression_output if limit else None
+
+
 def validate_test_set(
     X: pd.DataFrame | np.ndarray,
     output_type: str | None,
     model_path: str | None = None,
     train_rows: int | None = None,
+    split_full_output: bool = False,
 ):
-    """Check the integrity of the test data."""
+    """Check the integrity of the test data.
 
-    api_settings = ServiceClient.get_settings()
-    if api_settings is None:
+    `split_full_output` marks that the caller will honour the full-output row
+    cap by splitting the request, so that cap is not enforced here.
+    """
+
+    limit = _limit_for_model_path(model_path)
+    if limit is None:
         return
-
-    if not model_path:
-        limit = api_settings.model_limits[api_settings.default_model_version]
-    else:
-        model_version = model_version_from_path(model_path)
-        limit = model_limit_from_version(model_version, api_settings.model_limits)
 
     max_rows = limit.test_set_max_rows
     if train_rows:
@@ -944,12 +995,63 @@ def validate_test_set(
             f"The number of test cells ({n_cells}) exceeds the maximum of {limit.test_set_max_cells}. "
             "Split the test set across multiple calls to reduce the number of cells."
         )
-    if output_type == "full":
+    if output_type == "full" and not split_full_output:
         if X.shape[0] > limit.test_set_max_rows_w_full_regression_output:
             raise ValueError(
                 f"The number of test rows ({X.shape[0]}) exceeds the maximum of {limit.test_set_max_rows_w_full_regression_output} "
                 "for full regression output."
             )
+
+
+def _restore_masked_logits(logits: np.ndarray) -> np.ndarray:
+    """Return `logits` with bars outside a row's support back at -inf.
+
+    The response encoding carries no representation for -inf, so those bars
+    arrive as null and land in the array as NaN.
+    """
+    logits = np.asarray(logits, dtype=float)
+    return np.where(np.isnan(logits), -np.inf, logits)
+
+
+def _row_slice(X: Any, start: int, stop: int) -> Any:
+    """Return rows `[start:stop)` of `X`, keeping its container type."""
+    if isinstance(X, pd.DataFrame):
+        return X.iloc[start:stop]
+    return X[start:stop]
+
+
+# Axis along which each `output_type="full"` array runs over test rows. None
+# marks a row-independent array: `borders` describes the histogram of the
+# fitted target, so every chunk returns the same one.
+_FULL_OUTPUT_ROW_AXIS: dict[str, int | None] = {
+    "mean": 0,
+    "median": 0,
+    "mode": 0,
+    "logits": 0,
+    "quantiles": 1,
+    "borders": None,
+}
+
+
+def _merge_full_outputs(parts: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
+    """Stitch per-chunk full-output predictions back into one result."""
+    unknown = sorted(set(parts[0]) - set(_FULL_OUTPUT_ROW_AXIS))
+    if unknown:
+        raise RuntimeError(
+            f"Cannot combine full regression output across calls: the server "
+            f"returned unrecognised field(s) {unknown}. Upgrade tabpfn-client, "
+            f"or split the test set yourself and merge the results."
+        )
+    merged: dict[str, np.ndarray] = {}
+    for key, axis in _FULL_OUTPUT_ROW_AXIS.items():
+        if key not in parts[0]:
+            continue
+        merged[key] = (
+            parts[0][key]
+            if axis is None
+            else np.concatenate([p[key] for p in parts], axis=axis)
+        )
+    return merged
 
 
 @overload
