@@ -365,6 +365,8 @@ class TestReviewFindings(unittest.TestCase):
         with patch.object(interactive_auth.webbrowser, "open", return_value=False):
             with patch.object(interactive_auth, "_poll_for_token", return_value="tok"):
                 with patch("sys.stdout", new=io.StringIO()) as fake_out:
-                    interactive_auth._browser_login("https://platform.priorlabs.ai", 1.0)
+                    interactive_auth._browser_login(
+                        "https://platform.priorlabs.ai", 1.0
+                    )
 
         self.assertIn("Could not open a browser", fake_out.getvalue())
