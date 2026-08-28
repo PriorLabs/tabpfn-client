@@ -33,7 +33,7 @@ Choose the right TabPFN implementation for your needs:
 - **TabPFN Client (this repo)**: Easy-to-use API client for cloud-based inference
 - **[TabPFN Extensions](https://github.com/priorlabs/tabpfn-extensions)**: Community extensions and integrations
 - **[TabPFN](https://github.com/priorlabs/tabpfn)**: Core implementation for local deployment and research
-- **[TabPFN UX](https://ux.priorlabs.ai)**: No-code TabPFN usage
+- **[TabPFN UX](https://platform.priorlabs.ai)**: No-code TabPFN usage
 
 ## Quick Start
 
@@ -46,7 +46,7 @@ pip install --upgrade tabpfn-client
 ### Basic Usage
 
 Set a token first — `fit()` raises without one and never prompts. Generate it at
-[ux.priorlabs.ai/account/api-keys](https://ux.priorlabs.ai/account/api-keys):
+[platform.priorlabs.ai/account/api-keys](https://platform.priorlabs.ai/account/api-keys):
 
 ```bash
 export TABPFN_TOKEN="<your-token>"
@@ -106,7 +106,7 @@ Notes:
 - Thinking mode is only supported on v3 models. Leave `model_path` at its default (`"auto"`, which lets the server pick the latest default — currently a v3 model) or set it explicitly to a v3 model. Combining thinking with a v2 or v2.5 `model_path` raises `ValueError` client-side.
 - `thinking_timeout_s` and `thinking_metric` are only consulted when thinking is enabled; passing them without `thinking_mode=True` or `thinking_effort=...` raises `ValueError`.
 - Thinking-mode fits take longer than regular fits (often several minutes).
-- Thinking-mode fits draw from a **separate, smaller budget** than regular fits — they do not count against your regular prediction allowance, and you cannot use your regular allowance for them. The number of thinking-mode fits you can run per day is limited. If you need more capacity, request an increase via [ux.priorlabs.ai](https://ux.priorlabs.ai).
+- Thinking-mode fits draw from a **separate, smaller budget** than regular fits — they do not count against your regular prediction allowance, and you cannot use your regular allowance for them. The number of thinking-mode fits you can run per day is limited. If you need more capacity, request an increase via [platform.priorlabs.ai](https://platform.priorlabs.ai).
 
 ## KV Cache
 
@@ -139,7 +139,7 @@ Notes:
 ## Authentication
 
 Authentication is token-based. Generate a token at
-[ux.priorlabs.ai/account/api-keys](https://ux.priorlabs.ai/account/api-keys), then supply it
+[platform.priorlabs.ai/account/api-keys](https://platform.priorlabs.ai/account/api-keys), then supply it
 in one of two ways.
 
 Via the environment, which needs no code changes:
@@ -308,7 +308,7 @@ We're building the future of tabular machine learning and would love your involv
 
 ### API Cost Calculation
 
-Each API request consumes usage credits; the cost grows with the number of rows and columns in your dataset. You can check your current usage at [ux.priorlabs.ai/account/usage](https://ux.priorlabs.ai/account/usage).
+Each API request consumes usage credits; the cost grows with the number of rows and columns in your dataset. You can check your current usage at [platform.priorlabs.ai/account/usage](https://platform.priorlabs.ai/account/usage).
 
 ### Monitoring Usage
 

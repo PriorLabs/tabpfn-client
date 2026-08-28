@@ -40,7 +40,7 @@ def init(use_server=True):
     token cached by an earlier `interactive_login()`. If none is available this
     raises, explaining how to obtain one -- it will not prompt.
 
-    Generate a token at https://ux.priorlabs.ai/account/api-keys, or call
+    Generate a token at https://platform.priorlabs.ai/account/api-keys, or call
     `tabpfn_client.interactive_login()` to log in through the browser.
 
     :param use_server: Whether to use the TabPFN cloud service. Currently, only
@@ -138,7 +138,7 @@ def set_access_token(access_token: str):
     Use this in non-interactive environments (e.g. CI/CD, notebooks) as an
     alternative to the TABPFN_TOKEN environment variable.
 
-    Generate a token at https://ux.priorlabs.ai/account/api-keys
+    Generate a token at https://platform.priorlabs.ai/account/api-keys
 
     :param access_token: A valid TabPFN access token string.
     """
