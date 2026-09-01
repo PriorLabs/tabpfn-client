@@ -280,6 +280,8 @@ class TestSklearnContract:
         from sklearn.base import clone
 
         model = TabPFNClassifier(endpoint_url=URL, use_kv_cache=True)
+        cloned = clone(model)
+        assert isinstance(cloned, TabPFNClassifier)
         assert model.get_params()["use_kv_cache"] is True
         assert "_cached_model_id" not in model.get_params()
-        assert clone(model).get_params() == model.get_params()
+        assert cloned.get_params() == model.get_params()
