@@ -25,13 +25,21 @@ place, set `fit_mode="fit_with_cache"`; the endpoint then returns a
 `model_id=prior.model_id_`. `model_path` is similarly optional and
 only sent when set; some deployments reject overrides.
 
+`use_kv_cache=True` automates that round trip within one estimator: the
+first `predict*` after `fit()` ships the training data as usual, and
+every later one reuses the `model_id` the endpoint returned. Workloads
+that predict many times against a single fit — SHAP, permutation
+importance, partial dependence — otherwise pay a full re-fit per call.
+
 `model_id` lives on the constructor (not on `predict`) so the sklearn
 estimator contract stays intact: `predict(X)` / `predict_proba(X)` work
 with `Pipeline`, `GridSearchCV`, `cross_validate`, etc.
 
 `payload_format="parquet"` sends the datasets as multipart Parquet files
 instead of inline JSON. Encoding dominates request time on large tables,
-and Parquet also carries missing values natively, which JSON cannot.
+and Parquet carries missing and non-finite values exactly. The JSON path
+encodes them as the `NaN` / `Infinity` literals Python's `json` accepts
+but the standard does not, so a strict endpoint needs Parquet for those.
 """
 
 from __future__ import annotations
@@ -99,6 +107,7 @@ class _HostedBase(BaseEstimator):
         categorical_features_indices: Optional[List[int]] = None,
         timeout_s: float = 300.0,
         payload_format: Literal["json", "parquet"] = "json",
+        use_kv_cache: bool = False,
     ):
         self.endpoint_url = endpoint_url
         self.api_key = api_key
@@ -118,6 +127,7 @@ class _HostedBase(BaseEstimator):
         self.categorical_features_indices = categorical_features_indices
         self.timeout_s = timeout_s
         self.payload_format = payload_format
+        self.use_kv_cache = use_kv_cache
 
     def _build_tabpfn_config(self) -> Dict[str, Any]:
         cfg: Dict[str, Any] = {
@@ -135,8 +145,14 @@ class _HostedBase(BaseEstimator):
             cfg["categorical_features_indices"] = self.categorical_features_indices
         if self.model_path is not None:
             cfg["model_path"] = self.model_path
-        if self.fit_mode is not None:
-            cfg["fit_mode"] = self.fit_mode
+        # The endpoint hands back a reusable `model_id` only when asked to keep
+        # the cache, so `use_kv_cache` implies that fit_mode; an explicit one
+        # still wins. Resolved here to leave the constructor argument untouched.
+        fit_mode = self.fit_mode
+        if fit_mode is None and self.use_kv_cache:
+            fit_mode = "fit_with_cache"
+        if fit_mode is not None:
+            cfg["fit_mode"] = fit_mode
         if self._TASK == "classification":
             cfg["balance_probabilities"] = self.balance_probabilities
         return cfg
@@ -183,6 +199,7 @@ class _HostedBase(BaseEstimator):
         # prior predict; otherwise `predict(X, model_id=self.model_id_)` would
         # keep hitting the old server-side model.
         self.model_id_ = None
+        self._cached_model_id: Optional[str] = None
         if self._TASK == "classification":
             self.classes_ = np.unique(y_arr)
         return self
@@ -212,13 +229,15 @@ class _HostedBase(BaseEstimator):
         # id is now stale relative to the new data. Falls back to the cached
         # path only when fit() was never called.
         has_training_data = hasattr(self, "X_train_") and hasattr(self, "y_train_")
-        if has_training_data:
-            # y_train on the wire is 2D (n_samples, 1).
-            y_arr = np.asarray(self.y_train_)
-            if y_arr.ndim == 1:
-                y_arr = y_arr.reshape(-1, 1)
-            datasets["x_train"] = self.X_train_
-            datasets["y_train"] = y_arr
+        # An earlier predict against this fit already left a model on the
+        # endpoint; reuse it rather than re-sending data it still holds.
+        cached_id = (
+            getattr(self, "_cached_model_id", None) if self.use_kv_cache else None
+        )
+        if cached_id is not None:
+            request["context"] = {"model_id": cached_id}
+        elif has_training_data:
+            self._attach_training_data(datasets)
         elif self.model_id is not None:
             request["context"] = {"model_id": self.model_id}
         else:
@@ -226,14 +245,32 @@ class _HostedBase(BaseEstimator):
             check_is_fitted(self, ["X_train_", "y_train_"])
 
         resp = self._post(request, datasets)
+        if resp.status_code == 404 and cached_id is not None and has_training_data:
+            # The endpoint's cache is bounded, so an id can be evicted between
+            # predicts; we still hold the data, so re-fit rather than fail.
+            self._cached_model_id = None
+            request.pop("context", None)
+            self._attach_training_data(datasets)
+            resp = self._post(request, datasets)
         resp.raise_for_status()
         payload = resp.json()
 
         returned_id = payload.get("model_id")
         if returned_id is not None:
             self.model_id_ = returned_id
+            if self.use_kv_cache:
+                self._cached_model_id = returned_id
 
         return payload
+
+    def _attach_training_data(self, datasets: Dict[str, Any]) -> None:
+        """Add the stored training set to the datasets going over the wire."""
+        # y_train on the wire is 2D (n_samples, 1).
+        y_arr = np.asarray(self.y_train_)
+        if y_arr.ndim == 1:
+            y_arr = y_arr.reshape(-1, 1)
+        datasets["x_train"] = self.X_train_
+        datasets["y_train"] = y_arr
 
     def _post(
         self, request: Dict[str, Any], datasets: Dict[str, Any]
@@ -252,14 +289,16 @@ class _HostedBase(BaseEstimator):
         body = dict(request)
         for name, value in datasets.items():
             body[_JSON_DATASET_KEYS[name]] = _to_jsonable(value)
+        # Not httpx's `json=`, which rejects non-finite floats outright;
+        # `json.dumps` writes the literals Python's own decoder reads back.
         return self._http_client().post(
             self.endpoint_url,
-            json=body,
+            content=json.dumps(body).encode("utf-8"),
             headers=self._headers(),
         )
 
 
-class TabPFNClassifier(_HostedBase, ClassifierMixin):
+class TabPFNClassifier(ClassifierMixin, _HostedBase):
     """TabPFN classifier backed by a self-hosted inference endpoint.
 
     Example:
@@ -284,7 +323,7 @@ class TabPFNClassifier(_HostedBase, ClassifierMixin):
         return np.asarray(result["prediction"])
 
 
-class TabPFNRegressor(_HostedBase, RegressorMixin):
+class TabPFNRegressor(RegressorMixin, _HostedBase):
     """TabPFN regressor backed by a self-hosted inference endpoint.
 
     Example:
