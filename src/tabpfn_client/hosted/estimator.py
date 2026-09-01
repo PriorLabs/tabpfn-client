@@ -30,6 +30,8 @@ first `predict*` after `fit()` ships the training data as usual, and
 every later one reuses the `model_id` the endpoint returned. Workloads
 that predict many times against a single fit — SHAP, permutation
 importance, partial dependence — otherwise pay a full re-fit per call.
+The endpoint's cache is bounded, so a `model_id` can be evicted between
+predicts; that surfaces as an error and the estimator has to be re-fit.
 
 `model_id` lives on the constructor (not on `predict`) so the sklearn
 estimator contract stays intact: `predict(X)` / `predict_proba(X)` work
@@ -237,7 +239,12 @@ class _HostedBase(BaseEstimator):
         if cached_id is not None:
             request["context"] = {"model_id": cached_id}
         elif has_training_data:
-            self._attach_training_data(datasets)
+            # y_train on the wire is 2D (n_samples, 1).
+            y_arr = np.asarray(self.y_train_)
+            if y_arr.ndim == 1:
+                y_arr = y_arr.reshape(-1, 1)
+            datasets["x_train"] = self.X_train_
+            datasets["y_train"] = y_arr
         elif self.model_id is not None:
             request["context"] = {"model_id": self.model_id}
         else:
@@ -245,13 +252,6 @@ class _HostedBase(BaseEstimator):
             check_is_fitted(self, ["X_train_", "y_train_"])
 
         resp = self._post(request, datasets)
-        if resp.status_code == 404 and cached_id is not None and has_training_data:
-            # The endpoint's cache is bounded, so an id can be evicted between
-            # predicts; we still hold the data, so re-fit rather than fail.
-            self._cached_model_id = None
-            request.pop("context", None)
-            self._attach_training_data(datasets)
-            resp = self._post(request, datasets)
         resp.raise_for_status()
         payload = resp.json()
 
@@ -262,15 +262,6 @@ class _HostedBase(BaseEstimator):
                 self._cached_model_id = returned_id
 
         return payload
-
-    def _attach_training_data(self, datasets: Dict[str, Any]) -> None:
-        """Add the stored training set to the datasets going over the wire."""
-        # y_train on the wire is 2D (n_samples, 1).
-        y_arr = np.asarray(self.y_train_)
-        if y_arr.ndim == 1:
-            y_arr = y_arr.reshape(-1, 1)
-        datasets["x_train"] = self.X_train_
-        datasets["y_train"] = y_arr
 
     def _post(
         self, request: Dict[str, Any], datasets: Dict[str, Any]

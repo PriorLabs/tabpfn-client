@@ -12,6 +12,7 @@ import json
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+import pytest
 import numpy as np
 import pandas as pd
 
@@ -230,18 +231,16 @@ class TestKvCache:
 
         assert all("X_train" in body for body in recorder.bodies())
 
-    def test_eviction_falls_back_to_the_training_data(self):
-        """A 404 on the cached id re-fits instead of failing a fitted model."""
-        recorder = Recorder(model_id="mid", statuses=[200, 404, 200])
+    def test_eviction_surfaces_rather_than_refitting(self):
+        """An evicted id is the caller's to handle, as in the other backends."""
+        recorder = Recorder(model_id="mid", statuses=[200, 404])
         model = _classifier(recorder, use_kv_cache=True)
         model.fit(X_COMPLETE, Y)
         model.predict_proba(X_COMPLETE.iloc[:2])
-        model.predict_proba(X_COMPLETE.iloc[:2])
 
-        first, evicted, retried = recorder.bodies()
-        assert "X_train" in first
-        assert evicted["context"] == {"model_id": "mid"}
-        assert "X_train" in retried and "context" not in retried
+        with pytest.raises(httpx.HTTPStatusError):
+            model.predict_proba(X_COMPLETE.iloc[:2])
+        assert len(recorder.requests) == 2
 
     def test_constructor_model_id_still_skips_fit(self):
         recorder = Recorder()
