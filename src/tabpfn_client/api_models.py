@@ -156,6 +156,7 @@ class ModelVersion(str, Enum):
     V2_5 = "v2.5"
     V2_6 = "v2.6"
     V3 = "v3"
+    V3_5 = "v3.5"
 
 
 class RegressorOutputType(str, Enum):

@@ -24,7 +24,7 @@ from tabpfn_client.client import (
     PredictionResult,
     ServiceClient,
 )
-from tabpfn_client.api_models import ClassifierTabPFNConfig
+from tabpfn_client.api_models import ClassifierTabPFNConfig, ModelVersion
 
 
 def _api_settings_payload(
@@ -851,6 +851,7 @@ class TestTabPFNModelSelection(unittest.TestCase):
 
     def test_list_available_models_returns_expected_models(self):
         expected_models = [
+            "v3.5_default",
             "v3_default",
             "v2.6_default",
             "v2.5_default-2",
@@ -922,9 +923,23 @@ class TestTabPFNModelSelection(unittest.TestCase):
             expected_specific_path,
         )
 
+        # "v3" is a prefix of "v3.5": each has to land in its own family.
+        self.assertEqual(
+            TabPFNClassifier._model_name_to_path("classification", "v3.5_default"),
+            "tabpfn-v3.5-classifier-v3.5_default.ckpt",
+        )
+        self.assertEqual(
+            TabPFNClassifier._model_name_to_path("classification", "v3_default"),
+            "tabpfn-v3-classifier-v3_default.ckpt",
+        )
+
     def test_model_name_to_path_with_invalid_model_raises_error(self):
         with self.assertRaises(ValueError):
             TabPFNClassifier._model_name_to_path("classification", "invalid_model")
+
+    def test_create_default_for_version_v3_5_selects_the_alias(self):
+        estimator = TabPFNClassifier.create_default_for_version(ModelVersion.V3_5)
+        self.assertEqual(estimator.model_path, "v3.5_default")
 
     def test_predict_proba_uses_correct_model_path(self):
         # Setup

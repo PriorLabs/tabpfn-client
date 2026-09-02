@@ -25,7 +25,7 @@ from tabpfn_client.client import (
     PredictionResult,
     ServiceClient,
 )
-from tabpfn_client.api_models import RegressorTabPFNConfig
+from tabpfn_client.api_models import ModelVersion, RegressorTabPFNConfig
 
 
 def _api_settings_payload(
@@ -857,6 +857,7 @@ class TestTabPFNModelSelection(unittest.TestCase):
 
     def test_list_available_models_returns_expected_models(self):
         expected_models = [
+            "v3.5_default",
             "v3_default",
             "v2.6_default",
             "v2.5_default",
@@ -925,9 +926,23 @@ class TestTabPFNModelSelection(unittest.TestCase):
             expected_specific_path,
         )
 
+        # "v3" is a prefix of "v3.5": each has to land in its own family.
+        self.assertEqual(
+            TabPFNRegressor._model_name_to_path("regression", "v3.5_default"),
+            "tabpfn-v3.5-regressor-v3.5_default.ckpt",
+        )
+        self.assertEqual(
+            TabPFNRegressor._model_name_to_path("regression", "v3_default"),
+            "tabpfn-v3-regressor-v3_default.ckpt",
+        )
+
     def test_model_name_to_path_with_invalid_model_raises_error(self):
         with self.assertRaises(ValueError):
             TabPFNRegressor._model_name_to_path("regression", "invalid_model")
+
+    def test_create_default_for_version_v3_5_selects_the_alias(self):
+        estimator = TabPFNRegressor.create_default_for_version(ModelVersion.V3_5)
+        self.assertEqual(estimator.model_path, "v3.5_default")
 
     def test_predict_uses_correct_model_path(self):
         # Setup

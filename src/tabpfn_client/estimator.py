@@ -59,11 +59,13 @@ logger = logging.getLogger(__name__)
 V_2_5_IDENTIFIER = "v2.5"
 V_2_6_IDENTIFIER = "v2.6"
 V_3_IDENTIFIER = "v3"
+V_3_5_IDENTIFIER = "v3.5"
 
 DEFAULT_V2_MODEL_PATH = "v2_default"
 DEFAULT_V2_5_MODEL_PATH = "v2.5_default"
 DEFAULT_V2_6_MODEL_PATH = "v2.6_default"
 DEFAULT_V3_MODEL_PATH = "v3_default"
+DEFAULT_V3_5_MODEL_PATH = "v3.5_default"
 
 # Sentinel values for `model_path` that defer model selection to the server.
 # `None` means the caller didn't pick a model; "auto" is the canonical name
@@ -113,6 +115,10 @@ class TabPFNModelSelection:
         # `None` is one of the auto aliases handled above, so the remainder is a
         # concrete model name; assert it to narrow `str | None` -> `str`.
         assert model_name is not None
+        # "v3" is a prefix of "v3.5", so the longer identifier has to be
+        # matched first or every v3.5 name would be filed under v3.
+        if V_3_5_IDENTIFIER in model_name:
+            return f"tabpfn-{V_3_5_IDENTIFIER}-{model_name_task}-{model_name}.ckpt"
         if V_3_IDENTIFIER in model_name:
             return f"tabpfn-{V_3_IDENTIFIER}-{model_name_task}-{model_name}.ckpt"
         if V_2_6_IDENTIFIER in model_name:
@@ -142,6 +148,8 @@ class TabPFNModelSelection:
             options["model_path"] = DEFAULT_V2_6_MODEL_PATH
         elif version == ModelVersion.V3:
             options["model_path"] = DEFAULT_V3_MODEL_PATH
+        elif version == ModelVersion.V3_5:
+            options["model_path"] = DEFAULT_V3_5_MODEL_PATH
         else:
             # In case we get UnknownEnum
             raise ValueError(f"Unknown version: {version}")
@@ -153,6 +161,7 @@ class TabPFNModelSelection:
 
 class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
+        DEFAULT_V3_5_MODEL_PATH,
         DEFAULT_V3_MODEL_PATH,
         DEFAULT_V2_6_MODEL_PATH,
         "v2.5_default-2",
@@ -530,6 +539,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
 class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
+        DEFAULT_V3_5_MODEL_PATH,
         DEFAULT_V3_MODEL_PATH,
         DEFAULT_V2_6_MODEL_PATH,
         DEFAULT_V2_5_MODEL_PATH,
