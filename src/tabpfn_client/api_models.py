@@ -111,6 +111,7 @@ class ClassifierMetadata(BaseModel):
     task: Literal[PredictionTask.CLASSIFICATION] = PredictionTask.CLASSIFICATION
     package_version: str
     tabpfn_config: ClassifierTabPFNConfig
+    classes: list[str | int | float | bool] | None = None
 
 
 class FileInfo(BaseModel):
