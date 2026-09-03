@@ -58,14 +58,12 @@ class AsyncSettings(BaseModel):
 class ClassifierOutputType(str, Enum):
     PROBAS = "probas"
     PREDS = "preds"
-    TOP_K = "top_k"
 
 
 class ClassifierPredictParams(BaseModel):
     output_type: (
         Annotated[ClassifierOutputType | UnknownEnum, Field(union_mode="left_to_right")] | None
     ) = None
-    top_k: int | None = None
 
 
 class FitMode(str, Enum):
@@ -110,12 +108,9 @@ class ClassifierFitTaskConfig(BaseModel):
 class ClassifierMetadata(BaseModel):
     test_set_num_rows: int
     test_set_num_cols: int
-    n_estimators: int | None = None
     task: Literal[PredictionTask.CLASSIFICATION] = PredictionTask.CLASSIFICATION
     package_version: str
     tabpfn_config: ClassifierTabPFNConfig
-    classes: list[str | int | float | bool] | None = None
-    top_k: int | None = None
 
 
 class FileInfo(BaseModel):
@@ -211,7 +206,6 @@ class RegressorFitTaskConfig(BaseModel):
 class RegressorMetadata(BaseModel):
     test_set_num_rows: int
     test_set_num_cols: int
-    n_estimators: int | None = None
     task: Literal[PredictionTask.REGRESSION] = PredictionTask.REGRESSION
     package_version: str
     tabpfn_config: RegressorTabPFNConfig
