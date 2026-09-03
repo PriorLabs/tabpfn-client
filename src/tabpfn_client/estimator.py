@@ -63,7 +63,7 @@ _AUTO_MODEL_PATH_ALIASES = (None, "auto", "default")
 # One `<version>_default` alias per model version the API schema declares,
 # newest first (the order users see in `list_available_models()`). The server
 # resolves each alias to its current default checkpoint for that version.
-_DEFAULT_MODEL_NAMES: list[str] = [f"{v.value}_default" for v in reversed(ModelVersion)]
+_DEFAULT_MODEL_NAMES = tuple(f"{v.value}_default" for v in reversed(ModelVersion))
 
 # Prediction compute scales with n_train_rows * n_test_rows, so the API caps
 # their product. The effective per-call test row limit therefore shrinks as

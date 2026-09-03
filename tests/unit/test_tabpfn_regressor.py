@@ -14,7 +14,7 @@ from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.exceptions import NotFittedError
 
 from tabpfn_client import init, reset
-from tabpfn_client.estimator import TabPFNRegressor
+from tabpfn_client.estimator import TabPFNRegressor, _limit_for_model_path
 from tabpfn_client.service_wrapper import UserAuthenticationClient, InferenceClient
 from tests.mock_tabpfn_server import with_mock_server
 from tabpfn_client.constants import CACHE_DIR
@@ -895,18 +895,41 @@ class TestTabPFNModelSelection(unittest.TestCase):
         estimator = TabPFNRegressor.create_default_for_version(ModelVersion.V3_5)
         self.assertEqual(estimator.model_path, "v3.5_default")
 
-    def test_auto_aliases_send_no_model_path(self):
-        # `None`, "auto" and "default" all mean "let the server pick". The API
-        # expresses that as an absent model_path, so none of them may reach the
-        # wire as a string: the server rejects unknown names, and the client's
-        # limit checks would file them under v2.
-        for alias in (None, "auto", "default"):
+    def test_auto_aliases_pass_through_on_the_wire(self):
+        # `None`, "auto" and "default" all mean "let the server pick". The server
+        # owns alias resolution, so the strings go out as given; only `None` is
+        # an absent field.
+        self.assertIsNone(
+            TabPFNRegressor(model_path=None)._get_tabpfn_config().model_path
+        )
+        for alias in ("auto", "default"):
             with self.subTest(model_path=alias):
                 cfg = TabPFNRegressor(model_path=alias)._get_tabpfn_config()
-                self.assertIsNone(cfg.model_path)
-        # Concrete names pass through unchanged for the server to resolve.
+                self.assertEqual(cfg.model_path, alias)
+        # Concrete names pass through unchanged as well.
         cfg = TabPFNRegressor(model_path="v3.5_default")._get_tabpfn_config()
         self.assertEqual(cfg.model_path, "v3.5_default")
+
+    def test_auto_aliases_use_the_default_version_limits(self):
+        # The aliases carry no version, so the pre-flight checks must use the
+        # server's default version rather than the v2 fallback for bare names.
+        payload = _api_settings_payload()
+        v2_limit = {**payload["max_model_limit"], "test_set_max_rows": 10}
+        v3_limit = {**payload["max_model_limit"], "test_set_max_rows": 1000}
+        payload["default_model_version"] = "v3"
+        payload["model_limits"] = {"v2": v2_limit, "v3": v3_limit}
+        settings = GetSettingsResponse(**payload)
+        with (
+            patch.object(ServiceClient, "_api_settings", settings),
+            patch.object(ServiceClient, "_api_settings_ts", time.monotonic()),
+        ):
+            for alias in (None, "auto", "default"):
+                with self.subTest(model_path=alias):
+                    limit = _limit_for_model_path(alias)
+                    self.assertEqual(limit.test_set_max_rows, 1000)
+            # Versioned and bare (v2 hash) names still resolve to their own version.
+            self.assertEqual(_limit_for_model_path("v2_default").test_set_max_rows, 10)
+            self.assertEqual(_limit_for_model_path("2noar4o2").test_set_max_rows, 10)
 
     def test_predict_uses_correct_model_path(self):
         # Setup
