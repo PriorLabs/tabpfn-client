@@ -6,13 +6,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.axes import Axes
-from matplotlib.patches import Patch
-from scipy.ndimage import uniform_filter1d
+
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
 
 _STAT_STYLES = {
     "mean": ("#d62728", "-"),
@@ -121,6 +120,16 @@ def plot_regression_distribution(
     _validate_args(
         prediction, sample_idx, statistics, quantile_interval, zoom_quantile, smooth
     )
+
+    try:
+        import matplotlib.pyplot as plt  # noqa: PLC0415
+        from matplotlib.patches import Patch  # noqa: PLC0415
+        from scipy.ndimage import uniform_filter1d  # noqa: PLC0415
+    except ModuleNotFoundError as err:
+        raise ModuleNotFoundError(
+            "matplotlib and scipy are required for plotting. "
+            'Install them with `pip install "tabpfn-client[viz]"`.'
+        ) from err
 
     logits = np.asarray(prediction["logits"][sample_idx], dtype=float)
     borders = np.asarray(prediction["borders"], dtype=float)

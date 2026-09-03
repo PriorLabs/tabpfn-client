@@ -2026,8 +2026,6 @@ dependencies = [
     { name = "backoff" },
     { name = "google-crc32c" },
     { name = "httpx" },
-    { name = "matplotlib", version = "3.10.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "matplotlib", version = "3.11.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "omegaconf" },
     { name = "pandas" },
     { name = "password-strength" },
@@ -2037,8 +2035,6 @@ dependencies = [
     { name = "rich" },
     { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scikit-learn", version = "1.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "scipy", version = "1.16.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "sseclient-py" },
     { name = "tabpfn-common-utils" },
     { name = "tqdm" },
@@ -2050,14 +2046,24 @@ dependencies = [
 sagemaker = [
     { name = "boto3" },
 ]
+viz = [
+    { name = "matplotlib", version = "3.10.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "matplotlib", version = "3.11.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scipy", version = "1.16.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
 
 [package.dev-dependencies]
 dev = [
     { name = "basedpyright" },
     { name = "licensecheck" },
+    { name = "matplotlib", version = "3.10.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "matplotlib", version = "3.11.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pytest" },
     { name = "respx" },
     { name = "ruff" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scipy", version = "1.16.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
 
 [package.metadata]
@@ -2066,7 +2072,7 @@ requires-dist = [
     { name = "boto3", marker = "extra == 'sagemaker'", specifier = ">=1.34" },
     { name = "google-crc32c", specifier = ">=1.5.0,<=1.8.0" },
     { name = "httpx", specifier = ">=0.25.0,<=0.28.1" },
-    { name = "matplotlib", specifier = ">=3.6.1,<=3.11.1" },
+    { name = "matplotlib", marker = "extra == 'viz'", specifier = ">=3.6.1,<=3.11.1" },
     { name = "omegaconf", specifier = ">=2.1.2,<=2.3.0" },
     { name = "pandas", specifier = ">=2.1.2,<=2.3.3" },
     { name = "password-strength", specifier = "<=0.0.3.post2,>=0.0.3.post2" },
@@ -2075,22 +2081,24 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.14.2,<=2.15.0" },
     { name = "rich", specifier = ">=13.7.0,<=15.0.0" },
     { name = "scikit-learn", specifier = ">=1.3.1,<=1.9.0" },
-    { name = "scipy", specifier = ">=1.11.1,<=1.16.2" },
+    { name = "scipy", marker = "extra == 'viz'", specifier = ">=1.11.1,<=1.16.2" },
     { name = "sseclient-py", specifier = ">=1.8.0,<=1.9.0" },
     { name = "tabpfn-common-utils", specifier = ">=0.2.10,<=0.2.19" },
     { name = "tqdm", specifier = ">=4.63.0,<=4.70.0" },
     { name = "typing-extensions", specifier = ">=4.12.2,<=4.16.0" },
     { name = "xxhash", specifier = ">=1.1.0,<=3.8.1" },
 ]
-provides-extras = ["sagemaker"]
+provides-extras = ["sagemaker", "viz"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "basedpyright", specifier = "~=1.39.9" },
     { name = "licensecheck", specifier = "==2025.1.0" },
+    { name = "matplotlib", specifier = ">=3.6.1,<=3.11.1" },
     { name = "pytest", specifier = "==9.0.3" },
     { name = "respx", specifier = "==0.23.1" },
     { name = "ruff", specifier = "==0.15.21" },
+    { name = "scipy", specifier = ">=1.11.1,<=1.16.2" },
 ]
 
 [[package]]
