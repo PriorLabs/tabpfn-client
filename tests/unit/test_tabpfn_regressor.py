@@ -562,7 +562,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
     def test_predict_full_adds_criterion_with_optional_dependencies(self):
         regressor = TabPFNRegressor()
         regressor.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
-        regressor._last_train_X = np.random.randn(5, 2)
+        regressor._n_train_rows = 5
 
         test_X = np.random.randn(3, 2)
         dummy_output = {"borders": [0.0, 1.0], "mean": np.random.randn(3)}
@@ -607,7 +607,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
     def test_predict_full_missing_optional_dependencies_logs_warning(self):
         regressor = TabPFNRegressor()
         regressor.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
-        regressor._last_train_X = np.random.randn(5, 2)
+        regressor._n_train_rows = 5
 
         test_X = np.random.randn(3, 2)
         dummy_output = {"borders": [0.0, 1.0], "mean": np.random.randn(3)}
@@ -1005,7 +1005,7 @@ class TestFullOutputChunking(unittest.TestCase):
         self.borders = np.linspace(0.0, 1.0, self.N_BARS + 1)
         self.regressor = TabPFNRegressor(model_path="v2.5_default")
         self.regressor.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
-        self.regressor._last_train_X = np.random.randn(5, 2)
+        self.regressor._n_train_rows = 5
 
     def tearDown(self):
         ServiceClient._api_settings = None
