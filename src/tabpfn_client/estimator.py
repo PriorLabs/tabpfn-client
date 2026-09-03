@@ -83,7 +83,9 @@ class TabPFNModelSelection:
         return cls._AVAILABLE_MODELS
 
     @classmethod
-    def create_default_for_version(cls, version: ModelVersion | str, **overrides) -> Self:
+    def create_default_for_version(
+        cls, version: ModelVersion | str, **overrides
+    ) -> Self:
         """Construct an estimator that uses the given version of the model.
 
         Any kwargs will override the default settings, except for `model_path`.
