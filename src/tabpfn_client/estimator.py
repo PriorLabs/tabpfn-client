@@ -435,6 +435,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             # Nones are treated as unset
             if k in ClassifierTabPFNConfig.model_fields and v is not None
         }
+        # "auto"/"default" mean "let the server pick". The API expresses that as
+        # an absent model_path, so keep the alias string off the wire.
+        if cfg.get("model_path") in _AUTO_MODEL_PATH_ALIASES:
+            cfg.pop("model_path", None)
         return ClassifierTabPFNConfig.model_validate(cfg)
 
     def _get_predict_params(self, kwargs: dict[str, Any]) -> ClassifierPredictParams:
@@ -834,6 +838,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             # Nones are treated as unset
             if k in RegressorTabPFNConfig.model_fields and v is not None
         }
+        # "auto"/"default" mean "let the server pick". The API expresses that as
+        # an absent model_path, so keep the alias string off the wire.
+        if cfg.get("model_path") in _AUTO_MODEL_PATH_ALIASES:
+            cfg.pop("model_path", None)
         return RegressorTabPFNConfig.model_validate(cfg)
 
     def _get_predict_params(self, kwargs: dict[str, Any]) -> RegressorPredictParams:

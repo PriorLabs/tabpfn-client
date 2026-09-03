@@ -892,6 +892,19 @@ class TestTabPFNModelSelection(unittest.TestCase):
         estimator = TabPFNClassifier.create_default_for_version(ModelVersion.V3_5)
         self.assertEqual(estimator.model_path, "v3.5_default")
 
+    def test_auto_aliases_send_no_model_path(self):
+        # `None`, "auto" and "default" all mean "let the server pick". The API
+        # expresses that as an absent model_path, so none of them may reach the
+        # wire as a string: the server rejects unknown names, and the client's
+        # limit checks would file them under v2.
+        for alias in (None, "auto", "default"):
+            with self.subTest(model_path=alias):
+                cfg = TabPFNClassifier(model_path=alias)._get_tabpfn_config()
+                self.assertIsNone(cfg.model_path)
+        # Concrete names pass through unchanged for the server to resolve.
+        cfg = TabPFNClassifier(model_path="v3.5_default")._get_tabpfn_config()
+        self.assertEqual(cfg.model_path, "v3.5_default")
+
     def test_predict_proba_uses_correct_model_path(self):
         # Setup
         X = np.random.rand(10, 5)
