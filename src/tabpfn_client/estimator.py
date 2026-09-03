@@ -55,18 +55,6 @@ TORCH_AVAILABLE = Tensor is not None
 
 logger = logging.getLogger(__name__)
 
-# Special strings used to identify model families in model paths.
-V_2_5_IDENTIFIER = "v2.5"
-V_2_6_IDENTIFIER = "v2.6"
-V_3_IDENTIFIER = "v3"
-V_3_5_IDENTIFIER = "v3.5"
-
-DEFAULT_V2_MODEL_PATH = "v2_default"
-DEFAULT_V2_5_MODEL_PATH = "v2.5_default"
-DEFAULT_V2_6_MODEL_PATH = "v2.6_default"
-DEFAULT_V3_MODEL_PATH = "v3_default"
-DEFAULT_V3_5_MODEL_PATH = "v3.5_default"
-
 # Sentinel values for `model_path` that defer model selection to the server.
 # `None` means the caller didn't pick a model; "auto" is the canonical name
 # (matches the OSS tabpfn package); "default" is a backward-compatible alias.
@@ -84,7 +72,6 @@ class TabPFNModelSelection:
     """Base class for TabPFN model selection and path handling."""
 
     _AVAILABLE_MODELS: list[str] = []
-    _VALID_TASKS = {"classification", "regression"}
 
     @classmethod
     def list_available_models(cls) -> list[str]:
@@ -104,58 +91,13 @@ class TabPFNModelSelection:
             )
 
     @classmethod
-    def _model_name_to_path(
-        cls, task: Literal["classification", "regression"], model_name: str | None
-    ) -> str | None:
-        cls._validate_model_name(model_name)
-        model_name_task = "classifier" if task == "classification" else "regressor"
-        # Let the server pick the default model when the caller defers to us.
-        if model_name in _AUTO_MODEL_PATH_ALIASES:
-            return None
-        # `None` is one of the auto aliases handled above, so the remainder is a
-        # concrete model name; assert it to narrow `str | None` -> `str`.
-        assert model_name is not None
-        # "v3" is a prefix of "v3.5", so the longer identifier has to be
-        # matched first or every v3.5 name would be filed under v3.
-        if V_3_5_IDENTIFIER in model_name:
-            return f"tabpfn-{V_3_5_IDENTIFIER}-{model_name_task}-{model_name}.ckpt"
-        if V_3_IDENTIFIER in model_name:
-            return f"tabpfn-{V_3_IDENTIFIER}-{model_name_task}-{model_name}.ckpt"
-        if V_2_6_IDENTIFIER in model_name:
-            return f"tabpfn-{V_2_6_IDENTIFIER}-{model_name_task}-{model_name}.ckpt"
-        if V_2_5_IDENTIFIER in model_name:
-            return f"tabpfn-{V_2_5_IDENTIFIER}-{model_name_task}-{model_name}.ckpt"
-        return f"tabpfn-v2-{model_name_task}-{model_name}.ckpt"
-
-    @classmethod
     def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
         """Construct an estimator that uses the given version of the model.
 
-        In addition to selecting the model, this also configures the estimator with
-        certain default settings associated with this model version.
-
-        Any kwargs will override the default settings.
+        Any kwargs will override the default settings, except for `model_path`.
         """
-        options: dict[str, Any] = {
-            "n_estimators": 8,
-            "softmax_temperature": 0.9,
-        }
-        if version == ModelVersion.V2:
-            options["model_path"] = DEFAULT_V2_MODEL_PATH
-        elif version == ModelVersion.V2_5:
-            options["model_path"] = DEFAULT_V2_5_MODEL_PATH
-        elif version == ModelVersion.V2_6:
-            options["model_path"] = DEFAULT_V2_6_MODEL_PATH
-        elif version == ModelVersion.V3:
-            options["model_path"] = DEFAULT_V3_MODEL_PATH
-        elif version == ModelVersion.V3_5:
-            options["model_path"] = DEFAULT_V3_5_MODEL_PATH
-        else:
-            # In case we get UnknownEnum
-            raise ValueError(f"Unknown version: {version}")
-
-        options.update(overrides)
-
+        options = overrides.copy()
+        options["model_path"] = f"{version.value}_default"
         return cls(**options)
 
 
@@ -496,7 +438,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             # Nones are treated as unset
             if k in ClassifierTabPFNConfig.model_fields and v is not None
         }
-        cfg["model_path"] = self._model_name_to_path("classification", self.model_path)
         return ClassifierTabPFNConfig.model_validate(cfg)
 
     def _get_predict_params(self, kwargs: dict[str, Any]) -> ClassifierPredictParams:
@@ -900,7 +841,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             # Nones are treated as unset
             if k in RegressorTabPFNConfig.model_fields and v is not None
         }
-        cfg["model_path"] = self._model_name_to_path("regression", self.model_path)
         return RegressorTabPFNConfig.model_validate(cfg)
 
     def _get_predict_params(self, kwargs: dict[str, Any]) -> RegressorPredictParams:
