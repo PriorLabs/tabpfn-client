@@ -89,7 +89,7 @@ class TabPFNModelSelection:
         Any kwargs will override the default settings, except for `model_path`.
         """
         try:
-            ModelVersion(version)
+            version = ModelVersion(version)
         except ValueError:
             raise ValueError(
                 f"Invalid model version: {version}. "
