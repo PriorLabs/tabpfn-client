@@ -25,7 +25,7 @@ from tabpfn_client.client import (
     PredictionResult,
     ServiceClient,
 )
-from tabpfn_client.api_models import RegressorTabPFNConfig
+from tabpfn_client.api_models import ModelVersion, RegressorTabPFNConfig
 
 
 def _api_settings_payload(
@@ -857,16 +857,17 @@ class TestTabPFNModelSelection(unittest.TestCase):
 
     def test_list_available_models_returns_expected_models(self):
         expected_models = [
+            "v3.5_default",
             "v3_default",
             "v2.6_default",
             "v2.5_default",
+            "v2_default",
             "v2.5_low-skew",
             "v2.5_quantiles",
             "v2.5_real-variant",
             "v2.5_real",
             "v2.5_small-samples",
             "v2.5_variant",
-            "v2_default",
             "auto",
             "default",
             "2noar4o2",
@@ -890,44 +891,24 @@ class TestTabPFNModelSelection(unittest.TestCase):
                 model_name = model_names[j]
                 self.assertNotIn(possible_substring, model_name)
 
-    def test_validate_model_name_with_valid_model_passes(self):
-        # Should not raise any exception
-        TabPFNRegressor._validate_model_name("auto")
-        # "default" remains accepted as a backward-compatible alias for "auto".
-        TabPFNRegressor._validate_model_name("default")
-        TabPFNRegressor._validate_model_name("2noar4o2")
+    def test_create_default_for_version_v3_5_selects_the_alias(self):
+        estimator = TabPFNRegressor.create_default_for_version(ModelVersion.V3_5)
+        self.assertEqual(estimator.model_path, "v3.5_default")
 
-    def test_validate_model_name_with_invalid_model_raises_error(self):
-        with self.assertRaises(ValueError):
-            TabPFNRegressor._validate_model_name("invalid_model")
-
-    def test_model_name_to_path_returns_expected_path(self):
-        # Test auto model path. Server decides.
+    def test_auto_aliases_pass_through_on_the_wire(self):
+        # `None`, "auto" and "default" all mean "let the server pick". The server
+        # owns alias resolution, so the strings go out as given; only `None` is
+        # an absent field.
         self.assertIsNone(
-            TabPFNRegressor._model_name_to_path("regression", "auto"),
+            TabPFNRegressor(model_path=None)._get_tabpfn_config().model_path
         )
-        # "default" alias resolves the same way.
-        self.assertIsNone(
-            TabPFNRegressor._model_name_to_path("regression", "default"),
-        )
-
-        # Test specific model path
-        expected_specific_path = "tabpfn-v2-regressor-2noar4o2.ckpt"
-        self.assertEqual(
-            TabPFNRegressor._model_name_to_path("regression", "2noar4o2"),
-            expected_specific_path,
-        )
-
-        # Test specific v2.5 model path
-        expected_specific_path = "tabpfn-v2.5-regressor-v2.5_default.ckpt"
-        self.assertEqual(
-            TabPFNRegressor._model_name_to_path("regression", "v2.5_default"),
-            expected_specific_path,
-        )
-
-    def test_model_name_to_path_with_invalid_model_raises_error(self):
-        with self.assertRaises(ValueError):
-            TabPFNRegressor._model_name_to_path("regression", "invalid_model")
+        for alias in ("auto", "default"):
+            with self.subTest(model_path=alias):
+                cfg = TabPFNRegressor(model_path=alias)._get_tabpfn_config()
+                self.assertEqual(cfg.model_path, alias)
+        # Concrete names pass through unchanged as well.
+        cfg = TabPFNRegressor(model_path="v3.5_default")._get_tabpfn_config()
+        self.assertEqual(cfg.model_path, "v3.5_default")
 
     def test_predict_uses_correct_model_path(self):
         # Setup
@@ -948,9 +929,9 @@ class TestTabPFNModelSelection(unittest.TestCase):
                 tabpfn.fit(X, y)
                 tabpfn.predict(X)
 
-                # Verify the model path was correctly passed to predict
+                # The name is passed through unchanged; the server resolves it.
                 predict_kwargs = mock_predict.call_args[1]
-                expected_model_path = "tabpfn-v2-regressor-2noar4o2.ckpt"
+                expected_model_path = "2noar4o2"
 
                 self.assertEqual(
                     predict_kwargs["task_config"].tabpfn_config.model_path,
