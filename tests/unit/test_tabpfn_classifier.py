@@ -851,11 +851,12 @@ class TestTabPFNModelSelection(unittest.TestCase):
 
     def test_list_available_models_returns_expected_models(self):
         expected_models = [
+            "v2.5_default-2",
             "v3.5_default",
             "v3_default",
             "v2.6_default",
-            "v2.5_default-2",
             "v2.5_default",
+            "v2_default",
             "v2.5_large-features-L",
             "v2.5_large-features-XL",
             "v2.5_large-samples",
@@ -863,7 +864,6 @@ class TestTabPFNModelSelection(unittest.TestCase):
             "v2.5_real-large-samples-and-features",
             "v2.5_real",
             "v2.5_variant",
-            "v2_default",
             "auto",
             "default",
             "gn2p4bpt",
@@ -887,55 +887,6 @@ class TestTabPFNModelSelection(unittest.TestCase):
             for j in range(i + 1, len(model_names)):
                 model_name = model_names[j]
                 self.assertNotIn(possible_substring, model_name)
-
-    def test_validate_model_name_with_valid_model_passes(self):
-        # Should not raise any exception
-        TabPFNClassifier._validate_model_name("auto")
-        # "default" remains accepted as a backward-compatible alias for "auto".
-        TabPFNClassifier._validate_model_name("default")
-        TabPFNClassifier._validate_model_name("gn2p4bpt")
-
-    def test_validate_model_name_with_invalid_model_raises_error(self):
-        with self.assertRaises(ValueError):
-            TabPFNClassifier._validate_model_name("invalid_model")
-
-    def test_model_name_to_path_returns_expected_path(self):
-        # Test auto model path. Server decides.
-        self.assertIsNone(
-            TabPFNClassifier._model_name_to_path("classification", "auto"),
-        )
-        # "default" alias resolves the same way.
-        self.assertIsNone(
-            TabPFNClassifier._model_name_to_path("classification", "default"),
-        )
-
-        # Test specific model path
-        expected_specific_path = "tabpfn-v2-classifier-gn2p4bpt.ckpt"
-        self.assertEqual(
-            TabPFNClassifier._model_name_to_path("classification", "gn2p4bpt"),
-            expected_specific_path,
-        )
-
-        # Test specific v2.5 model path
-        expected_specific_path = "tabpfn-v2.5-classifier-v2.5_default.ckpt"
-        self.assertEqual(
-            TabPFNClassifier._model_name_to_path("classification", "v2.5_default"),
-            expected_specific_path,
-        )
-
-        # "v3" is a prefix of "v3.5": each has to land in its own family.
-        self.assertEqual(
-            TabPFNClassifier._model_name_to_path("classification", "v3.5_default"),
-            "tabpfn-v3.5-classifier-v3.5_default.ckpt",
-        )
-        self.assertEqual(
-            TabPFNClassifier._model_name_to_path("classification", "v3_default"),
-            "tabpfn-v3-classifier-v3_default.ckpt",
-        )
-
-    def test_model_name_to_path_with_invalid_model_raises_error(self):
-        with self.assertRaises(ValueError):
-            TabPFNClassifier._model_name_to_path("classification", "invalid_model")
 
     def test_create_default_for_version_v3_5_selects_the_alias(self):
         estimator = TabPFNClassifier.create_default_for_version(ModelVersion.V3_5)
@@ -961,9 +912,9 @@ class TestTabPFNModelSelection(unittest.TestCase):
                 tabpfn.fit(X, y)
                 tabpfn.predict_proba(X)
 
-                # Verify the model path was correctly passed to predict
+                # The name is passed through unchanged; the server resolves it.
                 predict_kwargs = mock_predict.call_args[1]
-                expected_model_path = "tabpfn-v2-classifier-gn2p4bpt.ckpt"
+                expected_model_path = "gn2p4bpt"
 
                 self.assertEqual(
                     predict_kwargs["task_config"].tabpfn_config.model_path,

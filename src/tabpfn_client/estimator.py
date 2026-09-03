@@ -60,6 +60,11 @@ logger = logging.getLogger(__name__)
 # (matches the OSS tabpfn package); "default" is a backward-compatible alias.
 _AUTO_MODEL_PATH_ALIASES: frozenset[str | None] = frozenset({None, "auto", "default"})
 
+# One `<version>_default` alias per model version the API schema declares,
+# newest first (the order users see in `list_available_models()`). The server
+# resolves each alias to its current default checkpoint for that version.
+_DEFAULT_MODEL_NAMES: list[str] = [f"{v.value}_default" for v in reversed(ModelVersion)]
+
 # Prediction compute scales with n_train_rows * n_test_rows, so the API caps
 # their product. The effective per-call test row limit therefore shrinks as
 # the fitted training set grows (e.g. 1M training rows -> 250k test rows).
@@ -78,24 +83,18 @@ class TabPFNModelSelection:
         return cls._AVAILABLE_MODELS
 
     @classmethod
-    def _validate_model_name(cls, model_name: str | None) -> None:
-        # `None` (defer to the server) is one of the auto aliases, so it counts
-        # as valid rather than an unknown model name.
-        if (
-            model_name not in _AUTO_MODEL_PATH_ALIASES
-            and model_name not in cls._AVAILABLE_MODELS
-        ):
-            raise ValueError(
-                f"Invalid model name: {model_name}. "
-                f"Available models are: {cls.list_available_models()}"
-            )
-
-    @classmethod
     def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
         """Construct an estimator that uses the given version of the model.
 
         Any kwargs will override the default settings, except for `model_path`.
         """
+        try:
+            ModelVersion(version)
+        except ValueError:
+            raise ValueError(
+                f"Invalid model version: {version}. "
+                f"Available versions are: {', '.join(list(ModelVersion))}."
+            )
         options = overrides.copy()
         options["model_path"] = f"{version.value}_default"
         return cls(**options)
@@ -103,11 +102,10 @@ class TabPFNModelSelection:
 
 class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
-        DEFAULT_V3_5_MODEL_PATH,
-        DEFAULT_V3_MODEL_PATH,
-        DEFAULT_V2_6_MODEL_PATH,
+        # Downstream packages (e.g. tabpfn-time-series) read this list in order
+        # to parse model names by substring, so must precede "v2.5_default" (its substring).
         "v2.5_default-2",
-        DEFAULT_V2_5_MODEL_PATH,
+        *_DEFAULT_MODEL_NAMES,
         "v2.5_large-features-L",
         "v2.5_large-features-XL",
         "v2.5_large-samples",
@@ -115,7 +113,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         "v2.5_real-large-samples-and-features",
         "v2.5_real",
         "v2.5_variant",
-        DEFAULT_V2_MODEL_PATH,
         "auto",
         # Deprecated alias for "auto"; kept for backward compat with users and
         # downstream packages (e.g. tabpfn-time-series) that read this list.
@@ -480,17 +477,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
 
 class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
-        DEFAULT_V3_5_MODEL_PATH,
-        DEFAULT_V3_MODEL_PATH,
-        DEFAULT_V2_6_MODEL_PATH,
-        DEFAULT_V2_5_MODEL_PATH,
+        *_DEFAULT_MODEL_NAMES,
         "v2.5_low-skew",
         "v2.5_quantiles",
         "v2.5_real-variant",
         "v2.5_real",
         "v2.5_small-samples",
         "v2.5_variant",
-        DEFAULT_V2_MODEL_PATH,
         "auto",
         # Deprecated alias for "auto"; kept for backward compat with users and
         # downstream packages (e.g. tabpfn-time-series) that read this list.

@@ -861,13 +861,13 @@ class TestTabPFNModelSelection(unittest.TestCase):
             "v3_default",
             "v2.6_default",
             "v2.5_default",
+            "v2_default",
             "v2.5_low-skew",
             "v2.5_quantiles",
             "v2.5_real-variant",
             "v2.5_real",
             "v2.5_small-samples",
             "v2.5_variant",
-            "v2_default",
             "auto",
             "default",
             "2noar4o2",
@@ -890,55 +890,6 @@ class TestTabPFNModelSelection(unittest.TestCase):
             for j in range(i + 1, len(model_names)):
                 model_name = model_names[j]
                 self.assertNotIn(possible_substring, model_name)
-
-    def test_validate_model_name_with_valid_model_passes(self):
-        # Should not raise any exception
-        TabPFNRegressor._validate_model_name("auto")
-        # "default" remains accepted as a backward-compatible alias for "auto".
-        TabPFNRegressor._validate_model_name("default")
-        TabPFNRegressor._validate_model_name("2noar4o2")
-
-    def test_validate_model_name_with_invalid_model_raises_error(self):
-        with self.assertRaises(ValueError):
-            TabPFNRegressor._validate_model_name("invalid_model")
-
-    def test_model_name_to_path_returns_expected_path(self):
-        # Test auto model path. Server decides.
-        self.assertIsNone(
-            TabPFNRegressor._model_name_to_path("regression", "auto"),
-        )
-        # "default" alias resolves the same way.
-        self.assertIsNone(
-            TabPFNRegressor._model_name_to_path("regression", "default"),
-        )
-
-        # Test specific model path
-        expected_specific_path = "tabpfn-v2-regressor-2noar4o2.ckpt"
-        self.assertEqual(
-            TabPFNRegressor._model_name_to_path("regression", "2noar4o2"),
-            expected_specific_path,
-        )
-
-        # Test specific v2.5 model path
-        expected_specific_path = "tabpfn-v2.5-regressor-v2.5_default.ckpt"
-        self.assertEqual(
-            TabPFNRegressor._model_name_to_path("regression", "v2.5_default"),
-            expected_specific_path,
-        )
-
-        # "v3" is a prefix of "v3.5": each has to land in its own family.
-        self.assertEqual(
-            TabPFNRegressor._model_name_to_path("regression", "v3.5_default"),
-            "tabpfn-v3.5-regressor-v3.5_default.ckpt",
-        )
-        self.assertEqual(
-            TabPFNRegressor._model_name_to_path("regression", "v3_default"),
-            "tabpfn-v3-regressor-v3_default.ckpt",
-        )
-
-    def test_model_name_to_path_with_invalid_model_raises_error(self):
-        with self.assertRaises(ValueError):
-            TabPFNRegressor._model_name_to_path("regression", "invalid_model")
 
     def test_create_default_for_version_v3_5_selects_the_alias(self):
         estimator = TabPFNRegressor.create_default_for_version(ModelVersion.V3_5)
@@ -963,9 +914,9 @@ class TestTabPFNModelSelection(unittest.TestCase):
                 tabpfn.fit(X, y)
                 tabpfn.predict(X)
 
-                # Verify the model path was correctly passed to predict
+                # The name is passed through unchanged; the server resolves it.
                 predict_kwargs = mock_predict.call_args[1]
-                expected_model_path = "tabpfn-v2-regressor-2noar4o2.ckpt"
+                expected_model_path = "2noar4o2"
 
                 self.assertEqual(
                     predict_kwargs["task_config"].tabpfn_config.model_path,
