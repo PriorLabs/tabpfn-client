@@ -103,7 +103,7 @@ class TabPFNModelSelection:
 class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
         # Downstream packages (e.g. tabpfn-time-series) read this list in order
-        # to parse model names by substring, so must precede "v2.5_default" (its substring).
+        # to parse model names by substring, so "v2.5_default-2" must precede "v2.5_default".
         "v2.5_default-2",
         *_DEFAULT_MODEL_NAMES,
         "v2.5_large-features-L",
