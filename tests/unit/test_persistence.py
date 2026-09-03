@@ -250,6 +250,7 @@ class TestLoadedEstimator:
             _fitted_classifier([0, 1], n_estimators=4).save_model()
         )
         cloned = clone(loaded)
+        assert isinstance(cloned, TabPFNClassifier)
         with pytest.raises(NotFittedError):
             check_is_fitted(cloned)
         assert cloned.get_params()["n_estimators"] == 4

@@ -698,9 +698,6 @@ class ServiceClient(Singleton):
         )
 
         if isinstance(prepare_resp, NotFoundErrorResponse):
-            # The id is the first thing the server resolves, so a 404 here can
-            # only mean the fitted model itself is gone (or never belonged to
-            # this account), never the test set.
             message = (
                 f"Fitted model {fitted_train_set_id} was not found on the server. "
                 "It may have been deleted (see UserDataClient), or it was fitted "
