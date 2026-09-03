@@ -58,7 +58,7 @@ logger = logging.getLogger(__name__)
 # Sentinel values for `model_path` that defer model selection to the server.
 # `None` means the caller didn't pick a model; "auto" is the canonical name
 # (matches the OSS tabpfn package); "default" is a backward-compatible alias.
-_AUTO_MODEL_PATH_ALIASES: frozenset[str | None] = frozenset({None, "auto", "default"})
+_AUTO_MODEL_PATH_ALIASES = (None, "auto", "default")
 
 # One `<version>_default` alias per model version the API schema declares,
 # newest first (the order users see in `list_available_models()`). The server
@@ -435,10 +435,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             # Nones are treated as unset
             if k in ClassifierTabPFNConfig.model_fields and v is not None
         }
-        # "auto"/"default" mean "let the server pick". The API expresses that as
-        # an absent model_path, so keep the alias string off the wire.
-        if cfg.get("model_path") in _AUTO_MODEL_PATH_ALIASES:
-            cfg.pop("model_path", None)
         return ClassifierTabPFNConfig.model_validate(cfg)
 
     def _get_predict_params(self, kwargs: dict[str, Any]) -> ClassifierPredictParams:
@@ -838,10 +834,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             # Nones are treated as unset
             if k in RegressorTabPFNConfig.model_fields and v is not None
         }
-        # "auto"/"default" mean "let the server pick". The API expresses that as
-        # an absent model_path, so keep the alias string off the wire.
-        if cfg.get("model_path") in _AUTO_MODEL_PATH_ALIASES:
-            cfg.pop("model_path", None)
         return RegressorTabPFNConfig.model_validate(cfg)
 
     def _get_predict_params(self, kwargs: dict[str, Any]) -> RegressorPredictParams:
@@ -897,7 +889,7 @@ def _limit_for_model_path(model_path: str | None) -> ModelLimit | None:
     api_settings = ServiceClient.get_settings()
     if api_settings is None:
         return None
-    if not model_path:
+    if model_path in _AUTO_MODEL_PATH_ALIASES:
         return api_settings.model_limits[api_settings.default_model_version]
     model_version = model_version_from_path(model_path)
     return model_limit_from_version(model_version, api_settings.model_limits)
