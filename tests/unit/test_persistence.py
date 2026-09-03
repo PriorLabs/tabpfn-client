@@ -25,7 +25,7 @@ from sklearn.base import clone
 from sklearn.exceptions import NotFittedError
 from sklearn.utils.validation import check_is_fitted
 
-from tabpfn_client import FittedModelNotFoundError, init, reset
+from tabpfn_client import FittedModelNotFoundError, __version__, init, reset
 from tabpfn_client.api_models import GetSettingsResponse
 from tabpfn_client.client import PredictionResult, ServiceClient
 from tabpfn_client.config import Config
@@ -123,6 +123,7 @@ class TestRecord:
             "n_train_rows",
             "classes",
         }
+        assert record["tabpfn_client_version"] == __version__
         assert record["task"] == "regression"
         assert record["model_id"] == str(MODEL_ID)
         assert record["n_train_rows"] == N_TRAIN_ROWS
@@ -139,19 +140,38 @@ class TestRecord:
         assert record["params"]["random_state"] is None
         assert TabPFNRegressor.load_model(record).get_params()["random_state"] is None
 
+    def test_numpy_typed_params_are_saved_as_json_types(self):
+        # Hyperparameters often arrive as numpy types (a grid over np.arange,
+        # np.where() for the categorical indices); fit() accepts them, so the
+        # record has to take them too.
+        reg = _fitted_regressor(
+            n_estimators=np.int64(4),
+            random_state=np.int32(7),
+            categorical_features_indices=np.array([0, 2]),
+        )
+
+        record = reg.save_model()
+
+        json.dumps(record)
+        assert record["params"]["n_estimators"] == 4
+        assert record["params"]["random_state"] == 7
+        assert record["params"]["categorical_features_indices"] == [0, 2]
+        assert TabPFNRegressor.load_model(record).get_params()["n_estimators"] == 4
+
     def test_file_round_trip(self, tmp_path):
         path = tmp_path / "model.json"
-        clf = _fitted_classifier(["cat", "dog"], n_estimators=3, thinking_mode=True)
+        # Non-ASCII labels: the file is UTF-8 whatever the locale says.
+        clf = _fitted_classifier(["café", "dog"], n_estimators=3, thinking_mode=True)
 
         returned = clf.save_model(path)
-        assert json.loads(path.read_text()) == returned
+        assert json.loads(path.read_text(encoding="utf-8")) == returned
 
         for source in (path, str(path), returned):
             loaded = TabPFNClassifier.load_model(source)
             check_is_fitted(loaded)
             assert loaded.model_id_ == MODEL_ID
             assert loaded._n_train_rows == N_TRAIN_ROWS
-            np.testing.assert_array_equal(loaded.classes_, np.array(["cat", "dog"]))
+            np.testing.assert_array_equal(loaded.classes_, np.array(["café", "dog"]))
             assert _model_params(loaded) == _model_params(clf)
 
     def test_directly_assigned_id_saves_without_classes_or_row_count(self):
@@ -185,6 +205,11 @@ class TestLoadRejects:
         with pytest.raises(ValueError, match="not a model file"):
             TabPFNRegressor.load_model(not_json)
 
+        not_text = tmp_path / "model.joblib"  # a pickle, as the README mentions
+        not_text.write_bytes(pickle.dumps(_fitted_regressor()))
+        with pytest.raises(ValueError, match="not a model file"):
+            TabPFNRegressor.load_model(not_text)
+
         with pytest.raises(ValueError, match="not a model record"):
             TabPFNRegressor.load_model({"task": "regression"})  # no model_id
 
@@ -196,15 +221,30 @@ class TestLoadRejects:
         with pytest.raises(FileNotFoundError):
             TabPFNRegressor.load_model(tmp_path / "missing.json")
 
-    def test_params_this_version_does_not_know(self):
+    def test_params_this_class_does_not_know(self):
         record = _fitted_regressor().save_model()
-        record["tabpfn_client_version"] = "99.0.0"
         record["params"]["hyperspace_mode"] = True
 
+        # Saved by the installed version, so a version gap is not the cause.
+        with pytest.raises(ValueError) as excinfo:
+            TabPFNRegressor.load_model(record)
+        assert "hyperspace_mode" in str(excinfo.value)
+        assert "upgrade" not in str(excinfo.value).lower()
+
+        record["tabpfn_client_version"] = "99.0.0"
         with pytest.raises(ValueError) as excinfo:
             TabPFNRegressor.load_model(record)
         assert "99.0.0" in str(excinfo.value)
-        assert "hyperspace_mode" in str(excinfo.value)
+        assert "upgrade" in str(excinfo.value).lower()
+
+    def test_transport_params(self):
+        # `client_options` is per-process and never saved. A record carrying it
+        # (hand-made from get_params(), say) must not smuggle a plain dict into
+        # the estimator, where the first predict() would trip over it.
+        record = _fitted_regressor().save_model()
+        record["params"]["client_options"] = {"timeout": 5}
+        with pytest.raises(ValueError, match="client_options"):
+            TabPFNRegressor.load_model(record)
 
     def test_unknown_top_level_fields_are_ignored(self):
         # A newer tabpfn-client may add fields to the record; an older one
@@ -244,6 +284,16 @@ class TestLoadedEstimator:
             pytest.raises(ValueError, match="exceeds the maximum of 2"),
         ):
             loaded.predict(np.random.randn(3, 2))
+
+    def test_shares_nothing_mutable_with_the_record(self):
+        record = _fitted_regressor(categorical_features_indices=[0]).save_model()
+        first = TabPFNRegressor.load_model(record)
+        second = TabPFNRegressor.load_model(record)
+
+        first.categorical_features_indices.append(3)
+
+        assert second.categorical_features_indices == [0]
+        assert record["params"]["categorical_features_indices"] == [0]
 
     def test_clone_starts_unfitted(self):
         loaded = TabPFNClassifier.load_model(
@@ -327,6 +377,26 @@ class TestWithServer:
         assert str(MODEL_ID) in message
         assert "fit()" in message
         assert "00000000-0000-0000-0000-00000000beef" in message
+
+    @with_mock_server()
+    def test_predict_reports_other_404s_as_plain_errors(self, mock_server):
+        # Only the server's own "fitted train set not found" (error_code
+        # NOT_FOUND) means the model is gone. A 404 for the route itself, which
+        # a server without this endpoint returns, is a different failure.
+        mock_server.router.post("/tabpfn/prepare_test_set_upload").respond(
+            404, json={"message": "Not Found", "error_code": "USER_ERROR"}
+        )
+        loaded = TabPFNRegressor.load_model(_fitted_regressor().save_model())
+
+        with (
+            patch("tabpfn_client.estimator.init"),
+            patch.object(ServiceClient, "get_settings", return_value=None),
+            pytest.raises(RuntimeError) as excinfo,
+        ):
+            loaded.predict(np.random.randn(3, 2))
+
+        assert not isinstance(excinfo.value, FittedModelNotFoundError)
+        assert "[HTTP 404] Not Found" in str(excinfo.value)
 
     @with_mock_server()
     def test_fit_save_load_predict_across_runs(self, mock_server):

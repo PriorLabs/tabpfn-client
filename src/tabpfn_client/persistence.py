@@ -19,6 +19,7 @@ Nothing else needs to survive, which is also what keeps pickling cheap.
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -31,12 +32,12 @@ from sklearn.utils.validation import check_is_fitted
 from typing_extensions import Self
 
 from tabpfn_client.api_models import PredictionTask
-from tabpfn_client.client import get_client_version
 
 # Constructor params that describe the connection rather than the model. They
-# are left out of the record: `client_options` carries per-session headers and
-# timeouts (and is not JSON), and a loaded estimator should run with the
-# defaults of the process it is loaded into.
+# are left out of the record, and a record that carries them is rejected:
+# `client_options` holds per-session headers and timeouts (and is not JSON), and
+# a loaded estimator should run with the defaults of the process it is loaded
+# into.
 _TRANSPORT_PARAMS = frozenset({"client_options"})
 
 
@@ -65,6 +66,31 @@ def _task_of(estimator_cls: type) -> PredictionTask:
         return PredictionTask.CLASSIFICATION
     return PredictionTask.REGRESSION
 
+def _installed_version() -> str:
+    # get_client_version() fallback it not what we want here.
+    # Imported here to avoid circular import. 
+    from tabpfn_client import __version__
+
+    return __version__
+
+
+def _jsonable(value: Any) -> Any:
+    """Return `value` with numpy scalars and arrays replaced by Python ones.
+
+    `fit()` accepts them as hyperparameters (an `np.int64` out of a parameter
+    grid, an index array from `np.where`), but JSON has no representation for
+    them.
+    """
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return _jsonable(value.tolist())
+    if isinstance(value, dict):
+        return {k: _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    return value
+
 
 def _read_record(source: str | Path | dict[str, Any]) -> _ModelRecord:
     """Parse a record from a `save_model()` dict or JSON file, failing with a
@@ -75,8 +101,8 @@ def _read_record(source: str | Path | dict[str, Any]) -> _ModelRecord:
     else:
         origin = str(source)
         try:
-            raw = json.loads(Path(source).read_text())
-        except json.JSONDecodeError as exc:
+            raw = json.loads(Path(source).read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise ValueError(
                 f"{origin} is not a model file written by save_model(): {exc}"
             ) from exc
@@ -140,13 +166,13 @@ class ModelPersistenceMixin(BaseEstimator):
         """
         check_is_fitted(self)
         params = {
-            k: v
+            k: _jsonable(v)
             for k, v in self.get_params(deep=False).items()
             if k not in _TRANSPORT_PARAMS
         }
         classes = getattr(self, "classes_", None)
         record = _ModelRecord(
-            tabpfn_client_version=get_client_version(),
+            tabpfn_client_version=_installed_version(),
             task=_task_of(type(self)),
             model_id=self.model_id_,
             params=params,
@@ -154,7 +180,7 @@ class ModelPersistenceMixin(BaseEstimator):
             classes=None if classes is None else np.asarray(classes).tolist(),
         ).model_dump(mode="json")
         if path is not None:
-            Path(path).write_text(json.dumps(record, indent=2) + "\n")
+            Path(path).write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
         return record
 
     @classmethod
@@ -177,8 +203,8 @@ class ModelPersistenceMixin(BaseEstimator):
         ValueError
             If `source` is not a record written by `save_model()`, holds a model
             of the other task (a regression model loaded into a classifier),
-            or was saved by a tabpfn-client version whose parameters this
-            version does not know.
+            or has parameters this class does not accept, for instance because
+            a newer tabpfn-client saved it.
         """
         record = _read_record(source)
         task = _task_of(cls)
@@ -186,16 +212,38 @@ class ModelPersistenceMixin(BaseEstimator):
             raise ValueError(
                 f"Cannot load a {record.task.value} model into {cls.__name__}."
             )
+        transport = _TRANSPORT_PARAMS & set(record.params)
+        if transport:
+            raise ValueError(
+                f"Cannot load this model into {cls.__name__}: {sorted(transport)} "
+                "describe the connection rather than the model and do not belong "
+                "in a model record. Drop them, and set them on the loaded "
+                "estimator instead."
+            )
+        # Unknown parameters are an error, not silently dropped: the record is
+        # the inference config (`_get_tabpfn_config()` rebuilds the request from
+        # `get_params()` on every `predict()`), so a key this class does not know
+        # is almost always one a newer tabpfn-client added that changes what the
+        # server computes. Dropping it would give different predictions from the
+        # ones the user validated when saving, with no signal. Unlike xgboost or
+        # CatBoost files, nothing else (no weights) pins the behaviour.
         unknown = set(record.params) - set(cls._get_param_names())
         if unknown:
+            advice = "Drop them from the record."
+            installed = _installed_version()
+            if record.tabpfn_client_version != installed:
+                advice = (
+                    f"It was saved with tabpfn-client {record.tabpfn_client_version} "
+                    f"(installed: {installed}); upgrade tabpfn-client or drop them "
+                    "from the record."
+                )
             raise ValueError(
-                f"Cannot load this model into {cls.__name__}: it was saved with "
-                f"tabpfn-client {record.tabpfn_client_version} and uses parameters "
-                f"unknown to the installed version {get_client_version()}: "
-                f"{sorted(unknown)}. Upgrade tabpfn-client or drop them from the "
-                "record."
+                f"Cannot load this model into {cls.__name__}: it has parameters "
+                f"{cls.__name__} does not accept: {sorted(unknown)}. {advice}"
             )
-        estimator = cls(**record.params)
+        # Deep-copied so that estimators loaded from the same dict share nothing
+        # mutable with it, or with each other (as `sklearn.base.clone` does).
+        estimator = cls(**copy.deepcopy(record.params))
         estimator.model_id_ = record.model_id
         estimator._n_train_rows = record.n_train_rows
         if record.classes is not None:
