@@ -20,14 +20,15 @@ _STAT_STYLES = {
 }
 
 
-def _validate_args(
+def _validated_arrays(
     prediction: Mapping[str, Any],
     sample_idx: int,
     statistics: Sequence[str],
     quantile_interval: tuple[float, float] | None,
     zoom_quantile: float | None,
     smooth: float,
-) -> None:
+) -> tuple[np.ndarray, np.ndarray]:
+    """Check the arguments and return the logits and borders as float arrays."""
     if not {"logits", "borders"} <= prediction.keys():
         raise ValueError(
             'prediction must be the output of predict(..., output_type="full").'
@@ -36,6 +37,11 @@ def _validate_args(
     if unknown:
         raise ValueError(
             f"Unknown statistics {unknown}; choose from {list(_STAT_STYLES)}."
+        )
+    missing = [name for name in statistics if name not in prediction]
+    if missing:
+        raise ValueError(
+            f"prediction does not contain the requested statistics {missing}."
         )
     if quantile_interval is not None:
         lo_q, hi_q = quantile_interval
@@ -47,11 +53,25 @@ def _validate_args(
         raise ValueError("zoom_quantile must be in (0, 1].")
     if smooth < 0:
         raise ValueError("smooth must be non-negative.")
-    n_samples = prediction["logits"].shape[0]
+
+    logits = np.atleast_2d(np.asarray(prediction["logits"], dtype=float))
+    if logits.ndim != 2:
+        raise ValueError(
+            "prediction['logits'] must be 2-D (n_samples, n_bars); got shape "
+            f"{np.shape(prediction['logits'])}."
+        )
+    borders = np.asarray(prediction["borders"], dtype=float)
+    if borders.ndim != 1 or borders.size != logits.shape[1] + 1:
+        raise ValueError(
+            f"prediction['borders'] must be 1-D with {logits.shape[1] + 1} entries "
+            f"for {logits.shape[1]} bars; got shape {borders.shape}."
+        )
+    n_samples = logits.shape[0]
     if not 0 <= sample_idx < n_samples:
         raise ValueError(
             f"sample_idx {sample_idx} is out of range for {n_samples} sample(s)."
         )
+    return logits, borders
 
 
 def _softmax(values: np.ndarray) -> np.ndarray:
@@ -59,6 +79,11 @@ def _softmax(values: np.ndarray) -> np.ndarray:
     shifted = values - np.max(values)
     exp = np.exp(shifted)
     return exp / exp.sum()
+
+
+def _boxcar(values: np.ndarray, window: int) -> np.ndarray:
+    """Return the running sum of ``values`` over a centred window of ``window``."""
+    return np.convolve(values, np.ones(window), mode="same")
 
 
 def _icdf(probabilities: np.ndarray, borders: np.ndarray, q: float) -> float:
@@ -69,7 +94,8 @@ def _icdf(probabilities: np.ndarray, borders: np.ndarray, q: float) -> float:
         return float(borders[-1])
 
     cumulative = probabilities.cumsum()
-    index = min(int(np.searchsorted(cumulative, q)), len(probabilities) - 1)
+    last = int(np.flatnonzero(probabilities > 0)[-1])
+    index = min(int(np.searchsorted(cumulative, q)), last)
     probability_before = cumulative[index - 1] if index else 0.0
     fraction_in_bucket = (q - probability_before) / probabilities[index]
     return float(
@@ -98,7 +124,8 @@ def plot_regression_distribution(
     sample_idx : int, default=0
         Index of the sample to plot within ``prediction``.
     statistics : sequence of str, default=("mean", "median", "mode")
-        Point statistics to mark with a vertical line.
+        Point statistics to mark with a vertical line. Each one must be present
+        in ``prediction``.
     quantile_interval : tuple of float or None, default=(0.1, 0.9)
         Central interval to shade. Pass ``None`` to disable.
     zoom_quantile : float or None, default=0.99
@@ -108,7 +135,9 @@ def plot_regression_distribution(
         Width of the display-only moving average over the density, as a
         fraction of the number of bars. Pass ``0`` to show the raw bar density.
     ax : matplotlib.axes.Axes or None, default=None
-        Existing axes to draw on. A new figure is created if omitted.
+        Existing axes to draw on. A new figure is created if omitted. When the
+        axes already holds a curve, the limits, labels and legend of that curve
+        are preserved so several distributions can be overlaid.
     color : str, default="#1f77b4"
         Base colour of the density curve.
 
@@ -117,33 +146,39 @@ def plot_regression_distribution(
     matplotlib.axes.Axes
         The axes containing the plot.
     """
-    _validate_args(
+    logits, borders = _validated_arrays(
         prediction, sample_idx, statistics, quantile_interval, zoom_quantile, smooth
     )
 
     try:
         import matplotlib.pyplot as plt  # noqa: PLC0415
         from matplotlib.patches import Patch  # noqa: PLC0415
-        from scipy.ndimage import uniform_filter1d  # noqa: PLC0415
     except ModuleNotFoundError as err:
         raise ModuleNotFoundError(
-            "matplotlib and scipy are required for plotting. "
-            'Install them with `pip install "tabpfn-client[viz]"`.'
+            "matplotlib is required for plotting. "
+            'Install it with `pip install "tabpfn-client[viz]"`.'
         ) from err
 
-    logits = np.asarray(prediction["logits"][sample_idx], dtype=float)
-    borders = np.asarray(prediction["borders"], dtype=float)
     widths = np.diff(borders)
     centers = borders[:-1] + widths / 2
-    probabilities = _softmax(logits)
+    probabilities = _softmax(logits[sample_idx])
     density = probabilities / widths
-    if smooth:
-        density = uniform_filter1d(density, max(1, round(smooth * len(density))))
+    window = max(1, round(smooth * len(density))) if smooth else 1
+    if window > 1:
+        # Smooth mass and width with the same kernel so the ratio stays a
+        # density on non-uniform bars and the edge taper cancels out.
+        density = _boxcar(probabilities, window) / _boxcar(widths, window)
 
     if ax is None:
         _, plot_ax = plt.subplots(figsize=(8, 4.5))
+        overlay = False
     else:
         plot_ax = ax
+        overlay = bool(ax.lines or ax.collections)
+    previous_xlim = plot_ax.get_xlim() if overlay else None
+    previous_ylim = plot_ax.get_ylim() if overlay else None
+    previous_legend = plot_ax.get_legend() if overlay else None
+    previous_handles = previous_legend.legend_handles if previous_legend else []
 
     plot_ax.fill_between(centers, density, color=color, alpha=0.18, lw=0)
     plot_ax.plot(centers, density, color=color, lw=1.8)
@@ -151,9 +186,16 @@ def plot_regression_distribution(
     legend_handles = []
     if quantile_interval is not None:
         lo, hi = (_icdf(probabilities, borders, q) for q in quantile_interval)
-        band = (centers >= lo) & (centers <= hi)
+        inside = (centers > lo) & (centers < hi)
+        band_x = np.concatenate(([lo], centers[inside], [hi]))
         pct = round((quantile_interval[1] - quantile_interval[0]) * 100)
-        plot_ax.fill_between(centers[band], density[band], color=color, alpha=0.3, lw=0)
+        plot_ax.fill_between(
+            band_x,
+            np.interp(band_x, centers, density),
+            color=color,
+            alpha=0.3,
+            lw=0,
+        )
         legend_handles.append(
             Patch(facecolor=color, alpha=0.5, lw=0, label=f"{pct}% interval")
         )
@@ -173,20 +215,25 @@ def plot_regression_distribution(
 
     if zoom_quantile is not None:
         tail = (1 - zoom_quantile) / 2
-        plot_ax.set_xlim(
-            _icdf(probabilities, borders, tail),
-            _icdf(probabilities, borders, 1 - tail),
-        )
+        low = _icdf(probabilities, borders, tail)
+        high = _icdf(probabilities, borders, 1 - tail)
+        if previous_xlim is not None:
+            low = min(low, previous_xlim[0])
+            high = max(high, previous_xlim[1])
+        plot_ax.set_xlim(low, high)
 
-    visible = density[
-        (centers >= plot_ax.get_xlim()[0]) & (centers <= plot_ax.get_xlim()[1])
-    ]
-    plot_ax.set_ylim(0, visible.max() * 1.1 if visible.size else None)
+    left, right = plot_ax.get_xlim()
+    visible = density[(centers >= left) & (centers <= right)]
+    top = (visible.max() if visible.size else density.max()) * 1.1
+    if previous_ylim is not None:
+        top = max(top, previous_ylim[1])
+    plot_ax.set_ylim(0, top)
     plot_ax.margins(x=0)
-    plot_ax.set_xlabel("Predicted target")
-    plot_ax.set_ylabel("Probability density")
-    plot_ax.set_title("TabPFN predicted distribution")
+    if not overlay:
+        plot_ax.set_xlabel("Predicted target")
+        plot_ax.set_ylabel("Probability density")
+        plot_ax.set_title("TabPFN predicted distribution")
     plot_ax.spines["top"].set_visible(False)
     plot_ax.spines["right"].set_visible(False)
-    plot_ax.legend(handles=legend_handles, fontsize=9)
+    plot_ax.legend(handles=[*previous_handles, *legend_handles], fontsize=9)
     return plot_ax
