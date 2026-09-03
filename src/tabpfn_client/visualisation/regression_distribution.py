@@ -10,6 +10,7 @@ from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.axes import Axes
 from matplotlib.patches import Patch
 from scipy.ndimage import uniform_filter1d
 
@@ -85,9 +86,9 @@ def plot_regression_distribution(
     quantile_interval: tuple[float, float] | None = (0.1, 0.9),
     zoom_quantile: float | None = 0.99,
     smooth: float = 0.005,
-    ax: plt.Axes | None = None,
+    ax: Axes | None = None,
     color: str = "#1f77b4",
-) -> plt.Axes:
+) -> Axes:
     """Plot the predicted target distribution for a single sample.
 
     Parameters

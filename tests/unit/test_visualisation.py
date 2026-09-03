@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import matplotlib
 import numpy as np
 import pytest
@@ -32,7 +34,9 @@ def test_plot_regression_distribution_renders_client_numpy_output(
     assert ax.get_ylabel() == "Probability density"
     assert ax.get_title() == "TabPFN predicted distribution"
     assert len(ax.lines) == 4
-    assert [text.get_text() for text in ax.get_legend().get_texts()] == [
+    legend = ax.get_legend()
+    assert legend is not None
+    assert [text.get_text() for text in legend.get_texts()] == [
         "80% interval",
         "mean = 2.6",
         "median = 3",
@@ -51,7 +55,7 @@ def test_plot_regression_distribution_renders_client_numpy_output(
     ],
 )
 def test_plot_regression_distribution_validates_arguments(
-    full_prediction: dict[str, object], kwargs: dict[str, object], message: str
+    full_prediction: dict[str, object], kwargs: dict[str, Any], message: str
 ) -> None:
     with pytest.raises(ValueError, match=message):
         plot_regression_distribution(full_prediction, **kwargs)
