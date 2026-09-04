@@ -25,6 +25,10 @@ place, set `fit_mode="fit_with_cache"`; the endpoint then returns a
 `model_id=prior.model_id_`. `model_path` is similarly optional and
 only sent when set; some deployments reject overrides.
 
+`model_version` selects one of the weights families the endpoint has
+baked (e.g. `"v3"`, `"v3.5"`). Only sent when set, so older containers
+that don't know the field keep working.
+
 `use_kv_cache=True` automates that round trip within one estimator: the
 first `predict*` after `fit()` ships the training data as usual, and
 every later one reuses the `model_id` the endpoint returned. Workloads
@@ -94,6 +98,7 @@ class _HostedBase(BaseEstimator):
         extra_headers: Optional[Dict[str, str]] = None,
         model_id: Optional[str] = None,
         model_path: Optional[str] = None,
+        model_version: Optional[str] = None,
         fit_mode: Optional[
             Literal["fit_preprocessors", "low_memory", "fit_with_cache", "batched"]
         ] = None,
@@ -116,6 +121,7 @@ class _HostedBase(BaseEstimator):
         self.extra_headers = extra_headers
         self.model_id = model_id
         self.model_path = model_path
+        self.model_version = model_version
         self.fit_mode = fit_mode
         self.n_estimators = n_estimators
         self.softmax_temperature = softmax_temperature
@@ -223,6 +229,12 @@ class _HostedBase(BaseEstimator):
                 "predict_params": params,
             }
         }
+        # Sits at the top level of the request, not under tabpfn_config — the
+        # serving container reads it there to resolve a baked checkpoint path.
+        # Omitted when unset so older containers that reject unknown fields
+        # (422) keep working.
+        if self.model_version is not None:
+            request["model_version"] = self.model_version
         datasets: Dict[str, Any] = {"x_test": X_test}
 
         # Precedence: a completed fit() wins over the constructor's model_id.
