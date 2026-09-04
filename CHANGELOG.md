@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-09-04
+
+### Added
+
+- `TabPFNClassifier` and `TabPFNRegressor` accept `model_path="v3.5_default"` (and `create_default_for_version(ModelVersion.V3_5)`) to request the TabPFN 3.5 pre-release on accounts that have access to it. ([#374](https://github.com/PriorLabs/tabpfn-client/pull/374))
+- Add ``plot_regression_distribution`` to visualise the predictive distribution returned by regression predictions with ``output_type="full"``. Install the optional plotting dependencies with ``pip install "tabpfn-client[viz]"``. ([#375](https://github.com/PriorLabs/tabpfn-client/pull/375))
+- `tabpfn_client.hosted.TabPFNClassifier` and `TabPFNRegressor` accept `model_version="v3.5"` (or any other baked family) to select a weights family on serving containers that support it. Older containers keep working — the field is only sent when set. ([#379](https://github.com/PriorLabs/tabpfn-client/pull/379))
+
+
 ## [0.5.1] - 2026-09-01
 
 ### Added
