@@ -1,4 +1,4 @@
-# Automatically reapprove PRs from PriorLabs org members after new code is pushed.
+# Automatically reapprove PRs from PriorLabs org members after new code is pushed to them.
 #
 # The branch protection rules dismiss all approvals when new code is pushed to a PR, to
 # ensure the most recent push is reviewed and approved. This is important for external
