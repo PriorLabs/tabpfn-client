@@ -252,6 +252,37 @@ class TestKvCache:
         assert "X_train" not in body
 
 
+class TestModelVersion:
+    def test_default_omits_the_field(self):
+        """Compat with older containers: an unknown field would 422."""
+        recorder = Recorder()
+        model = _classifier(recorder)
+        model.fit(X_COMPLETE, Y)
+        model.predict_proba(X_COMPLETE.iloc[:2])
+
+        assert "model_version" not in recorder.json_body()
+
+    def test_explicit_value_sits_at_the_top_level(self):
+        """The serving container reads `req.model_version`, not under `tabpfn_config`."""
+        recorder = Recorder()
+        model = _classifier(recorder, model_version="v3.5")
+        model.fit(X_COMPLETE, Y)
+        model.predict_proba(X_COMPLETE.iloc[:2])
+
+        body = recorder.json_body()
+        assert body["model_version"] == "v3.5"
+        assert "model_version" not in body["task_config"]["tabpfn_config"]
+
+    def test_travels_on_the_parquet_payload_too(self):
+        recorder = Recorder()
+        model = _classifier(recorder, payload_format="parquet", model_version="v3")
+        model.fit(X, Y)
+        model.predict_proba(X.iloc[:2])
+
+        config, _ = recorder.multipart()
+        assert config["model_version"] == "v3"
+
+
 class TestNonFiniteJson:
     def test_missing_and_infinite_values_survive_the_json_path(self):
         """Explainers mask features with +inf; httpx's `json=` would reject it."""
