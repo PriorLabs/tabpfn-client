@@ -698,15 +698,6 @@ class ServiceClient(Singleton):
         )
 
         if isinstance(prepare_resp, NotFoundErrorResponse):
-            if prepare_resp.error_code != "NOT_FOUND":
-                # Any other 404 (a server without this route, say) never looked
-                # the fitted model up, so it must not be reported as missing.
-                cls._raise_http_error(
-                    res,
-                    "prepare_test_set_upload",
-                    prepare_resp.model_dump(mode="json"),
-                    prepare_resp.message,
-                )
             message = (
                 f"Fitted model {fitted_train_set_id} was not found on the server. "
                 "It may have been deleted (see UserDataClient), or it was fitted "
