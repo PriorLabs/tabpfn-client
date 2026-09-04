@@ -167,6 +167,27 @@ except (FileNotFoundError, FittedModelNotFoundError):
     model.save_model("model.json")
     predictions = model.predict(X_test)
 ```
+## Plotting
+
+`plot_regression_distribution` draws the predictive distribution behind a regression prediction. Install the optional dependency with `pip install "tabpfn-client[viz]"`.
+
+```python
+from tabpfn_client import TabPFNRegressor
+from tabpfn_client.visualisation import plot_regression_distribution
+
+model = TabPFNRegressor()
+model.fit(X_train, y_train)
+prediction = model.predict(X_test, output_type="full")
+
+ax = plot_regression_distribution(prediction, sample_idx=0)
+ax.figure.savefig("distribution.png")
+```
+
+Notes:
+
+- Requires `output_type="full"`; `sample_idx` picks the row of `X_test` to plot.
+- `statistics`, `quantile_interval`, `zoom_quantile` and `smooth` control what is drawn; see the docstring for the defaults.
+- Pass `ax=` to overlay several samples on one axes.
 
 ## Authentication
 
