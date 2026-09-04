@@ -66,9 +66,10 @@ def _task_of(estimator_cls: type) -> PredictionTask:
         return PredictionTask.CLASSIFICATION
     return PredictionTask.REGRESSION
 
+
 def _installed_version() -> str:
     # get_client_version() fallback it not what we want here.
-    # Imported here to avoid circular import. 
+    # Imported here to avoid circular import.
     from tabpfn_client import __version__
 
     return __version__
