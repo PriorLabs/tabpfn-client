@@ -68,7 +68,7 @@ def _task_of(estimator_cls: type) -> PredictionTask:
 
 
 def _installed_version() -> str:
-    # get_client_version() fallback it not what we want here.
+    # get_client_version() fallback is not what we want here.
     # Imported here to avoid circular import.
     from tabpfn_client import __version__
 
