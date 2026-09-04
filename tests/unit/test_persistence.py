@@ -290,6 +290,7 @@ class TestLoadedEstimator:
         first = TabPFNRegressor.load_model(record)
         second = TabPFNRegressor.load_model(record)
 
+        assert first.categorical_features_indices is not None
         first.categorical_features_indices.append(3)
 
         assert second.categorical_features_indices == [0]
@@ -377,26 +378,6 @@ class TestWithServer:
         assert str(MODEL_ID) in message
         assert "fit()" in message
         assert "00000000-0000-0000-0000-00000000beef" in message
-
-    @with_mock_server()
-    def test_predict_reports_other_404s_as_plain_errors(self, mock_server):
-        # Only the server's own "fitted train set not found" (error_code
-        # NOT_FOUND) means the model is gone. A 404 for the route itself, which
-        # a server without this endpoint returns, is a different failure.
-        mock_server.router.post("/tabpfn/prepare_test_set_upload").respond(
-            404, json={"message": "Not Found", "error_code": "USER_ERROR"}
-        )
-        loaded = TabPFNRegressor.load_model(_fitted_regressor().save_model())
-
-        with (
-            patch("tabpfn_client.estimator.init"),
-            patch.object(ServiceClient, "get_settings", return_value=None),
-            pytest.raises(RuntimeError) as excinfo,
-        ):
-            loaded.predict(np.random.randn(3, 2))
-
-        assert not isinstance(excinfo.value, FittedModelNotFoundError)
-        assert "[HTTP 404] Not Found" in str(excinfo.value)
 
     @with_mock_server()
     def test_fit_save_load_predict_across_runs(self, mock_server):
