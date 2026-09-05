@@ -7,13 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.3] - 2026-09-05
-
-### Fixed
-
-- `tabpfn_client.hosted.TabPFNClassifier` and `TabPFNRegressor` no longer force client-side defaults for `n_estimators`, `softmax_temperature`, `average_before_softmax`, and `inference_precision`. Unset values now defer to the inference container's own defaults; user-supplied overrides still win. ([#378](https://github.com/PriorLabs/tabpfn-client/pull/378))
-
-
 ## [0.5.2] - 2026-09-04
 
 ### Added
