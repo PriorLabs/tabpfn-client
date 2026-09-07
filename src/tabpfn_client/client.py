@@ -28,7 +28,11 @@ from tabpfn_client.models import (
     PredictionResult,
     ApiMode,
 )
-from tabpfn_client.errors import RetryableServerError, CappedRetryableServerError
+from tabpfn_client.errors import (
+    RetryableServerError,
+    CappedRetryableServerError,
+    FittedModelNotFoundError,
+)
 
 import google_crc32c
 
@@ -47,6 +51,7 @@ from tabpfn_client.api_models import (
     PrepareTestSetUploadRequest,
     PrepareTestSetUploadResponse,
     DuplicateTestSetErrorResponse,
+    NotFoundErrorResponse,
     FileUploadInfo,
     FileInfo,
     FitRequest,
@@ -686,8 +691,21 @@ class ServiceClient(Singleton):
             res,
             "prepare_test_set_upload",
             success_model=PrepareTestSetUploadResponse,
-            error_models={409: DuplicateTestSetErrorResponse},
+            error_models={
+                404: NotFoundErrorResponse,
+                409: DuplicateTestSetErrorResponse,
+            },
         )
+
+        if isinstance(prepare_resp, NotFoundErrorResponse):
+            message = (
+                f"Fitted model {fitted_train_set_id} was not found on the server. "
+                "It may have been deleted (see UserDataClient), or it was fitted "
+                "under a different account. Call fit() again to create a new one."
+            )
+            if prepare_resp.trace_id:
+                message += f" Report trace ID: {prepare_resp.trace_id}."
+            raise FittedModelNotFoundError(message)
 
         if isinstance(prepare_resp, DuplicateTestSetErrorResponse):
             logger.warning("Test set already exists, skipping upload.")

@@ -122,13 +122,7 @@ model.predict(X_test)     # served from the cache built during fit()
 model.predict(X_other)
 ```
 
-`fit()` records the id of the fitted model as `model_id_`. Assign it to a fresh estimator to predict against the same fit without re-uploading your training data — from another process or another machine:
-
-```python
-later = TabPFNRegressor(fit_mode="fit_with_cache")
-later.model_id_ = model.model_id_
-later.predict(X_test)
-```
+`fit()` records the id of the fitted model as `model_id_`. To predict against the same fit from another process or machine, save the estimator and load it there — see [Saving and Loading Fitted Models](#saving-and-loading-fitted-models).
 
 Notes:
 
@@ -136,6 +130,43 @@ Notes:
 - Predictions are the same either way — caching changes the speed, not the model.
 - Not compatible with thinking mode.
 
+## Saving and Loading Fitted Models
+
+A fit lives on the TabPFN server, so a fitted estimator can be saved without its training data and loaded in a later run — or on another machine — to predict without fitting again. This pays off most when the fit was expensive (thinking mode) or when you predict many times against one fit (`fit_mode="fit_with_cache"`).
+
+```python
+from tabpfn_client import TabPFNClassifier
+
+model = TabPFNClassifier(thinking_mode=True)
+model.fit(X_train, y_train)
+model.save_model("model.json")
+
+# In a later run:
+model = TabPFNClassifier.load_model("model.json")
+model.predict(X_test)
+```
+
+`save_model()` writes a small JSON record: the id of the fitted model, the hyperparameters, the class labels and the training-set size. It also returns that record as a dict, so it can be kept elsewhere (a database, an experiment tracker) and passed to `load_model()` directly.
+
+Notes:
+
+- The loading process must authenticate with the account that ran the fit; fitted models are not visible to other accounts.
+- `load_model()` makes no request. A fitted model stays usable for as long as its training data remains on the server; if it was deleted (for instance with `UserDataClient`), the first `predict()` raises `FittedModelNotFoundError`.
+- Pickling with `pickle` or `joblib` works too and stays small, since the estimator holds no training data. The JSON record is the format that is readable and meant to stay loadable across tabpfn-client versions.
+
+A script that reruns often can reuse the fit when it is available and fit otherwise:
+
+```python
+from tabpfn_client import FittedModelNotFoundError
+
+try:
+    model = TabPFNClassifier.load_model("model.json")
+    predictions = model.predict(X_test)
+except (FileNotFoundError, FittedModelNotFoundError):
+    model = TabPFNClassifier().fit(X_train, y_train)
+    model.save_model("model.json")
+    predictions = model.predict(X_test)
+```
 ## Plotting
 
 `plot_regression_distribution` draws the predictive distribution behind a regression prediction. Install the optional dependency with `pip install "tabpfn-client[viz]"`.
