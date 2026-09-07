@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-09-05
+
+### Fixed
+
+- `tabpfn_client.hosted.TabPFNClassifier` and `TabPFNRegressor` no longer force client-side defaults for `n_estimators`, `softmax_temperature`, `average_before_softmax`, and `inference_precision`. Unset values now defer to the inference container's own defaults; user-supplied overrides still win. ([#378](https://github.com/PriorLabs/tabpfn-client/pull/378))
+
+
+## [0.5.2] - 2026-09-04
+
+### Added
+
+- `TabPFNClassifier` and `TabPFNRegressor` accept `model_path="v3.5_default"` (and `create_default_for_version(ModelVersion.V3_5)`) to request the TabPFN 3.5 pre-release on accounts that have access to it. ([#374](https://github.com/PriorLabs/tabpfn-client/pull/374))
+- Add ``plot_regression_distribution`` to visualise the predictive distribution returned by regression predictions with ``output_type="full"``. Install the optional plotting dependencies with ``pip install "tabpfn-client[viz]"``. ([#375](https://github.com/PriorLabs/tabpfn-client/pull/375))
+- `tabpfn_client.hosted.TabPFNClassifier` and `TabPFNRegressor` accept `model_version="v3.5"` (or any other baked family) to select a weights family on serving containers that support it. Older containers keep working — the field is only sent when set. ([#379](https://github.com/PriorLabs/tabpfn-client/pull/379))
+
+
+## [0.5.1] - 2026-09-01
+
+### Added
+
+- `tabpfn_client.hosted` estimators accept `use_kv_cache=True`, which reuses the endpoint's already-fitted model across repeated `predict` calls instead of re-fitting on every one — a large speed-up for workloads that predict many times against a single fit, such as SHAP, permutation importance and partial dependence. The endpoint's cache is bounded, so a model can be evicted between calls; that surfaces as an error and the estimator has to be re-fit. ([#372](https://github.com/PriorLabs/tabpfn-client/pull/372))
+
+### Changed
+
+- TabPFN Console URL moved from `ux.priorlabs.ai` to `platform.priorlabs.ai` (the old host continues to redirect). ([#368](https://github.com/PriorLabs/tabpfn-client/pull/368))
+- Now that hosted estimators are recognised as classifiers, scikit-learn's default cross-validation splitter for them is `StratifiedKFold` rather than `KFold`; cross-validation scores and anything derived from them may shift slightly. ([#372](https://github.com/PriorLabs/tabpfn-client/pull/372))
+
+### Fixed
+
+- `TabPFNRegressor.predict(output_type="full")` now matches a local prediction: masked-out bars come back as `-inf` rather than `NaN`, and test sets above the server's full-output row cap are split across calls instead of raising. ([#369](https://github.com/PriorLabs/tabpfn-client/pull/369))
+- Hosted estimators are now recognised by scikit-learn as classifiers and regressors, so tools that dispatch on estimator type — partial dependence among them — accept them. Datasets holding missing or non-finite values can also be sent as JSON, which previously rejected them and left Parquet as the only option. ([#372](https://github.com/PriorLabs/tabpfn-client/pull/372))
+
+
 ## [0.5.0] - 2026-08-26
 
 No significant changes.

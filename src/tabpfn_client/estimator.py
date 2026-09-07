@@ -14,7 +14,7 @@ from uuid import UUID
 
 import numpy as np
 import pandas as pd
-from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
+from sklearn.base import ClassifierMixin, RegressorMixin
 from sklearn.utils import column_or_1d
 from sklearn.utils.multiclass import check_classification_targets
 from sklearn.utils.validation import check_is_fitted
@@ -44,6 +44,7 @@ from tabpfn_client.api_models import (
     TabPFNSystem,
 )
 from tabpfn_client.models import ApiMode, TabPFNConfig, FitModeLiteral
+from tabpfn_client.persistence import ModelPersistenceMixin
 from tabpfn_client.options import get_opts
 
 try:
@@ -55,20 +56,15 @@ TORCH_AVAILABLE = Tensor is not None
 
 logger = logging.getLogger(__name__)
 
-# Special strings used to identify model families in model paths.
-V_2_5_IDENTIFIER = "v2.5"
-V_2_6_IDENTIFIER = "v2.6"
-V_3_IDENTIFIER = "v3"
-
-DEFAULT_V2_MODEL_PATH = "v2_default"
-DEFAULT_V2_5_MODEL_PATH = "v2.5_default"
-DEFAULT_V2_6_MODEL_PATH = "v2.6_default"
-DEFAULT_V3_MODEL_PATH = "v3_default"
-
 # Sentinel values for `model_path` that defer model selection to the server.
 # `None` means the caller didn't pick a model; "auto" is the canonical name
 # (matches the OSS tabpfn package); "default" is a backward-compatible alias.
-_AUTO_MODEL_PATH_ALIASES: frozenset[str | None] = frozenset({None, "auto", "default"})
+_AUTO_MODEL_PATH_ALIASES = (None, "auto", "default")
+
+# One `<version>_default` alias per model version the API schema declares,
+# newest first (the order users see in `list_available_models()`). The server
+# resolves each alias to its current default checkpoint for that version.
+_DEFAULT_MODEL_NAMES = tuple(f"{v.value}_default" for v in reversed(ModelVersion))
 
 # Prediction compute scales with n_train_rows * n_test_rows, so the API caps
 # their product. The effective per-call test row limit therefore shrinks as
@@ -82,81 +78,37 @@ class TabPFNModelSelection:
     """Base class for TabPFN model selection and path handling."""
 
     _AVAILABLE_MODELS: list[str] = []
-    _VALID_TASKS = {"classification", "regression"}
 
     @classmethod
     def list_available_models(cls) -> list[str]:
         return cls._AVAILABLE_MODELS
 
     @classmethod
-    def _validate_model_name(cls, model_name: str | None) -> None:
-        # `None` (defer to the server) is one of the auto aliases, so it counts
-        # as valid rather than an unknown model name.
-        if (
-            model_name not in _AUTO_MODEL_PATH_ALIASES
-            and model_name not in cls._AVAILABLE_MODELS
-        ):
-            raise ValueError(
-                f"Invalid model name: {model_name}. "
-                f"Available models are: {cls.list_available_models()}"
-            )
-
-    @classmethod
-    def _model_name_to_path(
-        cls, task: Literal["classification", "regression"], model_name: str | None
-    ) -> str | None:
-        cls._validate_model_name(model_name)
-        model_name_task = "classifier" if task == "classification" else "regressor"
-        # Let the server pick the default model when the caller defers to us.
-        if model_name in _AUTO_MODEL_PATH_ALIASES:
-            return None
-        # `None` is one of the auto aliases handled above, so the remainder is a
-        # concrete model name; assert it to narrow `str | None` -> `str`.
-        assert model_name is not None
-        if V_3_IDENTIFIER in model_name:
-            return f"tabpfn-{V_3_IDENTIFIER}-{model_name_task}-{model_name}.ckpt"
-        if V_2_6_IDENTIFIER in model_name:
-            return f"tabpfn-{V_2_6_IDENTIFIER}-{model_name_task}-{model_name}.ckpt"
-        if V_2_5_IDENTIFIER in model_name:
-            return f"tabpfn-{V_2_5_IDENTIFIER}-{model_name_task}-{model_name}.ckpt"
-        return f"tabpfn-v2-{model_name_task}-{model_name}.ckpt"
-
-    @classmethod
-    def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
+    def create_default_for_version(
+        cls, version: ModelVersion | str, **overrides
+    ) -> Self:
         """Construct an estimator that uses the given version of the model.
 
-        In addition to selecting the model, this also configures the estimator with
-        certain default settings associated with this model version.
-
-        Any kwargs will override the default settings.
+        Any kwargs will override the default settings, except for `model_path`.
         """
-        options: dict[str, Any] = {
-            "n_estimators": 8,
-            "softmax_temperature": 0.9,
-        }
-        if version == ModelVersion.V2:
-            options["model_path"] = DEFAULT_V2_MODEL_PATH
-        elif version == ModelVersion.V2_5:
-            options["model_path"] = DEFAULT_V2_5_MODEL_PATH
-        elif version == ModelVersion.V2_6:
-            options["model_path"] = DEFAULT_V2_6_MODEL_PATH
-        elif version == ModelVersion.V3:
-            options["model_path"] = DEFAULT_V3_MODEL_PATH
-        else:
-            # In case we get UnknownEnum
-            raise ValueError(f"Unknown version: {version}")
-
-        options.update(overrides)
-
+        try:
+            version = ModelVersion(version)
+        except ValueError:
+            raise ValueError(
+                f"Invalid model version: {version}. "
+                f"Available versions are: {', '.join(list(ModelVersion))}."
+            )
+        options = overrides.copy()
+        options["model_path"] = f"{version.value}_default"
         return cls(**options)
 
 
-class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
+class TabPFNClassifier(ClassifierMixin, ModelPersistenceMixin, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
-        DEFAULT_V3_MODEL_PATH,
-        DEFAULT_V2_6_MODEL_PATH,
+        # Downstream packages (e.g. tabpfn-time-series) read this list in order
+        # to parse model names by substring, so "v2.5_default-2" must precede "v2.5_default".
         "v2.5_default-2",
-        DEFAULT_V2_5_MODEL_PATH,
+        *_DEFAULT_MODEL_NAMES,
         "v2.5_large-features-L",
         "v2.5_large-features-XL",
         "v2.5_large-samples",
@@ -164,7 +116,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         "v2.5_real-large-samples-and-features",
         "v2.5_real",
         "v2.5_variant",
-        DEFAULT_V2_MODEL_PATH,
         "auto",
         # Deprecated alias for "auto"; kept for backward compat with users and
         # downstream packages (e.g. tabpfn-time-series) that read this list.
@@ -175,12 +126,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         "vutqq28w",
         "znskzxi4",
     ]
-
-    # The server-side fitted-train-set id predictions run against. Written by
-    # `fit()` (the id the server returns) or assigned directly to reuse a
-    # previous fit; absent on unfitted instances, which is what makes
-    # `__sklearn_is_fitted__` work.
-    model_id_: UUID  # annotation only, no class attribute
 
     def __init__(
         self,
@@ -266,8 +211,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             predict re-runs the forward pass from the uploaded train set.
             "fit_with_cache" additionally builds and persists a server-side KV
             cache keyed by the resulting fitted-train-set id; later predicts
-            against that id (stored on the estimator as `model_id_`) are
-            served from the cache instead of re-fitting.
+            against that id (stored on the estimator as `model_id_`, and
+            persisted across runs by `save_model()`) are served from the cache
+            instead of re-fitting.
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
@@ -332,16 +278,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         self.client_options = client_options or ClientOptions()
 
         self._last_trace_id = None
-        self._last_train_X = None
         self._last_meta = {}
         self._fit_count = 0
-
-    # NOTE: Some "*_" variables could be assigned before a fit succeeded (eg. it
-    # used to be the case for `classes_`). We defensively override sklearn using
-    # "*_" variables to determine fitted state and check whether `model_id_` is set
-    # as single-source-of-truth instead.
-    def __sklearn_is_fitted__(self) -> bool:
-        return getattr(self, "model_id_", None) is not None
 
     def fit(
         self,
@@ -397,7 +335,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             #  2. second fit() -> fails, only classes_ assigned, new classes_ but old model_id_
             # Now we make sure to assign classes_ only after a successful fit.
             self.classes_ = classes
-            self._last_train_X = X_clean
+            self._n_train_rows = X.shape[0]
             self._fit_count += 1
         else:
             raise NotImplementedError(
@@ -436,9 +374,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         # we capture the original user-provided values.
         predict_params = self._get_predict_params(locals())
 
-        # An estimator whose `model_id_` was assigned directly (reusing a
-        # previous fit) can reach `predict` without ever calling `fit()`, so
-        # `init()` (which authorizes the HTTP client) must run here too. It
+        # An estimator restored by `load_model()` (or whose `model_id_` was
+        # assigned directly) can reach `predict` without ever calling `fit()`,
+        # so `init()` (which authorizes the HTTP client) must run here too. It
         # short-circuits after the first successful call.
         init()
         check_is_fitted(self)
@@ -453,9 +391,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             X,
             output_type,
             tabpfn_config.model_path,
-            train_rows=self._last_train_X.shape[0]
-            if self._last_train_X is not None
-            else None,
+            train_rows=self._n_train_rows,
         )
         X_clean = _clean_text_features(X)
 
@@ -487,7 +423,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
             # Nones are treated as unset
             if k in ClassifierTabPFNConfig.model_fields and v is not None
         }
-        cfg["model_path"] = self._model_name_to_path("classification", self.model_path)
         return ClassifierTabPFNConfig.model_validate(cfg)
 
     def _get_predict_params(self, kwargs: dict[str, Any]) -> ClassifierPredictParams:
@@ -528,18 +463,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator, TabPFNModelSelection):
         return classes
 
 
-class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
+class TabPFNRegressor(RegressorMixin, ModelPersistenceMixin, TabPFNModelSelection):
     _AVAILABLE_MODELS = [
-        DEFAULT_V3_MODEL_PATH,
-        DEFAULT_V2_6_MODEL_PATH,
-        DEFAULT_V2_5_MODEL_PATH,
+        *_DEFAULT_MODEL_NAMES,
         "v2.5_low-skew",
         "v2.5_quantiles",
         "v2.5_real-variant",
         "v2.5_real",
         "v2.5_small-samples",
         "v2.5_variant",
-        DEFAULT_V2_MODEL_PATH,
         "auto",
         # Deprecated alias for "auto"; kept for backward compat with users and
         # downstream packages (e.g. tabpfn-time-series) that read this list.
@@ -549,12 +481,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         "09gpqh39",
         "wyl4o83o",
     ]
-
-    # The server-side fitted-train-set id predictions run against. Written by
-    # `fit()` (the id the server returns) or assigned directly to reuse a
-    # previous fit; absent on unfitted instances, which is what makes
-    # `__sklearn_is_fitted__` work.
-    model_id_: UUID
 
     def __init__(
         self,
@@ -631,8 +557,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             predict re-runs the forward pass from the uploaded train set.
             "fit_with_cache" additionally builds and persists a server-side KV
             cache keyed by the resulting fitted-train-set id; later predicts
-            against that id (stored on the estimator as `model_id_`) are
-            served from the cache instead of re-fitting.
+            against that id (stored on the estimator as `model_id_`, and
+            persisted across runs by `save_model()`) are served from the cache
+            instead of re-fitting.
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
@@ -688,12 +615,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         self.client_options = client_options or ClientOptions()
 
         self._last_trace_id = None
-        self._last_train_X = None
         self._last_meta = {}
         self._fit_count = 0
-
-    def __sklearn_is_fitted__(self) -> bool:
-        return getattr(self, "model_id_", None) is not None
 
     def fit(
         self,
@@ -738,7 +661,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
                 )
 
             self.model_id_ = cast(UUID, run_task(fit_task, "Fitting"))
-            self._last_train_X = X_clean
+            self._n_train_rows = X.shape[0]
             self._fit_count += 1
         else:
             raise NotImplementedError(
@@ -782,9 +705,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
         # we capture the original user-provided values.
         predict_params = self._get_predict_params(locals())
 
-        # An estimator whose `model_id_` was assigned directly (reusing a
-        # previous fit) can reach `predict` without ever calling `fit()`, so
-        # `init()` (which authorizes the HTTP client) must run here too. It
+        # An estimator restored by `load_model()` (or whose `model_id_` was
+        # assigned directly) can reach `predict` without ever calling `fit()`,
+        # so `init()` (which authorizes the HTTP client) must run here too. It
         # short-circuits after the first successful call.
         init()
         check_is_fitted(self)
@@ -809,18 +732,16 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             X,
             output_type,
             tabpfn_config.model_path,
-            train_rows=self._last_train_X.shape[0]
-            if self._last_train_X is not None
-            else None,
+            train_rows=self._n_train_rows,
             split_full_output=chunked,
         )
 
         # NOTE(@trace_id)
-        # If this instance reuses a previous fit via a directly-assigned
-        # `model_id_` we assume this is a fit-once-predict-many scenario, so we
-        # won't try to link all operations under the same trace. In this case we
-        # will let the server create a new trace for every prediction or use the
-        # user-supplied one.
+        # If this instance reuses a previous fit (restored by `load_model()` or
+        # via a directly-assigned `model_id_`) we assume this is a
+        # fit-once-predict-many scenario, so we won't try to link all operations
+        # under the same trace. In this case we will let the server create a new
+        # trace for every prediction or use the user-supplied one.
         if (
             "sentry-trace" not in self.client_options.headers
             and self._last_trace_id is not None
@@ -890,7 +811,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator, TabPFNModelSelection):
             # Nones are treated as unset
             if k in RegressorTabPFNConfig.model_fields and v is not None
         }
-        cfg["model_path"] = self._model_name_to_path("regression", self.model_path)
         return RegressorTabPFNConfig.model_validate(cfg)
 
     def _get_predict_params(self, kwargs: dict[str, Any]) -> RegressorPredictParams:
@@ -946,7 +866,7 @@ def _limit_for_model_path(model_path: str | None) -> ModelLimit | None:
     api_settings = ServiceClient.get_settings()
     if api_settings is None:
         return None
-    if not model_path:
+    if model_path in _AUTO_MODEL_PATH_ALIASES:
         return api_settings.model_limits[api_settings.default_model_version]
     model_version = model_version_from_path(model_path)
     return model_limit_from_version(model_version, api_settings.model_limits)

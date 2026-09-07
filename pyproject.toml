@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tabpfn-client"
-version = "0.5.0"
+version = "0.5.3"
 requires-python = ">=3.10"
 
 description = "API access for TabPFN: Foundation model for tabular data"
@@ -46,6 +46,9 @@ dependencies = [
 
 [project.optional-dependencies]
 sagemaker = ["boto3>=1.34"]
+viz = [
+    "matplotlib>=3.7.0,<=3.11.1",
+]
 
 [project.urls]
 documentation = "https://priorlabs.ai/docs"
@@ -69,11 +72,12 @@ norecursedirs = [
 
 [dependency-groups]
 dev = [
+    "matplotlib>=3.7.0,<=3.11.1",
     "respx==0.23.1",
     "pytest==9.0.3",
     "ruff==0.16.5",
     "licensecheck==2025.1.0",
-    "basedpyright~=1.39.9"
+    "basedpyright~=1.39.9",
 ]
 
 [tool.changelog-bot.towncrier_changelog]
