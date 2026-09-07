@@ -1,5 +1,6 @@
 import json
 from types import SimpleNamespace
+from typing import Literal, cast
 from unittest.mock import Mock
 
 import httpx
@@ -71,13 +72,20 @@ def test_estimate_posts_only_shape_and_options(transport, as_frame):
 @pytest.mark.parametrize(
     "operation", ["thinking_fit", "thinking_predict", "cache_predict"]
 )
-def test_options_and_shape_without_reading_array_values(transport, operation):
+def test_options_and_shape_without_reading_array_values(
+    transport,
+    operation: Literal["thinking_fit", "thinking_predict", "cache_predict"],
+):
     transport.side_effect = quote
     # No contents, array conversion, or upload methods exist on this object.
-    X = SimpleNamespace(shape=(100000, 100))
-    kwargs = {"thinking_effort": "high"} if operation == "thinking_fit" else {}
+    X = cast(np.ndarray, SimpleNamespace(shape=(100000, 100)))
+    effort: Literal["high"] | None = "high" if operation == "thinking_fit" else None
     estimate_cost(
-        X, model_version="v3.5", operation=operation, n_estimators=4, **kwargs
+        X,
+        model_version="v3.5",
+        operation=operation,
+        n_estimators=4,
+        thinking_effort=effort,
     )
     body = json.loads(transport.call_args.args[0].content)
     assert body == {
@@ -87,7 +95,7 @@ def test_options_and_shape_without_reading_array_values(transport, operation):
         "operation": operation,
         "model_version": "v3.5",
         "n_estimators": 4,
-        **kwargs,
+        **({"thinking_effort": "high"} if operation == "thinking_fit" else {}),
     }
 
 
