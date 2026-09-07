@@ -332,6 +332,31 @@ We're building the future of tabular machine learning and would love your involv
 
 Each API request consumes usage credits; the cost grows with the number of rows and columns in your dataset. You can check your current usage at [platform.priorlabs.ai/account/usage](https://platform.priorlabs.ai/account/usage).
 
+### Estimate an operation before running it
+
+```python
+from tabpfn_client import estimate_cost
+
+quote = estimate_cost(X_train, X_test, model_version="v3", n_estimators=8)
+print(quote.estimated_cost, quote.pricing_version)
+print(quote.inputs)  # dimensions and resolved server defaults
+
+fit_quote = estimate_cost(X_train, operation="thinking_fit", thinking_effort="medium")
+```
+
+This authenticated call sends only dataset dimensions and settings. It does not
+upload feature values or consume quota. Quota v3 must be enabled on the server.
+Omitted model version and estimator count use the server's defaults. Quotes use
+raw feature counts before preprocessing; `quota_v3` costs are tokens and
+`legacy_v2` costs are cell-prediction credits.
+
+Operations are `predict`, `thinking_fit`, `thinking_predict`, and `cache_predict`.
+Thinking fit takes no test dataset and defaults to medium effort. For Thinking
+prediction, supply the fitted model's version and actual per-base-estimator
+count. Cache quotes assume a hit; a fallback or different fitted estimator count
+can change the final charge. A quote does not guarantee dataset eligibility or
+model access. There is no local fallback formula when the server cannot quote.
+
 ### Monitoring Usage
 
 Track your API usage through response headers:

@@ -40,6 +40,8 @@ from omegaconf import DictConfig, OmegaConf
 from tabpfn_common_utils.utils import Singleton
 from tabpfn_client.api_models import (
     GetSettingsResponse,
+    EstimateCostRequest,
+    EstimateCostResponse,
     TabPFNSystem,
     PrepareTrainSetUploadRequest,
     PrepareTrainSetUploadResponse,
@@ -1261,6 +1263,18 @@ class ServiceClient(Singleton):
         )
 
         cls._raise_on_error(response, "delete_user_account")
+
+    @classmethod
+    def estimate_cost(
+        cls, req: EstimateCostRequest, *, access_token: str
+    ) -> EstimateCostResponse:
+        """Quote one operation using dimensions only; never upload or reserve quota."""
+        response = cls.httpx_client.post(
+            "/tabpfn/estimate_cost",
+            json=req.model_dump(mode="json", exclude_none=True),
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        return cls._validate_response(response, "estimate_cost", EstimateCostResponse)
 
     @classmethod
     def get_api_usage(cls, access_token: str):
