@@ -107,8 +107,8 @@ class TabPFNClassifier(ClassifierMixin, ModelPersistenceMixin, TabPFNModelSelect
     """Hosted TabPFN classifier with a scikit-learn-compatible interface.
 
     Usage guidance:
-        - TabPFN-3 supports up to 1,000,000 rows, subject to feature count and
-          model/API limits.
+        - TabPFN-3 and later versions support up to 1,000,000 rows, subject to
+          feature count and model/API limits.
         - For large datasets, use per-estimator subsampling,
           e.g. ``inference_config={"SUBSAMPLE_SAMPLES": 100_000}``.
         - Pass raw pandas DataFrames to ``fit`` and ``predict``. Categorical
@@ -480,8 +480,8 @@ class TabPFNRegressor(RegressorMixin, ModelPersistenceMixin, TabPFNModelSelectio
     """Hosted TabPFN regressor with a scikit-learn-compatible interface.
 
     Usage guidance:
-        - TabPFN-3 supports up to 1,000,000 rows, subject to feature count and
-          model/API limits.
+        - TabPFN-3 and later versions support up to 1,000,000 rows, subject to
+          feature count and model/API limits.
         - For large datasets, use per-estimator subsampling,
           e.g. ``inference_config={"SUBSAMPLE_SAMPLES": 100_000}``.
         - Pass raw pandas DataFrames to ``fit`` and ``predict``. Categorical
