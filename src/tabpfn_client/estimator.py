@@ -109,12 +109,12 @@ class TabPFNClassifier(ClassifierMixin, ModelPersistenceMixin, TabPFNModelSelect
     Usage guidance:
         - TabPFN-3 supports up to 1,000,000 rows, subject to feature count and
           model/API limits.
-        - For large datasets or limited memory, use per-estimator subsampling,
-          e.g. ``inference_config={"SUBSAMPLE_SAMPLES": 50_000}``.
+        - For large datasets, use per-estimator subsampling,
+          e.g. ``inference_config={"SUBSAMPLE_SAMPLES": 100_000}``.
         - Pass raw pandas DataFrames to ``fit`` and ``predict``. Categorical
-          strings/categories and missing feature values are handled automatically;
-          no manual integer/one-hot encoding, imputation, scaling, or outlier
-          removal is needed.
+          strings/categories, raw text, and missing feature values are handled
+          automatically; no manual integer/one-hot encoding, imputation, scaling,
+          or outlier removal is needed.
     """
 
     _AVAILABLE_MODELS = [
@@ -482,12 +482,12 @@ class TabPFNRegressor(RegressorMixin, ModelPersistenceMixin, TabPFNModelSelectio
     Usage guidance:
         - TabPFN-3 supports up to 1,000,000 rows, subject to feature count and
           model/API limits.
-        - For large datasets or limited memory, use per-estimator subsampling,
-          e.g. ``inference_config={"SUBSAMPLE_SAMPLES": 50_000}``.
+        - For large datasets, use per-estimator subsampling,
+          e.g. ``inference_config={"SUBSAMPLE_SAMPLES": 100_000}``.
         - Pass raw pandas DataFrames to ``fit`` and ``predict``. Categorical
-          strings/categories and missing feature values are handled automatically;
-          no manual integer/one-hot encoding, imputation, scaling, or outlier
-          removal is needed.
+          strings/categories, raw text, and missing feature values are handled
+          automatically; no manual integer/one-hot encoding, imputation, scaling,
+          or outlier removal is needed.
     """
 
     _AVAILABLE_MODELS = [
