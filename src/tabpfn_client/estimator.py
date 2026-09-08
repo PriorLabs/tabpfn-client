@@ -104,6 +104,19 @@ class TabPFNModelSelection:
 
 
 class TabPFNClassifier(ClassifierMixin, ModelPersistenceMixin, TabPFNModelSelection):
+    """Hosted TabPFN classifier with a scikit-learn-compatible interface.
+
+    Usage guidance:
+        - TabPFN-3 and later versions support up to 1,000,000 rows, subject to
+          feature count and model/API limits.
+        - For large datasets, use per-estimator subsampling,
+          e.g. ``inference_config={"SUBSAMPLE_SAMPLES": 100_000}``.
+        - Pass raw pandas DataFrames to ``fit`` and ``predict``. Categorical
+          strings/categories, raw text, and missing feature values are handled
+          automatically; no manual integer/one-hot encoding, imputation, scaling,
+          or outlier removal is needed.
+    """
+
     _AVAILABLE_MODELS = [
         # Downstream packages (e.g. tabpfn-time-series) read this list in order
         # to parse model names by substring, so "v2.5_default-2" must precede "v2.5_default".
@@ -464,6 +477,19 @@ class TabPFNClassifier(ClassifierMixin, ModelPersistenceMixin, TabPFNModelSelect
 
 
 class TabPFNRegressor(RegressorMixin, ModelPersistenceMixin, TabPFNModelSelection):
+    """Hosted TabPFN regressor with a scikit-learn-compatible interface.
+
+    Usage guidance:
+        - TabPFN-3 and later versions support up to 1,000,000 rows, subject to
+          feature count and model/API limits.
+        - For large datasets, use per-estimator subsampling,
+          e.g. ``inference_config={"SUBSAMPLE_SAMPLES": 100_000}``.
+        - Pass raw pandas DataFrames to ``fit`` and ``predict``. Categorical
+          strings/categories, raw text, and missing feature values are handled
+          automatically; no manual integer/one-hot encoding, imputation, scaling,
+          or outlier removal is needed.
+    """
+
     _AVAILABLE_MODELS = [
         *_DEFAULT_MODEL_NAMES,
         "v2.5_low-skew",
