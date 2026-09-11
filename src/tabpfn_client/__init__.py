@@ -10,6 +10,7 @@ from tabpfn_client.config import (
     set_access_token,
     get_api_usage,
 )
+from tabpfn_client.cost import estimate_cost
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
 from tabpfn_client.errors import FittedModelNotFoundError
 from tabpfn_client.interactive_auth import InteractiveLoginError, interactive_login
@@ -31,6 +32,7 @@ __all__ = [
     "get_access_token",
     "set_access_token",
     "get_api_usage",
+    "estimate_cost",
     "interactive_login",
     "InteractiveLoginError",
 ]

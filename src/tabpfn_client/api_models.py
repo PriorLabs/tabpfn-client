@@ -336,3 +336,26 @@ class SubmitFitJobRequest(BaseModel):
 
 class SubmitFitJobResponse(BaseModel):
     fitted_train_set_id: UUID
+
+
+class QuotaOperation(str, Enum):
+    PREDICT = "predict"
+    THINKING_PREDICT = "thinking_predict"
+    THINKING_FIT = "thinking_fit"
+    CACHE_PREDICT = "cache_predict"
+
+
+class EstimateCostRequest(BaseModel):
+    train_rows: int
+    raw_columns: int
+    test_rows: int | None = None
+    model_version: Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")] | None = None
+    operation: Annotated[QuotaOperation | UnknownEnum, Field(union_mode="left_to_right")] | None = None
+    n_estimators: int | None = None
+    thinking_effort: Annotated[ThinkingEffort | str, Field(union_mode="left_to_right")] | None = None
+
+
+class EstimateCostResponse(BaseModel):
+    estimated_cost: int
+    pricing_version: str
+    inputs: EstimateCostRequest
