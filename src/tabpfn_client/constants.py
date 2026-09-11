@@ -3,6 +3,9 @@
 
 from pathlib import Path
 
+# Re-export: `tabpfn_client.constants.ModelVersion` is public API.
+from tabpfn_client.api_models import ModelVersion as ModelVersion
+
 CACHE_DIR = Path(__file__).parent.resolve() / ".tabpfn"
 
 URL_TABPFN_CLIENT_GITHUB_ISSUES = "https://github.com/priorlabs/tabpfn-client/issues"
