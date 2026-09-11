@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-11
+
+### Added
+
+- `TabPFNClassifier` and `TabPFNRegressor` gained `save_model()` and `load_model()`, which persist a fitted estimator as a small JSON record — the id of the server-side fit, the hyperparameters, the class labels and the training-set size — so a later run, or another machine authenticated with the same account, can predict against the same fit without fitting again. `save_model()` also returns the record as a dict for storing elsewhere. When the server no longer has the fit, for instance after it was deleted with `UserDataClient`, `predict()` raises the new `FittedModelNotFoundError`. ([#376](https://github.com/PriorLabs/tabpfn-client/pull/376))
+
+### Changed
+
+- Clarify estimator usage guidance for TabPFN-3 and later versions, covering dataset capacity, subsampling, and automatic handling of categorical values, raw text, and missing feature values without manual preprocessing. ([#383](https://github.com/PriorLabs/tabpfn-client/pull/383))
+- `fit()` and `predict()` no longer print a progress spinner to stdout, `init()` no longer announces that it is reusing a cached token, and routine messages such as "Test set already exists, skipping upload." are logged at DEBUG instead of WARNING. `TABPFN_CLIENT_CI_MODE`, which only disabled the spinner, is removed. ([#385](https://github.com/PriorLabs/tabpfn-client/pull/385))
+
+### Fixed
+
+- Restore `from tabpfn_client.constants import ModelVersion`, which broke when the enum moved to `tabpfn_client.api_models`. ([#384](https://github.com/PriorLabs/tabpfn-client/pull/384))
+
+
 ## [0.5.3] - 2026-09-05
 
 ### Fixed
