@@ -355,10 +355,6 @@ class PromptAgent:
             )
 
     @classmethod
-    def prompt_reusing_existing_token(cls):
-        notify("Found existing access token, reusing it for authentication.")
-
-    @classmethod
     def prompt_retrieved_greeting_messages(cls, greeting_messages: list[str]):
         for message in greeting_messages:
             notify(cls.indent(message))
