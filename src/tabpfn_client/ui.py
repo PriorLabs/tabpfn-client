@@ -9,14 +9,6 @@ from collections.abc import Generator
 from contextlib import contextmanager
 
 from rich.console import Console
-from rich.panel import Panel
-from rich.progress import (
-    BarColumn,
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-    TimeElapsedColumn,
-)
 
 
 def _should_use_color() -> bool:
@@ -30,17 +22,6 @@ def _should_use_color() -> bool:
 
 
 console = Console(soft_wrap=False, highlight=True, force_terminal=_should_use_color())
-
-
-def header(title: str, subtitle: str | None = None) -> None:
-    """Render a section header."""
-
-    console.print(
-        Panel.fit(
-            title if not subtitle else f"[bold]{title}[/bold]\n[dim]{subtitle}[/dim]"
-        )
-    )
-
 
 logger = logging.getLogger(__name__)
 
@@ -69,26 +50,10 @@ def fail(message: str) -> None:
     console.print(f"[bold red]{message}[/bold red]")
 
 
-def info(message: str) -> None:
-    console.print(f"[blue]{message}[/blue]")
-
-
 @contextmanager
 def status(message: str) -> Generator[None]:
     with console.status(f"[bold]{message}[/bold]"):
         yield
-
-
-def progress_bar(description: str = "Working...") -> Progress:
-    return Progress(
-        SpinnerColumn(),
-        TextColumn("[bold]{task.description}"),
-        BarColumn(),
-        TextColumn("{task.completed}/{task.total}"),
-        TimeElapsedColumn(),
-        console=console,
-        transient=True,
-    )
 
 
 # =============================
@@ -103,10 +68,6 @@ _PRIOR_LABS_ASCII = r"""
 ###       ###   ##   ###  #########  ###   ###       ########   ###  ###   ########  ########                                                     
 """
 
-_PRIOR_LABS_ASCII_SMALL = r"""
-[ PRIOR LABS ]
-"""
-
 
 def print_logo(subtitle=None) -> None:
     """Print the large Prior Labs ASCII logo with optional subtitle."""
@@ -115,22 +76,12 @@ def print_logo(subtitle=None) -> None:
         console.print(f"[dim]{subtitle}[/dim]", end="\n\n")
 
 
-def print_logo_small(subtitle=None) -> None:
-    """Print a small Prior Labs ASCII banner with optional subtitle."""
-    console.print(_PRIOR_LABS_ASCII_SMALL, style="bold blue")
-    if subtitle:
-        console.print(f"[dim]{subtitle}[/dim]")
-
-
 __all__ = [
     "console",
     "fail",
-    "header",
+    "notify",
     "print_logo",
-    "print_logo_small",
-    "progress_bar",
     "status",
     "success",
-    "info",
     "warn",
 ]
