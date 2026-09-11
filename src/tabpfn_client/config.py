@@ -68,18 +68,16 @@ def init(use_server=True):
         except ConnectError:
             raise CONNECTION_ERROR
 
-        if is_valid_token:
-            PromptAgent.prompt_reusing_existing_token()
-        elif unverified_token is not None:
-            # The token is well-formed but the account's email is unverified,
-            # which no token can work around.
-            raise RuntimeError(
-                "Your TabPFN account's email address is not verified.\n"
-                "Check your inbox for the verification email, or sign in at\n"
-                f"  {ServiceClient.server_config.gui_url}\n"
-                "to request a new one, then run your script again."
-            )
-        else:
+        if not is_valid_token:
+            if unverified_token is not None:
+                # The token is well-formed but the account's email is unverified,
+                # which no token can work around.
+                raise RuntimeError(
+                    "Your TabPFN account's email address is not verified.\n"
+                    "Check your inbox for the verification email, or sign in at\n"
+                    f"  {ServiceClient.server_config.gui_url}\n"
+                    "to request a new one, then run your script again."
+                )
             if not UserAuthenticationClient.is_accessible_connection():
                 raise CONNECTION_ERROR
             # Never prompt from the default path: this is a library, so a

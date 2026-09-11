@@ -211,50 +211,27 @@ class UserDataClient(ServiceClientWrapper, Singleton):
 
     @classmethod
     def get_data_summary(cls) -> dict:
-        try:
-            summary = ServiceClient.get_data_summary()
-        except RuntimeError as e:
-            logging.error(f"Failed to get data summary: {e}")
-            raise e
-
-        return summary
+        return ServiceClient.get_data_summary()
 
     @classmethod
     def download_all_data(cls, save_dir: Path = Path(".")) -> Path:
-        try:
-            saved_path = ServiceClient.download_all_data(save_dir)
-        except RuntimeError as e:
-            logging.error(f"Failed to download data: {e}")
-            raise e
-
+        saved_path = ServiceClient.download_all_data(save_dir)
         if saved_path is None:
             raise RuntimeError("Failed to download data.")
 
-        logging.info(f"Data saved to {saved_path}")
+        logger.info(f"Data saved to {saved_path}")
         return saved_path
 
     @classmethod
     def delete_dataset(cls, dataset_uid: str) -> list[str]:
-        try:
-            deleted_datasets = ServiceClient.delete_dataset(dataset_uid)
-        except RuntimeError as e:
-            logging.error(f"Failed to delete dataset: {e}")
-            raise e
-
-        logging.info(f"Deleted datasets: {deleted_datasets}")
-
+        deleted_datasets = ServiceClient.delete_dataset(dataset_uid)
+        logger.info(f"Deleted datasets: {deleted_datasets}")
         return deleted_datasets
 
     @classmethod
     def delete_all_datasets(cls) -> list[str]:
-        try:
-            deleted_datasets = ServiceClient.delete_all_datasets()
-        except RuntimeError as e:
-            logging.error(f"Failed to delete all datasets: {e}")
-            raise e
-
-        logging.info(f"Deleted datasets: {deleted_datasets}")
-
+        deleted_datasets = ServiceClient.delete_all_datasets()
+        logger.info(f"Deleted datasets: {deleted_datasets}")
         return deleted_datasets
 
     @classmethod
@@ -266,12 +243,7 @@ class UserDataClient(ServiceClientWrapper, Singleton):
             logger.info("Account deletion cancelled — confirmation phrase not entered.")
             return
 
-        try:
-            ServiceClient.delete_user_account()
-        except RuntimeError as e:
-            logging.error(f"Failed to delete user account: {e}")
-            raise e
-
+        ServiceClient.delete_user_account()
         PromptAgent.prompt_account_deleted()
 
 

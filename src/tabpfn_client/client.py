@@ -15,7 +15,6 @@ import numpy as np
 import re
 import struct
 import time
-import traceback
 import warnings
 from pydantic import BaseModel, ValidationError
 from typing import Any, cast, Mapping, NoReturn
@@ -361,7 +360,7 @@ class ServiceClient(Singleton):
         )
 
         if isinstance(prepare_resp, DuplicateTrainSetErrorResponse):
-            logger.warning("Train set already exists, skipping upload.")
+            logger.debug("Train set already exists, skipping upload.")
         else:
             with ThreadPoolExecutor(max_workers=2) as pool:
                 futures = [
@@ -708,7 +707,7 @@ class ServiceClient(Singleton):
             raise FittedModelNotFoundError(message)
 
         if isinstance(prepare_resp, DuplicateTestSetErrorResponse):
-            logger.warning("Test set already exists, skipping upload.")
+            logger.debug("Test set already exists, skipping upload.")
         else:
             cls._upload_to_gcs(
                 "x_test",
@@ -989,9 +988,8 @@ class ServiceClient(Singleton):
             if response.status_code == 200:
                 found_valid_connection = True
 
-        except httpx.ConnectError as e:
-            logger.error(f"Failed to connect to the server with error: {e}")
-            traceback.print_exc()
+        except httpx.ConnectError:
+            logger.debug("Failed to connect to the server", exc_info=True)
             found_valid_connection = False
 
         return found_valid_connection

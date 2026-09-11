@@ -4,13 +4,10 @@
 from __future__ import annotations
 
 import logging
-import sys
-import time
+import warnings
 from uuid import uuid4
-from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Literal, cast, overload
+from typing import Any, Literal, cast, overload
 from typing_extensions import Self
-from uuid import UUID
 
 import numpy as np
 import pandas as pd
@@ -45,7 +42,6 @@ from tabpfn_client.api_models import (
 )
 from tabpfn_client.models import ApiMode, TabPFNConfig, FitModeLiteral
 from tabpfn_client.persistence import ModelPersistenceMixin
-from tabpfn_client.options import get_opts
 
 try:
     from torch import Tensor  # type: ignore
@@ -329,19 +325,16 @@ class TabPFNClassifier(ClassifierMixin, ModelPersistenceMixin, TabPFNModelSelect
 
             self._last_trace_id = self.client_options.headers["sentry-trace"]
 
-            def fit_task() -> UUID:
-                return InferenceClient.fit(
-                    X_clean,
-                    y,
-                    task_config=task_config,
-                    tabpfn_systems=tabpfn_systems,
-                    thinking_config=thinking_config,
-                    api_mode=self.api_mode,
-                    client_options=self.client_options,
-                    description=description,
-                )
-
-            self.model_id_ = cast(UUID, run_task(fit_task, "Fitting"))
+            self.model_id_ = InferenceClient.fit(
+                X_clean,
+                y,
+                task_config=task_config,
+                tabpfn_systems=tabpfn_systems,
+                thinking_config=thinking_config,
+                api_mode=self.api_mode,
+                client_options=self.client_options,
+                description=description,
+            )
             # NOTE: Previously classes were assigned in-place before a fit succeeded,
             # consider this failure mode:
             #  1. first fit() -> succeeds, model_id_ and classes_ are assigned
@@ -414,19 +407,16 @@ class TabPFNClassifier(ClassifierMixin, ModelPersistenceMixin, TabPFNModelSelect
         ):
             self.client_options.headers["sentry-trace"] = self._last_trace_id
 
-        def predict_task() -> PredictionResult:
-            return InferenceClient.predict(
-                X_clean,
-                fitted_train_set_id=self.model_id_,
-                task_config=task_config,
-                client_options=self.client_options,
-            )
-
-        result = run_task(predict_task, "Predicting")
+        result = InferenceClient.predict(
+            X_clean,
+            fitted_train_set_id=self.model_id_,
+            task_config=task_config,
+            client_options=self.client_options,
+        )
         # Unpack and store metadata
         self._last_meta = result.metadata
 
-        return result.y_pred
+        return cast("np.ndarray", result.y_pred)
 
     def _get_tabpfn_config(self) -> ClassifierTabPFNConfig:
         init_params = self.get_params()
@@ -674,19 +664,16 @@ class TabPFNRegressor(RegressorMixin, ModelPersistenceMixin, TabPFNModelSelectio
 
             self._last_trace_id = self.client_options.headers["sentry-trace"]
 
-            def fit_task() -> UUID:
-                return InferenceClient.fit(
-                    X_clean,
-                    y,
-                    task_config=task_config,
-                    tabpfn_systems=tabpfn_systems,
-                    thinking_config=thinking_config,
-                    api_mode=self.api_mode,
-                    client_options=self.client_options,
-                    description=description,
-                )
-
-            self.model_id_ = cast(UUID, run_task(fit_task, "Fitting"))
+            self.model_id_ = InferenceClient.fit(
+                X_clean,
+                y,
+                task_config=task_config,
+                tabpfn_systems=tabpfn_systems,
+                thinking_config=thinking_config,
+                api_mode=self.api_mode,
+                client_options=self.client_options,
+                description=description,
+            )
             self._n_train_rows = X.shape[0]
             self._fit_count += 1
         else:
@@ -775,17 +762,12 @@ class TabPFNRegressor(RegressorMixin, ModelPersistenceMixin, TabPFNModelSelectio
             self.client_options.headers["sentry-trace"] = self._last_trace_id
 
         def predict_rows(X_rows: Any) -> PredictionResult:
-            X_clean = _clean_text_features(X_rows)
-
-            def predict_task() -> PredictionResult:
-                return InferenceClient.predict(
-                    X_clean,
-                    fitted_train_set_id=self.model_id_,
-                    task_config=task_config,
-                    client_options=self.client_options,
-                )
-
-            return run_task(predict_task, "Predicting")
+            return InferenceClient.predict(
+                _clean_text_features(X_rows),
+                fitted_train_set_id=self.model_id_,
+                task_config=task_config,
+                client_options=self.client_options,
+            )
 
         if chunked:
             rows_per_call = cast(int, rows_per_call)
@@ -821,9 +803,10 @@ class TabPFNRegressor(RegressorMixin, ModelPersistenceMixin, TabPFNModelSelectio
                     borders=torch.tensor(full["borders"])
                 )
             except ImportError:
-                logger.warning(
+                warnings.warn(
                     "Optional dependencies 'tabpfn' and 'torch' are required to "
-                    "construct the criterion when output_type='full'. Skipping criterion."
+                    "construct the criterion when output_type='full'. Skipping criterion.",
+                    stacklevel=2,
                 )
             return full
 
@@ -1048,34 +1031,6 @@ def _clean_text_features(X):
     if isinstance(data, np.ndarray):
         return df.to_numpy()
     return df
-
-
-def run_task(task: Callable, message: str, with_spinner: bool = True) -> Any:
-    if not with_spinner or get_opts().TABPFN_CLIENT_CI_MODE:
-        result = task()
-    else:
-        start = time.time()
-        spinner = ["-", "\\", "|", "/"]
-        i = 0
-        minutes = 0
-        seconds = 0
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(task)
-            while not future.done():
-                elapsed = int(time.time() - start)
-                minutes = elapsed // 60
-                seconds = elapsed % 60
-                sys.stdout.write(
-                    f"\r{minutes:02d}:{seconds:02d} {message}... {spinner[i % len(spinner)]}"
-                )
-                sys.stdout.flush()
-                time.sleep(0.2)
-                i += 1
-            result = future.result()
-        # Remove spinner, but keep elapsed time
-        sys.stdout.write(f"\r{minutes:02d}:{seconds:02d} {message}... Done!\n")
-        sys.stdout.flush()
-    return result
 
 
 def _build_fit_task_config(tabpfn_config: TabPFNConfig) -> FitTaskConfig:

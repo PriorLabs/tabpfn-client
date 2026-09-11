@@ -9,7 +9,6 @@ from collections.abc import Generator
 from contextlib import contextmanager
 
 from rich.console import Console
-from rich.logging import RichHandler
 from rich.panel import Panel
 from rich.progress import (
     BarColumn,
@@ -31,24 +30,6 @@ def _should_use_color() -> bool:
 
 
 console = Console(soft_wrap=False, highlight=True, force_terminal=_should_use_color())
-
-
-def setup_logging(verbosity: int = 0) -> None:
-    """Configure logging to emit through Rich with a consistent style."""
-
-    level = logging.WARNING - min(verbosity, 2) * 10
-    logging.basicConfig(
-        level=level,
-        format="%(message)s",
-        handlers=[
-            RichHandler(
-                console=console,
-                rich_tracebacks=True,
-                show_time=False,
-                show_path=False,
-            )
-        ],
-    )
 
 
 def header(title: str, subtitle: str | None = None) -> None:
@@ -148,7 +129,6 @@ __all__ = [
     "print_logo",
     "print_logo_small",
     "progress_bar",
-    "setup_logging",
     "status",
     "success",
     "info",

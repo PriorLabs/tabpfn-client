@@ -604,7 +604,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
         self.assertIsInstance(output["criterion"], DummyFullSupportBarDistribution)
         self.assertEqual(output["criterion"].borders, dummy_output["borders"])
 
-    def test_predict_full_missing_optional_dependencies_logs_warning(self):
+    def test_predict_full_missing_optional_dependencies_warns(self):
         regressor = TabPFNRegressor()
         regressor.model_id_ = UUID("00000000-0000-0000-0000-000000000000")
         regressor._n_train_rows = 5
@@ -625,15 +625,10 @@ class TestTabPFNRegressorInference(unittest.TestCase):
                 return original_import(name, *args, **kwargs)
 
             with patch("builtins.__import__", side_effect=import_side_effect):
-                with self.assertLogs(
-                    "tabpfn_client.estimator", level="WARNING"
-                ) as captured_logs:
+                with self.assertWarnsRegex(UserWarning, "Optional dependencies"):
                     output = regressor.predict(test_X, output_type="full")
 
         self.assertNotIn("criterion", output)
-        self.assertTrue(
-            any("Optional dependencies" in message for message in captured_logs.output)
-        )
 
     def test_predict_with_long_and_comma_text(self):
         """Test predictions with long text (>2500 chars) and text containing commas."""
