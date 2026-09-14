@@ -216,6 +216,9 @@ class ThinkingConfig(BaseModel):
     effort: Annotated[ThinkingEffort | str, Field(union_mode="left_to_right")] | None = None
     timeout_secs: float | None = None
     metric: str | None = None
+    group_col: str | list[str] | None = None
+    time_col: str | None = None
+    group_time_col: str | None = None
 
 
 Prediction = Union[list[Any], list[list[Any]], dict[str, Union[list[Any], list[list[Any]]]]]
