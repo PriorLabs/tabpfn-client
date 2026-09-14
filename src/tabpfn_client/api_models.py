@@ -108,10 +108,31 @@ class ClassifierFitTaskConfig(BaseModel):
 class ClassifierMetadata(BaseModel):
     test_set_num_rows: int
     test_set_num_cols: int
+    n_estimators: int | None = None
+    billing_model_version: str | None = None
+    execution_mode: (
+        Annotated[Literal["standard", "thinking", "cache"] | str, Field(union_mode="left_to_right")]
+        | None
+    ) = None
+    cache_outcome: (
+        Annotated[
+            Literal["not_requested", "hit", "miss", "fallback"] | str, Field(union_mode="left_to_right")
+        ]
+        | None
+    ) = None
     task: Literal[PredictionTask.CLASSIFICATION] = PredictionTask.CLASSIFICATION
     package_version: str
     tabpfn_config: ClassifierTabPFNConfig
     classes: list[str | int | float | bool] | None = None
+
+
+class ModelVersion(str, Enum):
+    V2 = "v2"
+    V2_5 = "v2.5"
+    V2_6 = "v2.6"
+    V3 = "v3"
+    V3_5 = "v3.5"
+    V3_5_FAST = "v3.5-fast"
 
 
 class FileInfo(BaseModel):
@@ -150,14 +171,6 @@ class ModelLimit(BaseModel):
     test_set_max_rows_w_full_regression_output: int
     predict_row_pairs_budget: int
     test_set_max_cells: int
-
-
-class ModelVersion(str, Enum):
-    V2 = "v2"
-    V2_5 = "v2.5"
-    V2_6 = "v2.6"
-    V3 = "v3"
-    V3_5 = "v3.5"
 
 
 class RegressorOutputType(str, Enum):
@@ -207,6 +220,18 @@ class RegressorFitTaskConfig(BaseModel):
 class RegressorMetadata(BaseModel):
     test_set_num_rows: int
     test_set_num_cols: int
+    n_estimators: int | None = None
+    billing_model_version: str | None = None
+    execution_mode: (
+        Annotated[Literal["standard", "thinking", "cache"] | str, Field(union_mode="left_to_right")]
+        | None
+    ) = None
+    cache_outcome: (
+        Annotated[
+            Literal["not_requested", "hit", "miss", "fallback"] | str, Field(union_mode="left_to_right")
+        ]
+        | None
+    ) = None
     task: Literal[PredictionTask.REGRESSION] = PredictionTask.REGRESSION
     package_version: str
     tabpfn_config: RegressorTabPFNConfig
