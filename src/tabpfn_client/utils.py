@@ -24,16 +24,15 @@ def model_version_from_path(model_path: str) -> ModelVersion:
     """Best-effort model version of a `model_path` as the caller passed it.
 
     Accepts checkpoint filenames (`tabpfn-v3-classifier-v3_default.ckpt`) and
-    short names (`v3_default`, `v2.5_real`). Names without a version marker are
-    the v2 hash names (e.g. `gn2p4bpt`), so they resolve to v2. The server is
-    the authority on what a name means; this only picks the limits used for
-    client-side pre-flight checks.
+    short names (`v3_default`, `v3-fast_default`, `v2.5_real`). Names without a
+    version marker are the v2 hash names (e.g. `gn2p4bpt`), so they resolve to
+    v2. The server is the authority on what a name means; this only picks the
+    limits used for client-side pre-flight checks.
     """
     for version in ModelVersion:
         # "v3" cannot shadow "v3.5" here: both patterns need the separator that
         # follows the version, and "v3.5" continues with "." instead.
-        if f"-{version.value}-" in model_path or model_path.startswith(
-            f"{version.value}_"
-        ):
+        prefixes = (f"{version.value}_", f"{version.value}-fast_")
+        if f"-{version.value}-" in model_path or model_path.startswith(prefixes):
             return version
     return ModelVersion.V2
