@@ -124,7 +124,6 @@ class ClassifierMetadata(BaseModel):
     package_version: str
     tabpfn_config: ClassifierTabPFNConfig
     classes: list[str | int | float | bool] | None = None
-    top_k: int | None = None
 
 
 class ModelVersion(str, Enum):
