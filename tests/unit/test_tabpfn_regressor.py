@@ -852,6 +852,7 @@ class TestTabPFNModelSelection(unittest.TestCase):
 
     def test_list_available_models_returns_expected_models(self):
         expected_models = [
+            "v3.5-fast_default",
             "v3.5_default",
             "v3_default",
             "v2.6_default",
