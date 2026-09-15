@@ -31,7 +31,7 @@ from tabpfn_client.api_models import (
     RegressorPredictParams,
     UnknownEnum,
 )
-from tabpfn_client.models import TabPFNConfig
+from tabpfn_client.models import FitResult, TabPFNConfig
 
 
 def _normalize_type(tp: object) -> object:
@@ -177,9 +177,9 @@ class _FakeInferenceServer:
     def __init__(self):
         self.classes_ = np.array([0])
 
-    def fit(self, X, y, *args, **kwargs) -> UUID:
+    def fit_with_result(self, X, y, *args, **kwargs) -> FitResult:
         self.classes_ = np.unique(np.asarray(y))
-        return self._DUMMY_ID
+        return FitResult(fitted_train_set_id=self._DUMMY_ID)
 
     def predict(self, X, *, task_config, **kwargs) -> PredictionResult:
         n_rows = np.asarray(X).shape[0]
@@ -222,7 +222,11 @@ def test_sklearn_compatible(
     try:
         with (
             patch.object(estimator_module, "init", lambda *a, **k: None),
-            patch.object(estimator_module.InferenceClient, "fit", side_effect=fake.fit),
+            patch.object(
+                estimator_module.InferenceClient,
+                "fit_with_result",
+                side_effect=fake.fit_with_result,
+            ),
             patch.object(
                 estimator_module.InferenceClient, "predict", side_effect=fake.predict
             ),

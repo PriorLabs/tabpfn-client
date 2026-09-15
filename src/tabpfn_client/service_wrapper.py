@@ -23,7 +23,7 @@ from tabpfn_client.api_models import (
     TabPFNSystem,
 )
 from tabpfn_client.options import get_opts
-from tabpfn_client.models import ApiMode
+from tabpfn_client.models import ApiMode, FitResult
 
 logger = logging.getLogger(__name__)
 
@@ -272,6 +272,29 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         description: str | None,
     ) -> UUID:
         return ServiceClient.fit(
+            X,
+            y,
+            task_config=task_config,
+            tabpfn_systems=tabpfn_systems,
+            thinking_config=thinking_config,
+            api_mode=api_mode,
+            client_options=client_options,
+            description=description,
+        )
+
+    @classmethod
+    def fit_with_result(
+        cls,
+        X,
+        y,
+        task_config: FitTaskConfig,
+        tabpfn_systems: list[TabPFNSystem],
+        thinking_config: ThinkingConfig | None,
+        api_mode: ApiMode,
+        client_options: ClientOptions | None,
+        description: str | None,
+    ) -> FitResult:
+        return ServiceClient.fit_with_result(
             X,
             y,
             task_config=task_config,

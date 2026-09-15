@@ -11,8 +11,11 @@ import pytest
 from tabpfn_client import config
 from tabpfn_client.client import GetSettingsResponse, ServiceClient
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
+from tabpfn_client.models import FitResult
 from tabpfn_client.service_wrapper import InferenceClient
 from tests.unit.test_tabpfn_classifier import _api_settings_payload
+
+_FIT_RESULT = FitResult(fitted_train_set_id=UUID(int=0))
 
 
 @pytest.fixture(autouse=True)
@@ -39,7 +42,9 @@ def _data() -> tuple[pd.DataFrame, np.ndarray]:
 
 def test_fit_sends_group_columns_in_the_thinking_config():
     X, y = _data()
-    with patch.object(InferenceClient, "fit", return_value="dummy_uid") as mock_fit:
+    with patch.object(
+        InferenceClient, "fit_with_result", return_value=_FIT_RESULT
+    ) as mock_fit:
         TabPFNClassifier(
             thinking_mode=True, group_col="patient", group_time_col="visit"
         ).fit(X, y)
@@ -52,7 +57,9 @@ def test_fit_sends_group_columns_in_the_thinking_config():
 
 def test_regressor_fit_sends_time_col_in_the_thinking_config():
     X, y = _data()
-    with patch.object(InferenceClient, "fit", return_value="dummy_uid") as mock_fit:
+    with patch.object(
+        InferenceClient, "fit_with_result", return_value=_FIT_RESULT
+    ) as mock_fit:
         TabPFNRegressor(thinking_mode=True, time_col="visit").fit(X, y.astype(float))
 
     assert mock_fit.call_args.kwargs["thinking_config"].time_col == "visit"
@@ -86,7 +93,7 @@ def test_regressor_fit_sends_time_col_in_the_thinking_config():
 )
 def test_fit_rejects_invalid_group_columns_before_upload(kwargs, X, match):
     _, y = _data()
-    with patch.object(InferenceClient, "fit") as mock_fit:
+    with patch.object(InferenceClient, "fit_with_result") as mock_fit:
         with pytest.raises(ValueError, match=match):
             TabPFNClassifier(**kwargs).fit(X, y)
     mock_fit.assert_not_called()

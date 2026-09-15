@@ -2,6 +2,7 @@ from enum import Enum
 from dataclasses import dataclass, field
 import numpy as np
 from typing import Any, Literal
+from uuid import UUID
 from tabpfn_client.options import get_opts
 
 from tabpfn_client.api_models import (
@@ -23,9 +24,18 @@ class ApiMode(str, Enum):
 
 
 @dataclass(frozen=True)
+class FitResult:
+    fitted_train_set_id: UUID
+    # Seconds per stage as reported by the server; None when it reports none.
+    timings: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
 class PredictionResult:
     y_pred: np.ndarray | list[np.ndarray] | dict[str, np.ndarray]
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Seconds per stage as reported by the server; None when it reports none.
+    timings: dict[str, Any] | None = None
 
 
 @dataclass

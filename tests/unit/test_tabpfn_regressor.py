@@ -26,6 +26,9 @@ from tabpfn_client.client import (
     ServiceClient,
 )
 from tabpfn_client.api_models import ModelVersion, RegressorTabPFNConfig
+from tabpfn_client.models import FitResult
+
+_DUMMY_FIT = FitResult(fitted_train_set_id=UUID(int=0))
 
 
 def _api_settings_payload(
@@ -813,7 +816,7 @@ class TestTabPFNRegressorInference(unittest.TestCase):
         "predict",
         return_value=PredictionResult(y_pred=np.random.rand(20), metadata={}),
     )
-    @patch.object(InferenceClient, "fit", return_value="dummy_uid")
+    @patch.object(InferenceClient, "fit_with_result", return_value=_DUMMY_FIT)
     def test_cross_validation(self, mock_fit, mock_predict):
         """Test that TabPFNRegressor works with sklearn's cross_val_score."""
 
@@ -918,8 +921,8 @@ class TestTabPFNModelSelection(unittest.TestCase):
             mock_predict.return_value = PredictionResult(
                 y_pred={"mean": np.random.rand(10)}, metadata={}
             )
-            with patch.object(InferenceClient, "fit") as mock_fit:
-                mock_fit.return_value = "dummy_uid"
+            with patch.object(InferenceClient, "fit_with_result") as mock_fit:
+                mock_fit.return_value = _DUMMY_FIT
 
                 # Fit and predict
                 tabpfn.fit(X, y)
@@ -934,7 +937,7 @@ class TestTabPFNModelSelection(unittest.TestCase):
                     expected_model_path,
                 )
 
-    @patch.object(InferenceClient, "fit", return_value="dummy_uid")
+    @patch.object(InferenceClient, "fit_with_result", return_value=_DUMMY_FIT)
     @patch.object(
         InferenceClient,
         "predict",

@@ -99,7 +99,55 @@ class TabPFNModelSelection:
         return cls(**options)
 
 
-class TabPFNClassifier(ClassifierMixin, ModelPersistenceMixin, TabPFNModelSelection):
+class _ServerTimingsMixin:
+    """Server-reported timings of an estimator's last `fit()` and `predict()`."""
+
+    # Class-level default so estimators pickled before this attribute existed load.
+    _last_timings: dict[str, Any] | None = None
+
+    @property
+    def last_predict_timings(self) -> dict[str, Any] | None:
+        """Seconds per stage of the most recent prediction, or None."""
+        return self._last_timings
+
+    def get_timings(self) -> dict[str, dict[str, Any] | None]:
+        """Seconds the server spent on the last fit and the last prediction.
+
+        Returns ``{"fit": ..., "predict": ...}``:
+
+        - ``fit``: ``elapsed_s``, ``queue_wait_s``, ``train_set_transform_s``,
+          ``fit_s``.
+        - ``predict``: ``test_set_transform_queue_wait_s``,
+          ``test_set_transform_s``, ``predict_queue_wait_s``, ``predict_s``.
+          A prediction sent in several requests reports their sum.
+
+        Queue wait is time spent waiting for the server to start the work. An
+        entry is None before the first call, on a model restored with
+        `load_model()`, and when the server does not report timings.
+        """
+        return {
+            "fit": getattr(self, "fit_timings_", None),
+            "predict": self.last_predict_timings,
+        }
+
+
+def _combine_timings(
+    timings: list[dict[str, Any] | None],
+) -> dict[str, Any] | None:
+    """Timings of one prediction sent in several requests: seconds add up per stage."""
+    reported = [t for t in timings if t is not None]
+    if not reported:
+        return None
+    combined: dict[str, Any] = {}
+    for key in dict.fromkeys(k for t in reported for k in t):
+        values = [t[key] for t in reported if t.get(key) is not None]
+        combined[key] = round(sum(values), 3) if values else None
+    return combined
+
+
+class TabPFNClassifier(
+    ClassifierMixin, ModelPersistenceMixin, TabPFNModelSelection, _ServerTimingsMixin
+):
     """Hosted TabPFN classifier with a scikit-learn-compatible interface.
 
     Usage guidance:
@@ -310,6 +358,7 @@ class TabPFNClassifier(ClassifierMixin, ModelPersistenceMixin, TabPFNModelSelect
 
         self._last_trace_id = None
         self._last_meta = {}
+        self._last_timings = None
         self._fit_count = 0
 
     def fit(
@@ -351,7 +400,7 @@ class TabPFNClassifier(ClassifierMixin, ModelPersistenceMixin, TabPFNModelSelect
 
             self._last_trace_id = self.client_options.headers["sentry-trace"]
 
-            self.model_id_ = InferenceClient.fit(
+            fit_result = InferenceClient.fit_with_result(
                 X_clean,
                 y,
                 task_config=task_config,
@@ -361,6 +410,8 @@ class TabPFNClassifier(ClassifierMixin, ModelPersistenceMixin, TabPFNModelSelect
                 client_options=self.client_options,
                 description=description,
             )
+            self.model_id_ = fit_result.fitted_train_set_id
+            self.fit_timings_ = fit_result.timings
             # NOTE: Previously classes were assigned in-place before a fit succeeded,
             # consider this failure mode:
             #  1. first fit() -> succeeds, model_id_ and classes_ are assigned
@@ -448,6 +499,7 @@ class TabPFNClassifier(ClassifierMixin, ModelPersistenceMixin, TabPFNModelSelect
         )
         # Unpack and store metadata
         self._last_meta = result.metadata
+        self._last_timings = result.timings
 
         return cast("np.ndarray", result.y_pred)
 
@@ -499,7 +551,9 @@ class TabPFNClassifier(ClassifierMixin, ModelPersistenceMixin, TabPFNModelSelect
         return classes
 
 
-class TabPFNRegressor(RegressorMixin, ModelPersistenceMixin, TabPFNModelSelection):
+class TabPFNRegressor(
+    RegressorMixin, ModelPersistenceMixin, TabPFNModelSelection, _ServerTimingsMixin
+):
     """Hosted TabPFN regressor with a scikit-learn-compatible interface.
 
     Usage guidance:
@@ -687,6 +741,7 @@ class TabPFNRegressor(RegressorMixin, ModelPersistenceMixin, TabPFNModelSelectio
 
         self._last_trace_id = None
         self._last_meta = {}
+        self._last_timings = None
         self._fit_count = 0
 
     def fit(
@@ -723,7 +778,7 @@ class TabPFNRegressor(RegressorMixin, ModelPersistenceMixin, TabPFNModelSelectio
 
             self._last_trace_id = self.client_options.headers["sentry-trace"]
 
-            self.model_id_ = InferenceClient.fit(
+            fit_result = InferenceClient.fit_with_result(
                 X_clean,
                 y,
                 task_config=task_config,
@@ -733,6 +788,8 @@ class TabPFNRegressor(RegressorMixin, ModelPersistenceMixin, TabPFNModelSelectio
                 client_options=self.client_options,
                 description=description,
             )
+            self.model_id_ = fit_result.fitted_train_set_id
+            self.fit_timings_ = fit_result.timings
             self._n_train_rows = X.shape[0]
             self._fit_count += 1
         else:
@@ -844,6 +901,7 @@ class TabPFNRegressor(RegressorMixin, ModelPersistenceMixin, TabPFNModelSelectio
             # Metadata describes the request, and every chunk shares the same
             # config; the last one stands for the whole prediction.
             self._last_meta = results[-1].metadata
+            self._last_timings = _combine_timings([r.timings for r in results])
             output = _merge_full_outputs(
                 [cast("dict[str, np.ndarray]", r.y_pred) for r in results]
             )
@@ -851,6 +909,7 @@ class TabPFNRegressor(RegressorMixin, ModelPersistenceMixin, TabPFNModelSelectio
             result = predict_rows(X)
             # Unpack and store metadata
             self._last_meta = result.metadata
+            self._last_timings = result.timings
             output = result.y_pred
 
         if output_type == "quantiles" and isinstance(output, np.ndarray):

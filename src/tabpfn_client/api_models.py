@@ -162,6 +162,27 @@ class FitStatus(str, Enum):
     FAILED = "failed"
 
 
+class FitTimings(BaseModel):
+    """Where a fit's time went. Queue wait covers everything outside worker
+    processing: waiting for a free worker and transport.
+    """
+
+    elapsed_s: float = Field(
+        description="Seconds from submission until the fit completed, or until now while it is pending."
+    )
+    queue_wait_s: float | None = Field(
+        default=None, description="Seconds the fit waited for a worker. Set once the fit completed."
+    )
+    train_set_transform_s: float | None = Field(
+        default=None,
+        description="Seconds a worker spent loading, validating and preprocessing the train set. Set once the fit completed.",
+    )
+    fit_s: float | None = Field(
+        default=None,
+        description="Seconds a worker spent fitting the model; 0 when the model is fitted at predict time. Set once the fit completed.",
+    )
+
+
 class ModelLimit(BaseModel):
     train_set_max_rows: int
     train_set_max_cells: int
@@ -171,6 +192,26 @@ class ModelLimit(BaseModel):
     test_set_max_rows_w_full_regression_output: int
     predict_row_pairs_budget: int
     test_set_max_cells: int
+
+
+class PredictTimings(BaseModel):
+    """Where a predict's time went, per stage. Queue wait covers everything
+    outside worker processing: waiting for a free worker and transport. A refit
+    the server triggers counts towards the stage it happened in.
+    """
+
+    test_set_transform_queue_wait_s: float | None = Field(
+        default=None,
+        description="Seconds the test set transform waited for a worker. Null when an earlier request already transformed this test set.",
+    )
+    test_set_transform_s: float | None = Field(
+        default=None,
+        description="Seconds a worker spent loading, validating and preprocessing the test set. Null when an earlier request already transformed this test set.",
+    )
+    predict_queue_wait_s: float | None = Field(
+        default=None, description="Seconds the prediction waited for a worker."
+    )
+    predict_s: float | None = Field(default=None, description="Seconds a worker spent predicting.")
 
 
 class RegressorOutputType(str, Enum):
@@ -284,6 +325,7 @@ class FitRequest(BaseModel):
 class FitResponse(BaseModel):
     fitted_train_set_id: UUID
     status: Annotated[FitStatus | UnknownEnum, Field(union_mode="left_to_right")]
+    timings: FitTimings | None = None
 
 
 class GetFitStatusRequest(BaseModel):
@@ -296,6 +338,7 @@ class GetFitStatusResponse(BaseModel):
     retry_in_secs: float | None = None
     error: str | None = None
     error_code: str | None = None
+    timings: FitTimings | None = None
 
 
 class GetSettingsResponse(BaseModel):
@@ -323,6 +366,7 @@ class PredictRequest(BaseModel):
 class PredictResponse(BaseModel):
     prediction: Prediction
     metadata: Metadata
+    timings: PredictTimings | None = None
 
 
 class PrepareTestSetUploadRequest(BaseModel):
