@@ -156,6 +156,9 @@ class TabPFNClassifier(ClassifierMixin, ModelPersistenceMixin, TabPFNModelSelect
         thinking_effort: ThinkingEffort | None = None,
         thinking_timeout_s: float | None = None,
         thinking_metric: str | None = None,
+        group_col: str | list[str] | None = None,
+        time_col: str | None = None,
+        group_time_col: str | None = None,
         api_mode: ApiMode = ApiMode.AUTO,
         client_options: ClientOptions | None = None,
     ):
@@ -259,6 +262,22 @@ class TabPFNClassifier(ClassifierMixin, ModelPersistenceMixin, TabPFNModelSelect
                 "roc_auc_ovr_micro", "roc_auc_ovr_weighted".
 
             Aliases "acc", "nll", "pac_score" are also accepted.
+        group_col: str or list[str] or None, default=None
+            New since 0.6.0. Column(s) of `X` that identify groups of related
+            rows, e.g. a patient or a session id. During the fit, the rows of
+            one group are never split between training and validation. The fit
+            may also use the other rows of a group to predict a row of it.
+            Requires thinking mode, and `X` passed to `fit` and `predict` must
+            be a pandas DataFrame that holds the column(s).
+        time_col: str or None, default=None
+            New since 0.6.0. Column of `X` that holds time, as datetimes or
+            numbers. During the fit, validation uses contiguous blocks of time.
+            Cannot be combined with `group_col`. Requires thinking mode, and
+            `X` must be a pandas DataFrame that holds the column.
+        group_time_col: str or None, default=None
+            New since 0.6.0. Column of `X` that orders the rows within a group.
+            Requires `group_col` and thinking mode, and `X` must be a pandas
+            DataFrame that holds the column.
         api_mode: ApiMode, default=ApiMode.AUTO
             Controls how the client calls the server.
             SYNC: the client waits for the server to complete the request before returning.
@@ -283,6 +302,9 @@ class TabPFNClassifier(ClassifierMixin, ModelPersistenceMixin, TabPFNModelSelect
         self.thinking_effort = thinking_effort
         self.thinking_timeout_s = thinking_timeout_s
         self.thinking_metric = thinking_metric
+        self.group_col = group_col
+        self.time_col = time_col
+        self.group_time_col = group_time_col
         self.api_mode = api_mode
         self.client_options = client_options or ClientOptions()
 
@@ -309,10 +331,14 @@ class TabPFNClassifier(ClassifierMixin, ModelPersistenceMixin, TabPFNModelSelect
         task_config = _build_fit_task_config(tabpfn_config)
         tabpfn_systems = _build_tabpfn_systems(self.paper_version, thinking_mode)
         thinking_config = _build_thinking_config(
+            X,
             enabled=thinking_mode,
             effort=self.thinking_effort,
             timeout_secs=self.thinking_timeout_s,
             metric=self.thinking_metric,
+            group_col=self.group_col,
+            time_col=self.time_col,
+            group_time_col=self.group_time_col,
         )
 
         if Config.use_server:
@@ -398,6 +424,13 @@ class TabPFNClassifier(ClassifierMixin, ModelPersistenceMixin, TabPFNModelSelect
             output_type,
             tabpfn_config.model_path,
             train_rows=self._n_train_rows,
+        )
+        _validate_group_columns(
+            X,
+            enabled=_resolve_thinking_mode(self.thinking_mode, self.thinking_effort),
+            group_col=self.group_col,
+            time_col=self.time_col,
+            group_time_col=self.group_time_col,
         )
         X_clean = _clean_text_features(X)
 
@@ -517,6 +550,9 @@ class TabPFNRegressor(RegressorMixin, ModelPersistenceMixin, TabPFNModelSelectio
         thinking_effort: ThinkingEffort | None = None,
         thinking_timeout_s: float | None = None,
         thinking_metric: str | None = None,
+        group_col: str | list[str] | None = None,
+        time_col: str | None = None,
+        group_time_col: str | None = None,
         api_mode: ApiMode = ApiMode.AUTO,
         client_options: ClientOptions | None = None,
     ):
@@ -604,6 +640,22 @@ class TabPFNRegressor(RegressorMixin, ModelPersistenceMixin, TabPFNModelSelectio
 
             Aliases "mse", "rmse", "mae", "mape", "smape" are also
             accepted.
+        group_col: str or list[str] or None, default=None
+            New since 0.6.0. Column(s) of `X` that identify groups of related
+            rows, e.g. a patient or a session id. During the fit, the rows of
+            one group are never split between training and validation. The fit
+            may also use the other rows of a group to predict a row of it.
+            Requires thinking mode, and `X` passed to `fit` and `predict` must
+            be a pandas DataFrame that holds the column(s).
+        time_col: str or None, default=None
+            New since 0.6.0. Column of `X` that holds time, as datetimes or
+            numbers. During the fit, validation uses contiguous blocks of time.
+            Cannot be combined with `group_col`. Requires thinking mode, and
+            `X` must be a pandas DataFrame that holds the column.
+        group_time_col: str or None, default=None
+            New since 0.6.0. Column of `X` that orders the rows within a group.
+            Requires `group_col` and thinking mode, and `X` must be a pandas
+            DataFrame that holds the column.
         api_mode: ApiMode, default=ApiMode.AUTO
             Controls how the client calls the server.
             SYNC: the client waits for the server to complete the request before returning.
@@ -627,6 +679,9 @@ class TabPFNRegressor(RegressorMixin, ModelPersistenceMixin, TabPFNModelSelectio
         self.thinking_effort = thinking_effort
         self.thinking_timeout_s = thinking_timeout_s
         self.thinking_metric = thinking_metric
+        self.group_col = group_col
+        self.time_col = time_col
+        self.group_time_col = group_time_col
         self.api_mode = api_mode
         self.client_options = client_options or ClientOptions()
 
@@ -652,10 +707,14 @@ class TabPFNRegressor(RegressorMixin, ModelPersistenceMixin, TabPFNModelSelectio
         task_config = _build_fit_task_config(tabpfn_config)
         tabpfn_systems = _build_tabpfn_systems(self.paper_version, thinking_mode)
         thinking_config = _build_thinking_config(
+            X,
             enabled=thinking_mode,
             effort=self.thinking_effort,
             timeout_secs=self.thinking_timeout_s,
             metric=self.thinking_metric,
+            group_col=self.group_col,
+            time_col=self.time_col,
+            group_time_col=self.group_time_col,
         )
 
         if Config.use_server:
@@ -747,6 +806,13 @@ class TabPFNRegressor(RegressorMixin, ModelPersistenceMixin, TabPFNModelSelectio
             tabpfn_config.model_path,
             train_rows=self._n_train_rows,
             split_full_output=chunked,
+        )
+        _validate_group_columns(
+            X,
+            enabled=_resolve_thinking_mode(self.thinking_mode, self.thinking_effort),
+            group_col=self.group_col,
+            time_col=self.time_col,
+            group_time_col=self.group_time_col,
         )
 
         # NOTE(@trace_id)
@@ -1069,16 +1135,71 @@ def _resolve_thinking_mode(enabled: bool, effort: str | None = None) -> bool:
 
 
 def _build_thinking_config(
+    X: pd.DataFrame | np.ndarray,
     *,
     enabled: bool,
     effort: str | None = None,
     timeout_secs: float | None = None,
     metric: str | None = None,
+    group_col: str | list[str] | None = None,
+    time_col: str | None = None,
+    group_time_col: str | None = None,
 ) -> ThinkingConfig | None:
+    _validate_group_columns(
+        X,
+        enabled=enabled,
+        group_col=group_col,
+        time_col=time_col,
+        group_time_col=group_time_col,
+    )
     if not enabled:
         return None
     return ThinkingConfig(
         effort=effort,
         timeout_secs=timeout_secs,
         metric=metric,
+        group_col=group_col,
+        time_col=time_col,
+        group_time_col=group_time_col,
     )
+
+
+def _validate_group_columns(
+    X: Any,
+    *,
+    enabled: bool,
+    group_col: str | list[str] | None,
+    time_col: str | None,
+    group_time_col: str | None,
+) -> None:
+    """Check `group_col`, `time_col` and `group_time_col` against `X` and thinking mode.
+
+    The server reads these columns by name from the data passed to `fit` and to
+    `predict`, so `X` must be a DataFrame that holds them. For now only thinking mode
+    uses them.
+
+    Raises:
+        ValueError: A column is named without thinking mode, the combination is
+            invalid, `X` is not a DataFrame, or `X` lacks a named column.
+    """
+    group_cols = [group_col] if isinstance(group_col, str) else list(group_col or [])
+    named = [*group_cols, *(c for c in (time_col, group_time_col) if c is not None)]
+    if not named:
+        return
+    if not enabled:
+        raise ValueError(
+            "`group_col`, `time_col` and `group_time_col` are only supported in "
+            "thinking mode. Set `thinking_mode=True`."
+        )
+    if group_col is not None and time_col is not None:
+        raise ValueError("`group_col` and `time_col` cannot be combined.")
+    if group_time_col is not None and group_col is None:
+        raise ValueError("`group_time_col` requires `group_col`.")
+    if not isinstance(X, pd.DataFrame):
+        raise ValueError(
+            "`group_col`, `time_col` and `group_time_col` name columns, so X must be "
+            f"a pandas DataFrame; got {type(X).__name__}."
+        )
+    missing = [col for col in named if col not in X.columns]
+    if missing:
+        raise ValueError(f"X is missing the columns {missing}.")

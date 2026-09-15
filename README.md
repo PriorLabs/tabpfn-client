@@ -92,6 +92,9 @@ Knobs:
 - `thinking_effort: {"medium", "high"} | None` — effort level. Setting this also enables thinking, so `thinking_mode=True` is optional when you've set the level explicitly.
 - `thinking_timeout_s: float | None` — budget for the fit, in seconds. Only consulted when thinking is enabled. Capped at 2400 (40 minutes).
 - `thinking_metric: str | None` — optimization metric for the fit. Only consulted when thinking is enabled. See the constructor docstring of `TabPFNClassifier` / `TabPFNRegressor` for the full list of supported metrics per task (classification, multiclass, regression) and their aliases.
+- `group_col: str | list[str] | None` — column(s) of `X` identifying groups of related rows, e.g. a patient or session id. Rows of one group are never split between training and validation during the fit. Thinking mode only.
+- `time_col: str | None` — column of `X` holding time. Validation uses contiguous time blocks. Cannot be combined with `group_col`. Thinking mode only.
+- `group_time_col: str | None` — column of `X` ordering the rows within a group. Requires `group_col`. Thinking mode only.
 
 ```python
 model = TabPFNClassifier(
@@ -99,6 +102,11 @@ model = TabPFNClassifier(
     thinking_timeout_s=600,
     thinking_metric="roc_auc",
 )
+
+# Grouped data: X_train and X_test are DataFrames that keep the named columns.
+model = TabPFNClassifier(thinking_mode=True, group_col="patient_id")
+model.fit(X_train, y_train)
+model.predict_proba(X_test)
 ```
 
 Notes:
