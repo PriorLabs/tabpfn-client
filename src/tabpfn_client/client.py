@@ -24,6 +24,7 @@ from typing_extensions import (
 )
 from tabpfn_client.models import (
     ClientOptions,
+    FitResult,
     PredictionResult,
     ApiMode,
 )
@@ -265,8 +266,34 @@ class ServiceClient(Singleton):
         client_options: ClientOptions | None = None,
         description: str | None = None,
     ) -> UUID:
+        """Same as `fit_with_result`, returning only the fitted train set id."""
+        return cls.fit_with_result(
+            X,
+            y,
+            task_config=task_config,
+            tabpfn_systems=tabpfn_systems,
+            thinking_config=thinking_config,
+            api_mode=api_mode,
+            client_options=client_options,
+            description=description,
+        ).fitted_train_set_id
+
+    @classmethod
+    def fit_with_result(
+        cls,
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray,
+        # start: fit request
+        task_config: FitTaskConfig,
+        tabpfn_systems: list[TabPFNSystem],
+        thinking_config: ThinkingConfig | None = None,
+        # end: fit request
+        api_mode: ApiMode = ApiMode.AUTO,
+        client_options: ClientOptions | None = None,
+        description: str | None = None,
+    ) -> FitResult:
         """
-        Upload a train set to server and return the train set UID if successful.
+        Upload a train set to server and fit it.
 
         Parameters
         ----------
@@ -289,8 +316,9 @@ class ServiceClient(Singleton):
 
         Returns
         -------
-        fitted_train_set_id: UUID
-            The unique ID of the fitted train set in the server.
+        fit_result: FitResult
+            The unique ID of the fitted train set in the server, and the
+            server-reported timings of the fit (None if the server reports none).
         """
         # Validate here rather than in the estimators: sklearn requires
         # hyperparameters to be stored as-given (set_params/GridSearchCV
@@ -398,10 +426,10 @@ class ServiceClient(Singleton):
                 timeout=client_options.timeout,
                 headers=client_options.headers,
             )
-            cls._wait_for_fit(
+            timings = cls._wait_for_fit(
                 fit_resp.fitted_train_set_id,
                 headers=client_options.headers,
-            )
+            ).timings
         else:
             fit_resp = cls._fit(
                 req=FitRequest(
@@ -413,25 +441,29 @@ class ServiceClient(Singleton):
                 timeout=client_options.timeout,
                 headers=client_options.headers,
             )
+            timings = fit_resp.timings
             # NOTE: The server currently only returns COMPLETED or PENDING
             # (failed requests raise), but `status` is forward-compatible
             # (`FitStatus | UnknownEnum`), so treat anything that is not
             # COMPLETED as still in progress instead of silently skipping
             # the wait when a newer server adds a status.
             if fit_resp.status != FitStatus.COMPLETED:
-                cls._wait_for_fit(
+                timings = cls._wait_for_fit(
                     fit_resp.fitted_train_set_id,
                     headers=client_options.headers,
-                )
+                ).timings
 
-        return fit_resp.fitted_train_set_id
+        return FitResult(
+            fitted_train_set_id=fit_resp.fitted_train_set_id,
+            timings=timings.model_dump(mode="json") if timings is not None else None,
+        )
 
     @classmethod
     def _wait_for_fit(
         cls,
         fitted_train_set_id: UUID,
         headers: dict[str, str] | None = None,
-    ) -> None:
+    ) -> GetFitStatusResponse:
         """Poll ``POST /tabpfn/get_fit_status`` until the fit reaches a terminal state.
 
         The first poll happens immediately; between polls we sleep for the
@@ -497,7 +529,7 @@ class ServiceClient(Singleton):
                 last_error = None
                 consecutive_capped_errors = 0
                 if status_resp.status == FitStatus.COMPLETED:
-                    return
+                    return status_resp
                 if status_resp.status == FitStatus.FAILED:
                     raise RuntimeError(
                         f"Fit {fitted_train_set_id} failed: "
@@ -745,6 +777,9 @@ class ServiceClient(Singleton):
         return PredictionResult(
             y_pred=result,
             metadata=predict_resp.metadata.model_dump(mode="json", exclude_none=True),
+            timings=predict_resp.timings.model_dump(mode="json")
+            if predict_resp.timings is not None
+            else None,
         )
 
     @classmethod

@@ -31,6 +31,7 @@ from tabpfn_client.client import PredictionResult, ServiceClient
 from tabpfn_client.config import Config
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
+from tabpfn_client.models import FitResult
 from tabpfn_client.service_wrapper import InferenceClient, UserAuthenticationClient
 from tests.mock_tabpfn_server import with_mock_server
 
@@ -94,7 +95,11 @@ def _offline_server(prediction: PredictionResult | None = None):
         with (
             patch("tabpfn_client.estimator.init"),
             patch.object(ServiceClient, "get_settings", return_value=None),
-            patch.object(InferenceClient, "fit", return_value=MODEL_ID) as fit,
+            patch.object(
+                InferenceClient,
+                "fit_with_result",
+                return_value=FitResult(fitted_train_set_id=MODEL_ID),
+            ) as fit,
             patch.object(
                 InferenceClient, "predict", return_value=prediction
             ) as predict,
@@ -313,7 +318,7 @@ class TestLoadedEstimator:
         y = np.array([0, 1, 2] * 3)
 
         with _offline_server() as (fit, _):
-            fit.return_value = new_id
+            fit.return_value = FitResult(fitted_train_set_id=new_id)
             loaded.fit(X, y)
 
         assert loaded.model_id_ == new_id

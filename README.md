@@ -175,6 +175,26 @@ except (FileNotFoundError, FittedModelNotFoundError):
     model.save_model("model.json")
     predictions = model.predict(X_test)
 ```
+
+## Timings
+
+After `fit()` and `predict()`, an estimator reports how many seconds the server spent on each stage:
+
+```python
+model = TabPFNClassifier()
+model.fit(X_train, y_train)
+model.predict(X_test)
+
+model.get_timings()
+# {"fit": {"elapsed_s": ..., "queue_wait_s": ..., "train_set_transform_s": ..., "fit_s": ...},
+#  "predict": {"test_set_transform_queue_wait_s": ..., "test_set_transform_s": ...,
+#              "predict_queue_wait_s": ..., "predict_s": ...}}
+```
+
+- A `*queue_wait_s` field is time spent waiting for the server to start the work; the other fields are time spent doing it.
+- The same values are available as `model.fit_timings_` and `model.last_predict_timings`.
+- A field is `None` when it does not apply, e.g. the test set transform when the same test set was sent before. Both entries are `None` when the server does not report timings.
+
 ## Plotting
 
 `plot_regression_distribution` draws the predictive distribution behind a regression prediction. Install the optional dependency with `pip install "tabpfn-client[viz]"`.
