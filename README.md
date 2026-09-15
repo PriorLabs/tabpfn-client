@@ -104,7 +104,7 @@ model = TabPFNClassifier(
 )
 
 # Grouped data: X_train and X_test are DataFrames that keep the named columns.
-model = TabPFNClassifier(thinking_mode=True, thinking_group_col="patient_id")
+model = TabPFNClassifier(thinking_mode=True, group_col="patient_id")
 model.fit(X_train, y_train)
 model.predict_proba(X_test)
 ```
