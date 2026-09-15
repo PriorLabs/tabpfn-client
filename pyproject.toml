@@ -77,7 +77,7 @@ dev = [
     "pytest==9.0.3",
     "ruff==0.15.21",
     "licensecheck==2025.1.0",
-    "basedpyright~=1.39.9",
+    "basedpyright>=1.39.9,<1.41.0",
 ]
 
 [tool.changelog-bot.towncrier_changelog]
