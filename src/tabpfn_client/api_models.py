@@ -186,6 +186,7 @@ class FitTimings(BaseModel):
 class ModelLimit(BaseModel):
     train_set_max_rows: int
     train_set_max_cells: int
+    train_set_max_upload_cells: int | None = None
     test_set_max_rows: int
     max_classes: int
     max_cols: int
