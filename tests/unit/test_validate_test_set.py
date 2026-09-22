@@ -92,7 +92,7 @@ def test_no_limits_available_skips_validation():
 
 
 @pytest.mark.parametrize("config_type", [ClassifierTabPFNConfig, RegressorTabPFNConfig])
-def test_subsampled_union_has_separate_upload_and_context_limits(
+def test_subsampled_context_validation_is_deferred_to_server(
     config_type: type[ClassifierTabPFNConfig] | type[RegressorTabPFNConfig],
 ) -> None:
     settings = _limits(predict_row_pairs_budget=100)
@@ -108,9 +108,7 @@ def test_subsampled_union_has_separate_upload_and_context_limits(
         validate_test_set(np.zeros((6, 10)), None, train_rows=30, tabpfn_config=config)
         with pytest.raises(ValueError, match="upload"):
             validate_train_set(np.zeros((31, 10)), tabpfn_config=config)
-        with pytest.raises(ValueError, match="estimator"):
-            validate_train_set(np.zeros((30, 10)), tabpfn_config=config_type())
-        with pytest.raises(ValueError, match="maximum of 6"):
-            validate_test_set(
-                np.zeros((7, 10)), None, train_rows=30, tabpfn_config=config
-            )
+        validate_train_set(np.zeros((30, 10)), tabpfn_config=config_type())
+        validate_test_set(np.zeros((7, 10)), None, train_rows=30, tabpfn_config=config)
+        with pytest.raises(ValueError, match="maximum of 1000000"):
+            validate_test_set(_X(1_000_001), None, train_rows=30, tabpfn_config=config)

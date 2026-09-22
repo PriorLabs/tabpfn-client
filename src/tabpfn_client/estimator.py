@@ -964,41 +964,6 @@ class TabPFNRegressor(
             raise ValueError("Input y contains NaN.")
 
 
-def effective_context_rows(n_rows: int, config: TabPFNConfig | None) -> int:
-    """Count rows in the largest estimator context, including repeated indices."""
-    if config is None:
-        return n_rows
-    subsample = (config.inference_config or {}).get("SUBSAMPLE_SAMPLES")
-    if subsample is None:
-        return n_rows
-    if isinstance(subsample, int):
-        if subsample < 1:
-            raise ValueError("SUBSAMPLE_SAMPLES must be positive")
-        return min(subsample, n_rows)
-    if isinstance(subsample, float):
-        if not 0 < subsample < 1:
-            raise ValueError(
-                "SUBSAMPLE_SAMPLES must be between 0 and 1 when fractional"
-            )
-        return int(subsample * n_rows) + 1
-    if not isinstance(subsample, list) or not subsample:
-        raise ValueError(
-            "SUBSAMPLE_SAMPLES must be a count, fraction, or nonempty list of indices"
-        )
-    contexts = subsample[: config.n_estimators]
-    largest = 0
-    for context in contexts:
-        indices = np.asarray(context)
-        if indices.ndim != 1 or not len(indices) or indices.dtype.kind not in "iu":
-            raise ValueError(
-                "SUBSAMPLE_SAMPLES contexts must contain integer row indices"
-            )
-        if indices.min() < -n_rows or indices.max() >= n_rows:
-            raise ValueError("SUBSAMPLE_SAMPLES contains an out-of-range row index")
-        largest = max(largest, len(indices))
-    return largest
-
-
 def validate_train_set(
     X: pd.DataFrame | np.ndarray,
     y: pd.Series | np.ndarray | None = None,
@@ -1036,11 +1001,6 @@ def validate_train_set(
     if n_cells > upload_limit:
         raise ValueError(
             f"The training upload has {n_cells} cells, exceeding the maximum of {upload_limit}."
-        )
-    n_cells = effective_context_rows(X.shape[0], tabpfn_config) * X.shape[1]
-    if n_cells > limit.train_set_max_cells:
-        raise ValueError(
-            f"Each estimator may use at most {limit.train_set_max_cells} training cells; got {n_cells}."
         )
 
 
@@ -1080,10 +1040,15 @@ def validate_test_set(
         return
 
     max_rows = limit.test_set_max_rows
-    if train_rows:
+    subsample = (
+        (tabpfn_config.inference_config or {}).get("SUBSAMPLE_SAMPLES")
+        if tabpfn_config is not None
+        else None
+    )
+    # The server validates context-dependent limits for subsampled requests.
+    if train_rows and subsample is None:
         budget = limit.predict_row_pairs_budget
-        context_rows = effective_context_rows(train_rows, tabpfn_config)
-        max_rows = min(max_rows, budget // max(1, context_rows))
+        max_rows = min(max_rows, budget // train_rows)
 
     if X.shape[0] > max_rows:
         raise ValueError(
