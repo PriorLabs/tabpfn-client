@@ -21,6 +21,7 @@ from tabpfn_client.api_models import (
     RegressorConfig,
     ThinkingConfig,
     TabPFNSystem,
+    TextHandling,
 )
 from tabpfn_client.options import get_opts
 from tabpfn_client.models import ApiMode, FitResult
@@ -270,12 +271,14 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         api_mode: ApiMode,
         client_options: ClientOptions | None,
         description: str | None,
+        text_handling: TextHandling = "advanced",
     ) -> UUID:
         return ServiceClient.fit(
             X,
             y,
             task_config=task_config,
             tabpfn_systems=tabpfn_systems,
+            text_handling=text_handling,
             thinking_config=thinking_config,
             api_mode=api_mode,
             client_options=client_options,
@@ -293,12 +296,14 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         api_mode: ApiMode,
         client_options: ClientOptions | None,
         description: str | None,
+        text_handling: TextHandling = "advanced",
     ) -> FitResult:
         return ServiceClient.fit_with_result(
             X,
             y,
             task_config=task_config,
             tabpfn_systems=tabpfn_systems,
+            text_handling=text_handling,
             thinking_config=thinking_config,
             api_mode=api_mode,
             client_options=client_options,

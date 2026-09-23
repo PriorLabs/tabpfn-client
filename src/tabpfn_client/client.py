@@ -47,6 +47,7 @@ from tabpfn_client.api_models import (
     EstimateCostRequest,
     EstimateCostResponse,
     TabPFNSystem,
+    TextHandling,
     PrepareTrainSetUploadRequest,
     PrepareTrainSetUploadResponse,
     DuplicateTrainSetErrorResponse,
@@ -72,6 +73,7 @@ from tabpfn_client.api_models import (
     FitTaskConfig,
 )
 from tabpfn_client.options import get_opts
+from tabpfn_client.utils import validate_text_handling
 
 
 logger = logging.getLogger(__name__)
@@ -265,6 +267,7 @@ class ServiceClient(Singleton):
         api_mode: ApiMode = ApiMode.AUTO,
         client_options: ClientOptions | None = None,
         description: str | None = None,
+        text_handling: TextHandling = "advanced",
     ) -> UUID:
         """Same as `fit_with_result`, returning only the fitted train set id."""
         return cls.fit_with_result(
@@ -272,6 +275,7 @@ class ServiceClient(Singleton):
             y,
             task_config=task_config,
             tabpfn_systems=tabpfn_systems,
+            text_handling=text_handling,
             thinking_config=thinking_config,
             api_mode=api_mode,
             client_options=client_options,
@@ -291,6 +295,7 @@ class ServiceClient(Singleton):
         api_mode: ApiMode = ApiMode.AUTO,
         client_options: ClientOptions | None = None,
         description: str | None = None,
+        text_handling: TextHandling = "advanced",
     ) -> FitResult:
         """
         Upload a train set to server and fit it.
@@ -320,9 +325,7 @@ class ServiceClient(Singleton):
             The unique ID of the fitted train set in the server, and the
             server-reported timings of the fit (None if the server reports none).
         """
-        # Validate here rather than in the estimators: sklearn requires
-        # hyperparameters to be stored as-given (set_params/GridSearchCV
-        # bypass __init__ entirely).
+        validate_text_handling(text_handling)
         api_mode = ApiMode(api_mode)
         client_options = client_options or ClientOptions()
         tabpfn_systems_: list[TabPFNSystem | str] = list(tabpfn_systems)
@@ -421,6 +424,9 @@ class ServiceClient(Singleton):
                     train_set_upload_id=prepare_resp.train_set_upload_id,
                     task_config=task_config,
                     tabpfn_systems=tabpfn_systems_,
+                    text_handling=None
+                    if text_handling == "advanced"
+                    else text_handling,
                     thinking_config=thinking_config,
                 ),
                 timeout=client_options.timeout,
@@ -436,6 +442,9 @@ class ServiceClient(Singleton):
                     train_set_upload_id=prepare_resp.train_set_upload_id,
                     task_config=task_config,
                     tabpfn_systems=tabpfn_systems_,
+                    text_handling=None
+                    if text_handling == "advanced"
+                    else text_handling,
                     thinking_config=thinking_config,
                 ),
                 timeout=client_options.timeout,

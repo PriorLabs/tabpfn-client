@@ -23,7 +23,11 @@ from tabpfn_client.client import (
 from tabpfn_client.config import Config, init
 from tabpfn_client.constants import URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE
 from tabpfn_client.api_models import ModelVersion
-from tabpfn_client.utils import model_limit_from_version, model_version_from_path
+from tabpfn_client.utils import (
+    model_limit_from_version,
+    model_version_from_path,
+    validate_text_handling,
+)
 from tabpfn_client.service_wrapper import InferenceClient
 from tabpfn_client.api_models import (
     ModelLimit,
@@ -39,6 +43,7 @@ from tabpfn_client.api_models import (
     RegressorFitTaskConfig,
     ThinkingEffort,
     TabPFNSystem,
+    TextHandling,
 )
 from tabpfn_client.models import ApiMode, TabPFNConfig, FitModeLiteral
 from tabpfn_client.persistence import ModelPersistenceMixin
@@ -209,6 +214,7 @@ class TabPFNClassifier(
         group_time_col: str | None = None,
         api_mode: ApiMode = ApiMode.AUTO,
         client_options: ClientOptions | None = None,
+        text_handling: TextHandling = "advanced",
     ):
         """Construct a TabPFN classifier.
 
@@ -274,6 +280,10 @@ class TabPFNClassifier(
             against that id (stored on the estimator as `model_id_`, and
             persisted across runs by `save_model()`) are served from the cache
             instead of re-fitting.
+        text_handling: {"advanced", "simple"}, default="advanced"
+            Text-processing preset. Both choices support text. Advanced preserves
+            the default processing; simple is an alternative whose accuracy depends
+            on the dataset. Applies when preprocessing is enabled.
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
@@ -345,6 +355,7 @@ class TabPFNClassifier(
         self.random_state = random_state
         self.inference_config = inference_config
         self.fit_mode = fit_mode
+        self.text_handling = text_handling
         self.paper_version = paper_version
         self.thinking_mode = thinking_mode
         self.thinking_effort = thinking_effort
@@ -367,6 +378,7 @@ class TabPFNClassifier(
         y: pd.Series | np.ndarray,
         description: str | None = None,
     ):
+        text_handling = validate_text_handling(self.text_handling)
         # assert init() is called
         init()
         tabpfn_config = self._get_tabpfn_config()
@@ -405,6 +417,7 @@ class TabPFNClassifier(
                 y,
                 task_config=task_config,
                 tabpfn_systems=tabpfn_systems,
+                text_handling=text_handling,
                 thinking_config=thinking_config,
                 api_mode=self.api_mode,
                 client_options=self.client_options,
@@ -610,6 +623,7 @@ class TabPFNRegressor(
         group_time_col: str | None = None,
         api_mode: ApiMode = ApiMode.AUTO,
         client_options: ClientOptions | None = None,
+        text_handling: TextHandling = "advanced",
     ):
         """Construct a TabPFN regressor.
 
@@ -667,6 +681,10 @@ class TabPFNRegressor(
             against that id (stored on the estimator as `model_id_`, and
             persisted across runs by `save_model()`) are served from the cache
             instead of re-fitting.
+        text_handling: {"advanced", "simple"}, default="advanced"
+            Text-processing preset. Both choices support text. Advanced preserves
+            the default processing; simple is an alternative whose accuracy depends
+            on the dataset. Applies when preprocessing is enabled.
         paper_version: bool, default=False
             If True, will use the model described in the paper, instead of the newest
             version available on the API, which e.g handles text features better.
@@ -729,6 +747,7 @@ class TabPFNRegressor(
         self.random_state = random_state
         self.inference_config = inference_config
         self.fit_mode = fit_mode
+        self.text_handling = text_handling
         self.paper_version = paper_version
         self.thinking_mode = thinking_mode
         self.thinking_effort = thinking_effort
@@ -751,6 +770,7 @@ class TabPFNRegressor(
         y: pd.Series | np.ndarray,
         description: str | None = None,
     ):
+        text_handling = validate_text_handling(self.text_handling)
         # assert init() is called
         init()
         tabpfn_config = self._get_tabpfn_config()
@@ -784,6 +804,7 @@ class TabPFNRegressor(
                 y,
                 task_config=task_config,
                 tabpfn_systems=tabpfn_systems,
+                text_handling=text_handling,
                 thinking_config=thinking_config,
                 api_mode=self.api_mode,
                 client_options=self.client_options,

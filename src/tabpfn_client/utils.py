@@ -2,7 +2,7 @@
 #  Licensed under the Apache License, Version 2.0
 
 from typing import Any
-from tabpfn_client.api_models import ModelLimit, ModelVersion
+from tabpfn_client.api_models import ModelLimit, ModelVersion, TextHandling
 
 
 def model_limit_from_version(
@@ -36,3 +36,10 @@ def model_version_from_path(model_path: str) -> ModelVersion:
         if f"-{version.value}-" in model_path or model_path.startswith(prefixes):
             return version
     return ModelVersion.V2
+
+
+def validate_text_handling(value: object) -> TextHandling:
+    """Reject unsupported text-processing presets before authentication or upload."""
+    if value not in ("advanced", "simple"):
+        raise ValueError("text_handling must be 'advanced' or 'simple'")
+    return value
