@@ -16,7 +16,7 @@ import re
 import struct
 import time
 import warnings
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, RootModel, ValidationError
 from typing import Any, cast, Mapping, NoReturn
 from typing_extensions import (
     Never,  # in `typing` only from Python 3.11
@@ -76,8 +76,14 @@ from tabpfn_client.api_models import (
 )
 from tabpfn_client.options import get_opts
 
-
 logger = logging.getLogger(__name__)
+
+
+class _PredictResponseEnvelope(
+    RootModel[PredictResponse | PredictResponseWithDownloadURI]
+):
+    """Either predict response, told apart by `prediction` vs `prediction_uri`."""
+
 
 # avoid logging of httpx and httpcore on client side
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -824,11 +830,11 @@ class ServiceClient(Singleton):
             timeout=timeout,
             headers=headers,
         )
-        if req.with_download_uri:
-            return cls._validate_response(
-                res, "predict", success_model=PredictResponseWithDownloadURI
-            )
-        return cls._validate_response(res, "predict", success_model=PredictResponse)
+        # The server chooses the response shape (the flag is only a request),
+        # so let the body decide which model applies rather than the request.
+        return cls._validate_response(
+            res, "predict", success_model=_PredictResponseEnvelope
+        ).root
 
     @classmethod
     @backoff.on_exception(
@@ -859,7 +865,13 @@ class ServiceClient(Singleton):
             raise RuntimeError(
                 f"Prediction download permanently failed: {resp.status_code} {resp.text}"
             )
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError as e:
+            raise RuntimeError(
+                "Prediction download returned a body that is not JSON: "
+                f"{resp.text[:200]!r}"
+            ) from e
 
     @classmethod
     def _upload_to_gcs(cls, dataset: str, data: bytes, info: FileUploadInfo) -> None:

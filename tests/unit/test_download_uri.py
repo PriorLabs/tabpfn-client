@@ -93,7 +93,7 @@ def _predict(
         )
 
 
-def test_inline_prediction_is_the_default(mock_server):
+def test_choice_is_left_to_the_server_by_default(mock_server):
     predict_route = mock_server.router.post("/tabpfn/predict").respond(
         200, json={"prediction": [0] * N_ROWS, "metadata": _metadata("classification")}
     )
@@ -101,8 +101,32 @@ def test_inline_prediction_is_the_default(mock_server):
     result = _predict(ClassifierConfig())
 
     sent = json.loads(predict_route.calls.last.request.content)
-    assert sent["with_download_uri"] is False
+    assert "with_download_uri" not in sent
     np.testing.assert_array_equal(result.y_pred, np.zeros(N_ROWS, dtype=int))
+
+
+def test_opting_out_sends_false(mock_server):
+    predict_route = mock_server.router.post("/tabpfn/predict").respond(
+        200, json={"prediction": [0] * N_ROWS, "metadata": _metadata("classification")}
+    )
+
+    _predict(ClassifierConfig(), ClientOptions(with_download_uri=False))
+
+    sent = json.loads(predict_route.calls.last.request.content)
+    assert sent["with_download_uri"] is False
+
+
+def test_server_may_answer_with_a_url_unasked(mock_server):
+    # Once the server picks the transport itself, the client must follow the
+    # body it gets rather than the flag it sent.
+    mock_server.router.post("/tabpfn/predict").respond(
+        200, json=_uri_body("classification")
+    )
+    mock_server.router.get(DOWNLOAD_URL).respond(200, json=[1] * N_ROWS)
+
+    result = _predict(ClassifierConfig())
+
+    np.testing.assert_array_equal(result.y_pred, np.ones(N_ROWS, dtype=int))
 
 
 def test_downloads_the_prediction_from_the_signed_url(mock_server):

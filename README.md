@@ -432,7 +432,9 @@ Per-model size limits (rows, columns, cells, classes) are enforced by the server
 
 In particular, regression with `output_type="full"` has a stricter cap on the number of test rows than regular regression predictions; split the test set across calls if you hit it.
 
-Large prediction payloads can be fetched through a signed download URL instead of inline in the API response. This is opt-in per estimator and returns identical arrays:
+These limits will be increased in future releases.
+
+Large prediction payloads can be fetched through a signed download URL instead of inline in the API response. By default the server decides; set the option to force either transport. The returned arrays are identical:
 
 ```python
 from tabpfn_client import TabPFNRegressor
@@ -440,8 +442,6 @@ from tabpfn_client.models import ClientOptions
 
 model = TabPFNRegressor(client_options=ClientOptions(with_download_uri=True))
 ```
-
-These limits will be increased in future releases.
 
 ## Access/Delete Data
 
