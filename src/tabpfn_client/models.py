@@ -50,9 +50,15 @@ class ClientOptions:
         Timeout for the request in seconds.
     headers : dict[str, str], optional
         Headers for the request overriding the default headers.
+    with_download_uri : bool, default=False
+        Ask the server to store the prediction and hand back a signed download
+        URL, which the client then fetches, instead of returning the prediction
+        inline. Keeps large results (e.g. ``output_type="full"``) off the API
+        response path. Opt-in for now; the returned arrays are identical.
     """
 
     # Note: timeout=None does not fallback to the client default, rather it disables
     # the timeout altogether.
     timeout: float = get_opts().TABPFN_CLIENT_TIMEOUT
     headers: dict[str, str] = field(default_factory=dict)
+    with_download_uri: bool = False

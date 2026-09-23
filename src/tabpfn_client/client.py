@@ -21,6 +21,7 @@ from typing import Any, cast, Mapping, NoReturn
 from typing_extensions import (
     Never,  # in `typing` only from Python 3.11
     TypeVar,  # supports default= on Python 3.10
+    assert_never,  # in `typing` only from Python 3.11
 )
 from tabpfn_client.models import (
     ClientOptions,
@@ -64,12 +65,14 @@ from tabpfn_client.api_models import (
     GetFitStatusResponse,
     PredictRequest,
     PredictResponse,
+    PredictResponseWithDownloadURI,
     ClassifierConfig,
     RegressorConfig,
     SubmitFitJobResponse,
     ThinkingConfig,
     AsyncSettings,
     FitTaskConfig,
+    Prediction,
 )
 from tabpfn_client.options import get_opts
 
@@ -754,12 +757,22 @@ class ServiceClient(Singleton):
                 test_set_upload_id=prepare_resp.test_set_upload_id,
                 fitted_train_set_id=fitted_train_set_id,
                 task_config=task_config,
+                with_download_uri=client_options.with_download_uri,
             ),
             timeout=client_options.timeout,
             headers=client_options.headers,
         )
 
-        prediction = predict_resp.prediction
+        match predict_resp:
+            case PredictResponse():
+                prediction = predict_resp.prediction
+            case PredictResponseWithDownloadURI():
+                prediction = cls._download_prediction(
+                    predict_resp.prediction_uri,
+                    timeout=client_options.timeout,
+                )
+            case _:
+                assert_never(predict_resp)
 
         if isinstance(prediction, dict):
             result = {}
@@ -804,18 +817,49 @@ class ServiceClient(Singleton):
         req: PredictRequest,
         timeout: float,
         headers: dict[str, str] | None = None,
-    ) -> PredictResponse:
+    ) -> PredictResponse | PredictResponseWithDownloadURI:
         res = cls.httpx_client.post(
             url="/tabpfn/predict",
             json=req.model_dump(mode="json", exclude_none=True),
             timeout=timeout,
             headers=headers,
         )
-        return cls._validate_response(
-            res,
-            "predict",
-            success_model=PredictResponse,
-        )
+        if req.with_download_uri:
+            return cls._validate_response(
+                res, "predict", success_model=PredictResponseWithDownloadURI
+            )
+        return cls._validate_response(res, "predict", success_model=PredictResponse)
+
+    @classmethod
+    @backoff.on_exception(
+        backoff.constant,
+        (
+            httpx.ConnectError,
+            httpx.TimeoutException,
+            httpx.ReadTimeout,
+            httpx.RemoteProtocolError,
+            RetryableServerError,
+        ),
+        max_tries=2,
+        interval=0,
+        logger=logger,
+        on_backoff=_on_backoff,
+        on_giveup=_on_giveup,
+    )
+    def _download_prediction(cls, uri: str, timeout: float) -> Prediction:
+        # The signed URL is the credential here, so the API bearer token on
+        # `httpx_client` has no business reaching the object store; use a bare
+        # request instead.
+        resp = httpx.get(uri, timeout=timeout)
+        if resp.status_code in {502, 503, 504}:
+            raise RetryableServerError(
+                f"Prediction download failed: {resp.status_code} {resp.text}"
+            )
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"Prediction download permanently failed: {resp.status_code} {resp.text}"
+            )
+        return resp.json()
 
     @classmethod
     def _upload_to_gcs(cls, dataset: str, data: bytes, info: FileUploadInfo) -> None:
