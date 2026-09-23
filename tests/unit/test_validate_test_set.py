@@ -4,9 +4,13 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from tabpfn_client.api_models import GetSettingsResponse
+from tabpfn_client.api_models import (
+    ClassifierTabPFNConfig,
+    GetSettingsResponse,
+    RegressorTabPFNConfig,
+)
 from tabpfn_client.client import ServiceClient
-from tabpfn_client.estimator import validate_test_set
+from tabpfn_client.estimator import validate_test_set, validate_train_set
 
 
 DEFAULT_BUDGET = 250_000 * 1_000_000
@@ -19,6 +23,7 @@ def _limits(
     model_limit: dict[str, Any] = {
         "train_set_max_rows": 1_000_000,
         "train_set_max_cells": 100_000_000,
+        "train_set_max_upload_cells": 100_000_000,
         "test_set_max_rows": test_set_max_rows,
         "test_set_max_cells": 100_000_000,
         "test_set_max_rows_w_full_regression_output": 400,
@@ -85,3 +90,41 @@ def test_smaller_budget_shrinks_adaptive_limit():
 def test_no_limits_available_skips_validation():
     with patch.object(ServiceClient, "get_settings", return_value=None):
         validate_test_set(_X(2_000_000), None, train_rows=1_000_000)
+
+
+@pytest.mark.parametrize("config_type", [ClassifierTabPFNConfig, RegressorTabPFNConfig])
+def test_subsampled_context_validation_is_deferred_to_server(
+    config_type: type[ClassifierTabPFNConfig] | type[RegressorTabPFNConfig],
+) -> None:
+    settings = _limits(predict_row_pairs_budget=100)
+    for limit in (settings.max_model_limit, *settings.model_limits.values()):
+        limit.train_set_max_upload_cells = 300
+        limit.train_set_max_cells = 200
+    config = config_type(
+        n_estimators=2,
+        inference_config={"SUBSAMPLE_SAMPLES": [list(range(10)), list(range(15))]},
+    )
+    with patch.object(ServiceClient, "get_settings", return_value=settings):
+        validate_train_set(np.zeros((30, 10)), model_path=config.model_path)
+        validate_test_set(
+            np.zeros((6, 10)),
+            None,
+            train_rows=30,
+            inference_config=config.inference_config,
+        )
+        with pytest.raises(ValueError, match="upload"):
+            validate_train_set(np.zeros((31, 10)), model_path=config.model_path)
+        validate_train_set(np.zeros((30, 10)), model_path=config_type().model_path)
+        validate_test_set(
+            np.zeros((7, 10)),
+            None,
+            train_rows=30,
+            inference_config=config.inference_config,
+        )
+        with pytest.raises(ValueError, match="maximum of 1000000"):
+            validate_test_set(
+                _X(1_000_001),
+                None,
+                train_rows=30,
+                inference_config=config.inference_config,
+            )

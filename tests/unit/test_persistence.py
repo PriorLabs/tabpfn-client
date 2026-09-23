@@ -67,6 +67,7 @@ def _api_settings_payload(predict_row_pairs_budget: int) -> dict[str, Any]:
     limit = {
         "train_set_max_rows": 100_000,
         "train_set_max_cells": 100_000_000,
+        "train_set_max_upload_cells": 100_000_000,
         "test_set_max_rows": 100_000,
         "test_set_max_cells": 100_000_000,
         "test_set_max_rows_w_full_regression_output": 100_000,

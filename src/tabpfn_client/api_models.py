@@ -185,7 +185,12 @@ class FitTimings(BaseModel):
 
 class ModelLimit(BaseModel):
     train_set_max_rows: int
-    train_set_max_cells: int
+    train_set_max_cells: int = Field(
+        description="Maximum training cells per estimator: selected rows times uploaded columns. Row subsampling can keep each context below this limit even when the full upload exceeds it."
+    )
+    train_set_max_upload_cells: int = Field(
+        description="Maximum cells in the full training upload before row subsampling. This bounds the table processed before estimator contexts are selected."
+    )
     test_set_max_rows: int
     max_classes: int
     max_cols: int

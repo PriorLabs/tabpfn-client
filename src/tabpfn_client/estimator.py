@@ -371,7 +371,7 @@ class TabPFNClassifier(
         init()
         tabpfn_config = self._get_tabpfn_config()
 
-        validate_train_set(X, y)
+        validate_train_set(X, y, model_path=tabpfn_config.model_path)
         X_clean = _clean_text_features(X)
         classes = self._validate_targets_and_classes(y)
 
@@ -475,6 +475,7 @@ class TabPFNClassifier(
             output_type,
             tabpfn_config.model_path,
             train_rows=self._n_train_rows,
+            inference_config=tabpfn_config.inference_config,
         )
         _validate_group_columns(
             X,
@@ -754,7 +755,7 @@ class TabPFNRegressor(
         init()
         tabpfn_config = self._get_tabpfn_config()
 
-        validate_train_set(X, y)
+        validate_train_set(X, y, model_path=tabpfn_config.model_path)
         self._validate_targets(y)
         X_clean = _clean_text_features(X)
 
@@ -862,6 +863,7 @@ class TabPFNRegressor(
             output_type,
             tabpfn_config.model_path,
             train_rows=self._n_train_rows,
+            inference_config=tabpfn_config.inference_config,
             split_full_output=chunked,
         )
         _validate_group_columns(
@@ -963,8 +965,10 @@ class TabPFNRegressor(
 
 
 def validate_train_set(
-    X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray | None = None
-):
+    X: pd.DataFrame | np.ndarray,
+    y: pd.Series | np.ndarray | None = None,
+    model_path: str | None = None,
+) -> None:
     """Check the integrity of the training data."""
 
     # check if the number of samples is consistent (ValueError)
@@ -972,13 +976,9 @@ def validate_train_set(
         if X.shape[0] != y.shape[0]:
             raise ValueError("X and y must have the same number of samples")
 
-    api_settings = ServiceClient.get_settings()
-    if api_settings is None:
+    limit = _limit_for_model_path(model_path)
+    if limit is None:
         return
-
-    # We don't yet know which model will be used, so we use the most permissive limit
-    # across all models.
-    limit = api_settings.max_model_limit
 
     if X.shape[0] > limit.train_set_max_rows:
         raise ValueError(
@@ -989,9 +989,10 @@ def validate_train_set(
             f"The number of train columns ({X.shape[1]}) exceeds the maximum of {limit.max_cols}."
         )
     n_cells = X.shape[0] * X.shape[1]
-    if n_cells > limit.train_set_max_cells:
+    upload_limit = limit.train_set_max_upload_cells
+    if n_cells > upload_limit:
         raise ValueError(
-            f"The number of train cells ({n_cells}) exceeds the maximum of {limit.train_set_max_cells}."
+            f"The training upload has {n_cells} cells, exceeding the maximum of {upload_limit}."
         )
 
 
@@ -1018,6 +1019,7 @@ def validate_test_set(
     model_path: str | None = None,
     train_rows: int | None = None,
     split_full_output: bool = False,
+    inference_config: dict[str, Any] | None = None,
 ):
     """Check the integrity of the test data.
 
@@ -1030,7 +1032,9 @@ def validate_test_set(
         return
 
     max_rows = limit.test_set_max_rows
-    if train_rows:
+    subsample = (inference_config or {}).get("SUBSAMPLE_SAMPLES")
+    # The server validates context-dependent limits for subsampled requests.
+    if train_rows and subsample is None:
         budget = limit.predict_row_pairs_budget
         max_rows = min(max_rows, budget // train_rows)
 
