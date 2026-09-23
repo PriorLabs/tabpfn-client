@@ -23,6 +23,7 @@ def _limits(
     model_limit: dict[str, Any] = {
         "train_set_max_rows": 1_000_000,
         "train_set_max_cells": 100_000_000,
+        "train_set_max_upload_cells": 100_000_000,
         "test_set_max_rows": test_set_max_rows,
         "test_set_max_cells": 100_000_000,
         "test_set_max_rows_w_full_regression_output": 400,
@@ -104,11 +105,26 @@ def test_subsampled_context_validation_is_deferred_to_server(
         inference_config={"SUBSAMPLE_SAMPLES": [list(range(10)), list(range(15))]},
     )
     with patch.object(ServiceClient, "get_settings", return_value=settings):
-        validate_train_set(np.zeros((30, 10)), tabpfn_config=config)
-        validate_test_set(np.zeros((6, 10)), None, train_rows=30, tabpfn_config=config)
+        validate_train_set(np.zeros((30, 10)), model_path=config.model_path)
+        validate_test_set(
+            np.zeros((6, 10)),
+            None,
+            train_rows=30,
+            inference_config=config.inference_config,
+        )
         with pytest.raises(ValueError, match="upload"):
-            validate_train_set(np.zeros((31, 10)), tabpfn_config=config)
-        validate_train_set(np.zeros((30, 10)), tabpfn_config=config_type())
-        validate_test_set(np.zeros((7, 10)), None, train_rows=30, tabpfn_config=config)
+            validate_train_set(np.zeros((31, 10)), model_path=config.model_path)
+        validate_train_set(np.zeros((30, 10)), model_path=config_type().model_path)
+        validate_test_set(
+            np.zeros((7, 10)),
+            None,
+            train_rows=30,
+            inference_config=config.inference_config,
+        )
         with pytest.raises(ValueError, match="maximum of 1000000"):
-            validate_test_set(_X(1_000_001), None, train_rows=30, tabpfn_config=config)
+            validate_test_set(
+                _X(1_000_001),
+                None,
+                train_rows=30,
+                inference_config=config.inference_config,
+            )

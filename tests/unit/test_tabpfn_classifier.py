@@ -43,6 +43,7 @@ def _api_settings_payload(
     model_limit = {
         "train_set_max_rows": max_rows,
         "train_set_max_cells": max_cells,
+        "train_set_max_upload_cells": max_cells,
         "test_set_max_rows": max_rows,
         "test_set_max_cells": test_max_cells,
         "test_set_max_rows_w_full_regression_output": max_rows,
