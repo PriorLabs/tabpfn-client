@@ -16,8 +16,8 @@ import re
 import struct
 import time
 import warnings
-from pydantic import BaseModel, RootModel, ValidationError
-from typing import Any, cast, Mapping, NoReturn
+from pydantic import BaseModel, TypeAdapter, ValidationError
+from typing import Any, cast, Mapping, NoReturn, TypeAlias
 from typing_extensions import (
     Never,  # in `typing` only from Python 3.11
     TypeVar,  # supports default= on Python 3.10
@@ -79,11 +79,10 @@ from tabpfn_client.options import get_opts
 logger = logging.getLogger(__name__)
 
 
-class _PredictResponseEnvelope(
-    RootModel[PredictResponse | PredictResponseWithDownloadURI]
-):
-    """Either predict response, told apart by `prediction` vs `prediction_uri`."""
-
+PredictResponseUnion: TypeAlias = PredictResponse | PredictResponseWithDownloadURI
+_PredictResponseUnion: TypeAdapter[PredictResponseUnion] = TypeAdapter(
+    PredictResponseUnion
+)
 
 # avoid logging of httpx and httpcore on client side
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -823,7 +822,7 @@ class ServiceClient(Singleton):
         req: PredictRequest,
         timeout: float,
         headers: dict[str, str] | None = None,
-    ) -> PredictResponse | PredictResponseWithDownloadURI:
+    ) -> PredictResponseUnion:
         res = cls.httpx_client.post(
             url="/tabpfn/predict",
             json=req.model_dump(mode="json", exclude_none=True),
@@ -833,8 +832,8 @@ class ServiceClient(Singleton):
         # The server chooses the response shape (the flag is only a request),
         # so let the body decide which model applies rather than the request.
         return cls._validate_response(
-            res, "predict", success_model=_PredictResponseEnvelope
-        ).root
+            res, "predict", success_model=_PredictResponseUnion
+        )
 
     @classmethod
     @backoff.on_exception(
@@ -1037,7 +1036,7 @@ class ServiceClient(Singleton):
     def _validate_response(
         response: httpx.Response,
         method_name: str,
-        success_model: type[SuccessT],
+        success_model: type[SuccessT] | TypeAdapter[SuccessT],
         error_models: dict[int, type[ErrorT]] | None = None,
     ) -> SuccessT | ErrorT:
         error_models = error_models or {}
@@ -1057,6 +1056,8 @@ class ServiceClient(Singleton):
 
         # Success with expected schema.
         if is_success:
+            if isinstance(success_model, TypeAdapter):
+                return success_model.validate_python(body)
             return success_model.model_validate(body)
 
         # Errors with expected schema.
