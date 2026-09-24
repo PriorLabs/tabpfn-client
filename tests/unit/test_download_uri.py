@@ -116,9 +116,22 @@ def test_opting_out_sends_false(mock_server):
     assert sent["with_download_uri"] is False
 
 
+def test_inline_that_does_not_fit_raises_the_server_message(mock_server):
+    detail = (
+        "The prediction is too large to return inline. "
+        "Request it with `with_download_uri=True` to receive a signed download URL instead."
+    )
+    mock_server.router.post("/tabpfn/predict").respond(
+        422, json={"message": detail, "error_code": "VALIDATION_ERROR"}
+    )
+
+    with pytest.raises(RuntimeError, match="with_download_uri=True"):
+        _predict(ClassifierConfig(), ClientOptions(with_download_uri=False))
+
+
 def test_server_may_answer_with_a_url_unasked(mock_server):
-    # Once the server picks the transport itself, the client must follow the
-    # body it gets rather than the flag it sent.
+    # Left unset, the server picks the transport, so the client must follow
+    # the body it gets rather than the flag it sent.
     mock_server.router.post("/tabpfn/predict").respond(
         200, json=_uri_body("classification")
     )

@@ -434,7 +434,7 @@ In particular, regression with `output_type="full"` has a stricter cap on the nu
 
 These limits will be increased in future releases.
 
-Large prediction payloads can be fetched through a signed download URL instead of inline in the API response. By default the server decides; set the option to force either transport. The returned arrays are identical:
+Predictions come back either inline in the API response or through a signed download URL, which the client fetches for you. By default the server decides. Set `with_download_uri=True` to always use a download URL, which suits large results, or `False` to require inline; a prediction too large to return inline then fails with an error. The returned arrays are identical either way:
 
 ```python
 from tabpfn_client import TabPFNRegressor

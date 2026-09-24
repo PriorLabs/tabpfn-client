@@ -368,7 +368,7 @@ class PredictRequest(BaseModel):
     task_config: TaskConfig
     with_download_uri: bool | None = Field(
         default=None,
-        description="Return a signed download URL for the prediction instead of the prediction itself. Clients are expected to then download from that URI. Useful for larger prediction results.",
+        description="How the prediction is returned. `true`: as a signed download URL for the client to fetch. `false`: inline; an error is returned if the prediction does not fit inline. Unset: the server decides, and may return either.",
     )
 
 

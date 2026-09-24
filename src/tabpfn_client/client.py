@@ -829,8 +829,8 @@ class ServiceClient(Singleton):
             timeout=timeout,
             headers=headers,
         )
-        # The server chooses the response shape (the flag is only a request),
-        # so let the body decide which model applies rather than the request.
+        # Left unset, the flag lets the server choose the response shape, so the
+        # body decides which model applies rather than the request.
         return cls._validate_response(
             res, "predict", success_model=_PredictResponseUnion
         )

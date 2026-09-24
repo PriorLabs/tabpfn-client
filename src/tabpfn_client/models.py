@@ -51,11 +51,10 @@ class ClientOptions:
     headers : dict[str, str], optional
         Headers for the request overriding the default headers.
     with_download_uri : bool or None, default=None
-        Whether the server should store the prediction and hand back a signed
-        download URL, which the client then fetches, instead of returning the
-        prediction inline. Keeps large results off the API response path.
-        ``None`` leaves the choice to the server.
-        The returned arrays are identical either way.
+        How the server returns the prediction. ``True``: through a signed
+        download URL, which the client fetches. ``False``: inline; the request
+        fails if the prediction does not fit inline. ``None``: the server
+        decides, and may do either. The returned arrays are identical either way.
     """
 
     # Note: timeout=None does not fallback to the client default, rather it disables
