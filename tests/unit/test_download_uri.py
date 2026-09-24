@@ -146,17 +146,40 @@ def test_failed_download_raises(mock_server):
         _predict(ClassifierConfig())
 
 
-def test_transient_download_error_is_retried(mock_server):
+@pytest.mark.parametrize("status", [408, 429, 502, 503, 504])
+def test_transient_download_error_is_retried(mock_server, status):
     mock_server.router.post("/tabpfn/predict").respond(
         200, json=_uri_body("classification")
     )
     download_route = mock_server.router.get(DOWNLOAD_URL)
     download_route.side_effect = [
-        httpx.Response(503, text="try again"),
+        httpx.Response(status, text="try again"),
         httpx.Response(200, json=[1] * N_ROWS),
     ]
 
-    result = _predict(ClassifierConfig())
+    with patch("time.sleep"):
+        result = _predict(ClassifierConfig())
 
     assert download_route.call_count == 2
     np.testing.assert_array_equal(result.y_pred, np.ones(N_ROWS, dtype=int))
+
+
+@pytest.mark.parametrize("status", [408, 429, 502, 503, 504])
+def test_transient_upload_error_is_retried(authorized_client, status):
+    with MockTabPFNServer() as server:
+        assert server.router is not None
+        upload_route = server.router.put("https://upload.example/x_test")
+        upload_route.side_effect = [
+            httpx.Response(status, text="try again"),
+            httpx.Response(200),
+        ]
+
+        with patch("time.sleep"):
+            ServiceClient._upload_single_chunk(
+                url="https://upload.example/x_test",
+                chunk=b"data",
+                headers={},
+                dataset="x_test",
+            )
+
+    assert upload_route.call_count == 2

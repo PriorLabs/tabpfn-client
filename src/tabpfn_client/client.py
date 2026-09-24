@@ -93,9 +93,13 @@ class PredictResponseWithDownloadURI(BaseModel):
 
 
 PredictResponseUnion: TypeAlias = PredictResponse | PredictResponseWithDownloadURI
+
 _PredictResponseUnion: TypeAdapter[PredictResponseUnion] = TypeAdapter(
     PredictResponseUnion
 )
+
+# Statuses from a signed-URL upload or download that a retry can clear.
+_RETRYABLE_STORAGE_STATUSES = frozenset({408, 429, 502, 503, 504})
 
 # avoid logging of httpx and httpcore on client side
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -858,7 +862,7 @@ class ServiceClient(Singleton):
             RetryableServerError,
         ),
         max_tries=2,
-        interval=0,
+        interval=1,
         logger=logger,
         on_backoff=_on_backoff,
         on_giveup=_on_giveup,
@@ -868,7 +872,7 @@ class ServiceClient(Singleton):
         # `httpx_client` has no business reaching the object store; use a bare
         # request instead.
         resp = httpx.get(uri, timeout=timeout)
-        if resp.status_code in {502, 503, 504}:
+        if resp.status_code in _RETRYABLE_STORAGE_STATUSES:
             raise RetryableServerError(
                 f"Prediction download failed: {resp.status_code} {resp.text}"
             )
@@ -932,7 +936,7 @@ class ServiceClient(Singleton):
             RetryableServerError,
         ),
         max_tries=2,
-        interval=0,
+        interval=1,
         logger=logger,
         on_backoff=_on_backoff,
         on_giveup=_on_giveup,
@@ -953,7 +957,7 @@ class ServiceClient(Singleton):
         )
         if resp.status_code == 200:
             return
-        if resp.status_code in {502, 503, 504}:
+        if resp.status_code in _RETRYABLE_STORAGE_STATUSES:
             raise RetryableServerError(
                 f"GCS upload failed for dataset {dataset} at chunk {chunk_index}: "
                 f"{resp.status_code} {resp.text}"
