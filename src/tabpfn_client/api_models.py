@@ -366,21 +366,10 @@ class PredictRequest(BaseModel):
     test_set_upload_id: UUID
     fitted_train_set_id: UUID
     task_config: TaskConfig
-    with_download_uri: bool | None = Field(
-        default=None,
-        description="How the prediction is returned. `true`: as a signed download URL for the client to fetch. `false`: inline; an error is returned if the prediction does not fit inline. Unset: the server decides, and may return either.",
-    )
 
 
 class PredictResponse(BaseModel):
     prediction: Prediction
-    metadata: Metadata
-    timings: PredictTimings | None = None
-
-
-class PredictResponseWithDownloadURI(BaseModel):
-    prediction_uri: str
-    prediction_uri_expires_in_secs: int
     metadata: Metadata
     timings: PredictTimings | None = None
 

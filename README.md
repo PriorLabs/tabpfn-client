@@ -434,15 +434,6 @@ In particular, regression with `output_type="full"` has a stricter cap on the nu
 
 These limits will be increased in future releases.
 
-Predictions come back either inline in the API response or through a signed download URL, which the client fetches for you. By default the server decides. Set `with_download_uri=True` to always use a download URL, which suits large results, or `False` to require inline; a prediction too large to return inline then fails with an error. The returned arrays are identical either way:
-
-```python
-from tabpfn_client import TabPFNRegressor
-from tabpfn_client.models import ClientOptions
-
-model = TabPFNRegressor(client_options=ClientOptions(with_download_uri=True))
-```
-
 ## Access/Delete Data
 
 You can use our `UserDataClient` to access and delete personal information.

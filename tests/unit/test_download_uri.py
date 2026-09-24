@@ -1,4 +1,4 @@
-"""`ClientOptions.with_download_uri` fetches the prediction from a signed URL."""
+"""A predict answered with a signed download URL is fetched transparently."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from tabpfn_client.api_models import (
     RegressorPredictParams,
 )
 from tabpfn_client.client import ServiceClient
-from tabpfn_client.models import ClientOptions, PredictionResult
+from tabpfn_client.models import PredictionResult
 from tests.mock_tabpfn_server import MockTabPFNServer
 from tests.unit.test_client import _api_settings_payload
 
@@ -28,7 +28,6 @@ FIT_ID = UUID("00000000-0000-0000-0000-000000000002")
 DOWNLOAD_URL = "https://storage.example/predictions/result.json?X-Goog-Signature=abc"
 N_ROWS = 20
 X_TEST = np.random.RandomState(0).rand(N_ROWS, 3)
-OPT_IN = ClientOptions(with_download_uri=True)
 
 
 def _metadata(task: str) -> dict[str, Any]:
@@ -81,65 +80,13 @@ def mock_server(authorized_client: None) -> Iterator[MockTabPFNServer]:
         yield server
 
 
-def _predict(
-    task_config, client_options: ClientOptions | None = None
-) -> PredictionResult:
+def _predict(task_config) -> PredictionResult:
     with patch.object(ServiceClient, "_upload_to_gcs"):
         return ServiceClient.predict(
             fitted_train_set_id=FIT_ID,
             x_test=X_TEST,
             task_config=task_config,
-            client_options=client_options,
         )
-
-
-def test_choice_is_left_to_the_server_by_default(mock_server):
-    predict_route = mock_server.router.post("/tabpfn/predict").respond(
-        200, json={"prediction": [0] * N_ROWS, "metadata": _metadata("classification")}
-    )
-
-    result = _predict(ClassifierConfig())
-
-    sent = json.loads(predict_route.calls.last.request.content)
-    assert "with_download_uri" not in sent
-    np.testing.assert_array_equal(result.y_pred, np.zeros(N_ROWS, dtype=int))
-
-
-def test_opting_out_sends_false(mock_server):
-    predict_route = mock_server.router.post("/tabpfn/predict").respond(
-        200, json={"prediction": [0] * N_ROWS, "metadata": _metadata("classification")}
-    )
-
-    _predict(ClassifierConfig(), ClientOptions(with_download_uri=False))
-
-    sent = json.loads(predict_route.calls.last.request.content)
-    assert sent["with_download_uri"] is False
-
-
-def test_inline_that_does_not_fit_raises_the_server_message(mock_server):
-    detail = (
-        "The prediction is too large to return inline. "
-        "Request it with `with_download_uri=True` to receive a signed download URL instead."
-    )
-    mock_server.router.post("/tabpfn/predict").respond(
-        422, json={"message": detail, "error_code": "VALIDATION_ERROR"}
-    )
-
-    with pytest.raises(RuntimeError, match="with_download_uri=True"):
-        _predict(ClassifierConfig(), ClientOptions(with_download_uri=False))
-
-
-def test_server_may_answer_with_a_url_unasked(mock_server):
-    # Left unset, the server picks the transport, so the client must follow
-    # the body it gets rather than the flag it sent.
-    mock_server.router.post("/tabpfn/predict").respond(
-        200, json=_uri_body("classification")
-    )
-    mock_server.router.get(DOWNLOAD_URL).respond(200, json=[1] * N_ROWS)
-
-    result = _predict(ClassifierConfig())
-
-    np.testing.assert_array_equal(result.y_pred, np.ones(N_ROWS, dtype=int))
 
 
 def test_downloads_the_prediction_from_the_signed_url(mock_server):
@@ -150,10 +97,11 @@ def test_downloads_the_prediction_from_the_signed_url(mock_server):
         200, json=[1] * N_ROWS
     )
 
-    result = _predict(ClassifierConfig(), OPT_IN)
+    result = _predict(ClassifierConfig())
 
+    # The client never asks for a download URL; it only follows one.
     sent = json.loads(predict_route.calls.last.request.content)
-    assert sent["with_download_uri"] is True
+    assert "with_download_uri" not in sent
     # The bearer token belongs to the API, not to the object store.
     assert "authorization" not in download_route.calls.last.request.headers
     np.testing.assert_array_equal(result.y_pred, np.ones(N_ROWS, dtype=int))
@@ -179,7 +127,6 @@ def test_full_output_download_matches_the_inline_parsing(mock_server):
         RegressorConfig(
             predict_params=RegressorPredictParams(output_type=RegressorOutputType.FULL)
         ),
-        OPT_IN,
     )
 
     y_pred = result.y_pred
@@ -196,7 +143,7 @@ def test_failed_download_raises(mock_server):
     mock_server.router.get(DOWNLOAD_URL).respond(403, text="expired")
 
     with pytest.raises(RuntimeError, match="download permanently failed"):
-        _predict(ClassifierConfig(), OPT_IN)
+        _predict(ClassifierConfig())
 
 
 def test_transient_download_error_is_retried(mock_server):
@@ -209,7 +156,7 @@ def test_transient_download_error_is_retried(mock_server):
         httpx.Response(200, json=[1] * N_ROWS),
     ]
 
-    result = _predict(ClassifierConfig(), OPT_IN)
+    result = _predict(ClassifierConfig())
 
     assert download_route.call_count == 2
     np.testing.assert_array_equal(result.y_pred, np.ones(N_ROWS, dtype=int))

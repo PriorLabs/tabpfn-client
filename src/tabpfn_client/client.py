@@ -64,8 +64,9 @@ from tabpfn_client.api_models import (
     GetFitStatusRequest,
     GetFitStatusResponse,
     PredictRequest,
+    Metadata,
     PredictResponse,
-    PredictResponseWithDownloadURI,
+    PredictTimings,
     ClassifierConfig,
     RegressorConfig,
     SubmitFitJobResponse,
@@ -77,6 +78,18 @@ from tabpfn_client.api_models import (
 from tabpfn_client.options import get_opts
 
 logger = logging.getLogger(__name__)
+
+
+class PredictResponseWithDownloadURI(BaseModel):
+    """A predict answered with a signed download URL for the prediction.
+
+    Not among the generated API models: the server doesn't return this shape
+    today, but the client follows it if it ever does."""
+
+    prediction_uri: str
+    prediction_uri_expires_in_secs: int
+    metadata: Metadata
+    timings: PredictTimings | None = None
 
 
 PredictResponseUnion: TypeAlias = PredictResponse | PredictResponseWithDownloadURI
@@ -762,7 +775,6 @@ class ServiceClient(Singleton):
                 test_set_upload_id=prepare_resp.test_set_upload_id,
                 fitted_train_set_id=fitted_train_set_id,
                 task_config=task_config,
-                with_download_uri=client_options.with_download_uri,
             ),
             timeout=client_options.timeout,
             headers=client_options.headers,
@@ -829,8 +841,8 @@ class ServiceClient(Singleton):
             timeout=timeout,
             headers=headers,
         )
-        # Left unset, the flag lets the server choose the response shape, so the
-        # body decides which model applies rather than the request.
+        # The body, not the request, decides which model applies, so a response
+        # carrying a download URL is followed too.
         return cls._validate_response(
             res, "predict", success_model=_PredictResponseUnion
         )
