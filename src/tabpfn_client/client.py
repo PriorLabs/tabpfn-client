@@ -16,11 +16,12 @@ import re
 import struct
 import time
 import warnings
-from pydantic import BaseModel, ValidationError
-from typing import Any, cast, Mapping, NoReturn
+from pydantic import BaseModel, TypeAdapter, ValidationError
+from typing import Any, cast, Mapping, NoReturn, TypeAlias
 from typing_extensions import (
     Never,  # in `typing` only from Python 3.11
     TypeVar,  # supports default= on Python 3.10
+    assert_never,  # in `typing` only from Python 3.11
 )
 from tabpfn_client.models import (
     ClientOptions,
@@ -63,18 +64,42 @@ from tabpfn_client.api_models import (
     GetFitStatusRequest,
     GetFitStatusResponse,
     PredictRequest,
+    Metadata,
     PredictResponse,
+    PredictTimings,
     ClassifierConfig,
     RegressorConfig,
     SubmitFitJobResponse,
     ThinkingConfig,
     AsyncSettings,
     FitTaskConfig,
+    Prediction,
 )
 from tabpfn_client.options import get_opts
 
-
 logger = logging.getLogger(__name__)
+
+
+class PredictResponseWithDownloadURI(BaseModel):
+    """A predict answered with a signed download URL for the prediction.
+
+    Not among the generated API models: the server doesn't return this shape
+    today, but the client follows it if it ever does."""
+
+    prediction_uri: str
+    prediction_uri_expires_in_secs: int
+    metadata: Metadata
+    timings: PredictTimings | None = None
+
+
+PredictResponseUnion: TypeAlias = PredictResponse | PredictResponseWithDownloadURI
+
+_PredictResponseUnion: TypeAdapter[PredictResponseUnion] = TypeAdapter(
+    PredictResponseUnion
+)
+
+# Statuses from a signed-URL upload or download that a retry can clear.
+_RETRYABLE_STORAGE_STATUSES = frozenset({408, 429, 502, 503, 504})
 
 # avoid logging of httpx and httpcore on client side
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -759,7 +784,16 @@ class ServiceClient(Singleton):
             headers=client_options.headers,
         )
 
-        prediction = predict_resp.prediction
+        match predict_resp:
+            case PredictResponse():
+                prediction = predict_resp.prediction
+            case PredictResponseWithDownloadURI():
+                prediction = cls._download_prediction(
+                    predict_resp.prediction_uri,
+                    timeout=client_options.timeout,
+                )
+            case _:
+                assert_never(predict_resp)
 
         if isinstance(prediction, dict):
             result = {}
@@ -804,18 +838,55 @@ class ServiceClient(Singleton):
         req: PredictRequest,
         timeout: float,
         headers: dict[str, str] | None = None,
-    ) -> PredictResponse:
+    ) -> PredictResponseUnion:
         res = cls.httpx_client.post(
             url="/tabpfn/predict",
             json=req.model_dump(mode="json", exclude_none=True),
             timeout=timeout,
             headers=headers,
         )
+        # The body, not the request, decides which model applies, so a response
+        # carrying a download URL is followed too.
         return cls._validate_response(
-            res,
-            "predict",
-            success_model=PredictResponse,
+            res, "predict", success_model=_PredictResponseUnion
         )
+
+    @classmethod
+    @backoff.on_exception(
+        backoff.constant,
+        (
+            httpx.ConnectError,
+            httpx.TimeoutException,
+            httpx.ReadTimeout,
+            httpx.RemoteProtocolError,
+            RetryableServerError,
+        ),
+        max_tries=2,
+        interval=1,
+        logger=logger,
+        on_backoff=_on_backoff,
+        on_giveup=_on_giveup,
+    )
+    def _download_prediction(cls, uri: str, timeout: float) -> Prediction:
+        # The signed URL is the credential here, so the API bearer token on
+        # `httpx_client` has no business reaching the object store; use a bare
+        # request instead.
+        resp = httpx.get(uri, timeout=timeout)
+        if resp.status_code in _RETRYABLE_STORAGE_STATUSES:
+            raise RetryableServerError(
+                f"Prediction download failed: {resp.status_code} {resp.text}"
+            )
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"Prediction download permanently failed: {resp.status_code} {resp.text}"
+            )
+        try:
+            return resp.json()
+        except ValueError as e:
+            raise RuntimeError(
+                "Prediction download returned a body that is not JSON: "
+                f"{resp.text[:200]!r}"
+            ) from e
 
     @classmethod
     def _upload_to_gcs(cls, dataset: str, data: bytes, info: FileUploadInfo) -> None:
@@ -865,7 +936,7 @@ class ServiceClient(Singleton):
             RetryableServerError,
         ),
         max_tries=2,
-        interval=0,
+        interval=1,
         logger=logger,
         on_backoff=_on_backoff,
         on_giveup=_on_giveup,
@@ -886,7 +957,7 @@ class ServiceClient(Singleton):
         )
         if resp.status_code == 200:
             return
-        if resp.status_code in {502, 503, 504}:
+        if resp.status_code in _RETRYABLE_STORAGE_STATUSES:
             raise RetryableServerError(
                 f"GCS upload failed for dataset {dataset} at chunk {chunk_index}: "
                 f"{resp.status_code} {resp.text}"
@@ -981,7 +1052,7 @@ class ServiceClient(Singleton):
     def _validate_response(
         response: httpx.Response,
         method_name: str,
-        success_model: type[SuccessT],
+        success_model: type[SuccessT] | TypeAdapter[SuccessT],
         error_models: dict[int, type[ErrorT]] | None = None,
     ) -> SuccessT | ErrorT:
         error_models = error_models or {}
@@ -1001,6 +1072,8 @@ class ServiceClient(Singleton):
 
         # Success with expected schema.
         if is_success:
+            if isinstance(success_model, TypeAdapter):
+                return success_model.validate_python(body)
             return success_model.model_validate(body)
 
         # Errors with expected schema.
