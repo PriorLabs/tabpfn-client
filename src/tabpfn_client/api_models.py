@@ -47,6 +47,9 @@ DatasetFileType = Literal["csv", "parquet"]
 TabPFNSystem = Literal["preprocessing", "text", "thinking"]
 
 
+TextHandling = Literal["advanced", "simple"]
+
+
 ThinkingEffort = Literal["medium", "high"]
 
 
@@ -323,6 +326,7 @@ class DuplicateTrainSetErrorResponse(BaseModel):
 class FitRequest(BaseModel):
     task_config: FitTaskConfig
     tabpfn_systems: list[Annotated[TabPFNSystem | str, Field(union_mode="left_to_right")]] | None = None
+    text_handling: Annotated[TextHandling | str, Field(union_mode="left_to_right")] | None = None
     thinking_config: ThinkingConfig | None = None
     train_set_upload_id: UUID
 
@@ -407,6 +411,7 @@ class PrepareTrainSetUploadResponse(BaseModel):
 class SubmitFitJobRequest(BaseModel):
     task_config: FitTaskConfig
     tabpfn_systems: list[Annotated[TabPFNSystem | str, Field(union_mode="left_to_right")]] | None = None
+    text_handling: Annotated[TextHandling | str, Field(union_mode="left_to_right")] | None = None
     thinking_config: ThinkingConfig | None = None
     train_set_upload_id: UUID
 
