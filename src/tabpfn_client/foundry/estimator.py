@@ -11,10 +11,17 @@ call, where the actual fit runs.
 
 This client sends requests as `application/json` only (Foundry also
 accepts `multipart/form-data`, but we don't use it here).
+
+A fit that outlives the platform's request window answers HTTP 202 naming
+the fit rather than the prediction; `predict*` collects it by re-sending
+that id until the result is ready, so a long Thinking fit completes in one
+call from the caller's point of view. Only the id and the test rows go on
+the wire for those follow-ups, not the training data again.
 """
 
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, Literal, Optional, Union, cast
 
 import httpx
@@ -95,6 +102,28 @@ def _raise_for_status(resp: httpx.Response) -> None:
         error_code=error_code,
         trace_id=trace_id,
     )
+
+
+#: Fallback pause between collect attempts when the endpoint sends no
+#: `Retry-After`. Short enough to feel responsive, long enough that polling a
+#: multi-minute fit does not hammer the endpoint.
+_DEFAULT_RETRY_AFTER_S = 10.0
+
+
+def _retry_after_s(resp: httpx.Response) -> float:
+    """How long the endpoint asked us to wait, in seconds.
+
+    Only the delta-seconds form is honoured; an HTTP-date, or anything
+    unparseable, falls back to the default rather than failing a collect that
+    is otherwise progressing.
+    """
+    raw = resp.headers.get("Retry-After")
+    if raw is None:
+        return _DEFAULT_RETRY_AFTER_S
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return _DEFAULT_RETRY_AFTER_S
 
 
 def _to_jsonable(X: Any) -> list:
@@ -201,6 +230,7 @@ class _FoundryBase(BaseEstimator):
         use_kv_cache: bool = False,
         fit_mode: Optional[FitModeLiteral] = None,
         timeout_s: float = 300.0,
+        collect_timeout_s: float = 7200.0,
     ):
         self.endpoint_url = endpoint_url
         self.api_key = api_key
@@ -221,6 +251,7 @@ class _FoundryBase(BaseEstimator):
         self.use_kv_cache = use_kv_cache
         self.fit_mode = fit_mode
         self.timeout_s = timeout_s
+        self.collect_timeout_s = collect_timeout_s
         self._validate_args()
 
     def _validate_args(self) -> None:
@@ -263,6 +294,13 @@ class _FoundryBase(BaseEstimator):
             raise ValueError(
                 f"thinking_timeout_s must be >= 0 (0 means no client-requested "
                 f"limit); got {self.thinking_timeout_s!r}."
+            )
+
+        if self.collect_timeout_s < 0:
+            raise ValueError(
+                f"collect_timeout_s must be >= 0 (0 does not wait at all: a "
+                f"result that is not ready raises immediately); got "
+                f"{self.collect_timeout_s!r}."
             )
 
     @property
@@ -385,16 +423,52 @@ class _FoundryBase(BaseEstimator):
             cached_model_id=self._cached_model_id if self._cache_active else None,
             thinking_block=self._build_thinking_block(),
         )
-        resp = self._http_client().post(
-            self.endpoint_url,
-            json=body,
-            headers=self._headers(),
-        )
-        _raise_for_status(resp)
-        payload = resp.json()
-        if self._cache_active:
-            self._cached_model_id = payload.get("model_id") or self._cached_model_id
-        return payload
+        deadline = time.monotonic() + self.collect_timeout_s
+        while True:
+            resp = self._http_client().post(
+                self.endpoint_url,
+                json=body,
+                headers=self._headers(),
+            )
+            _raise_for_status(resp)
+            payload = resp.json()
+            if self._cache_active:
+                self._cached_model_id = payload.get("model_id") or self._cached_model_id
+
+            if resp.status_code != 202:
+                return payload
+
+            # 202 means the work outlived the request window and is still
+            # running server-side. It names the fit, so the follow-up carries
+            # that id and the test rows alone — re-sending the training data
+            # would cost the whole payload again on every attempt.
+            model_id = payload.get("model_id")
+            if model_id is None:
+                raise FoundryEndpointError(
+                    "Endpoint answered HTTP 202 without a model_id, so the "
+                    "result cannot be collected.",
+                    request=resp.request,
+                    response=resp,
+                    error_code=payload.get("error_code"),
+                    trace_id=payload.get("trace_id"),
+                )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"Endpoint still working after collect_timeout_s="
+                    f"{self.collect_timeout_s:g}s. The fit continues server-side; "
+                    f"predict again with the same data to collect it, or raise "
+                    f"collect_timeout_s."
+                )
+            body = _build_request_body(
+                task=self._task,
+                tabpfn_config=self._build_tabpfn_config(),
+                predict_params=params,
+                X_test=X_test,
+                cached_model_id=model_id,
+                thinking_block=self._build_thinking_block(),
+            )
+            time.sleep(min(_retry_after_s(resp), remaining))
 
 
 class TabPFNClassifier(_FoundryBase, ClassifierMixin):
