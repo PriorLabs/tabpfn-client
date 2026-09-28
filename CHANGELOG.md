@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-28
+
+### Added
+
+- Add simple and advanced text handling options to the classifier and regressor, with advanced as the default. ([#398](https://github.com/PriorLabs/tabpfn-client/pull/398))
+- When the server returns a prediction through a signed download URL, the client now fetches it transparently. ([#399](https://github.com/PriorLabs/tabpfn-client/pull/399))
+
+### Fixed
+
+- Validate training uploads against the server-advertised upload cap and defer subsampled context limits to the server. ([#396](https://github.com/PriorLabs/tabpfn-client/pull/396))
+
+
 ## [0.6.0] - 2026-09-15
 
 ### Added
