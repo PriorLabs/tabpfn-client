@@ -107,6 +107,7 @@ def _to_jsonable(X: Any) -> list:
 
 
 def _contains_none(value: Any) -> bool:
+    """Return whether `value` is None or a (nested) list containing None."""
     if value is None:
         return True
     if isinstance(value, list):
@@ -224,8 +225,15 @@ class _FoundryBase(BaseEstimator):
         self._validate_args()
 
     def _validate_args(self) -> None:
-        """Reject settings that would silently disable caching for a
-        configuration that plainly asked for it."""
+        """Validate constructor arguments.
+
+        Rejects settings that would silently disable caching for a
+        configuration that plainly asked for it, and out-of-range thinking-mode
+        values.
+
+        Raises:
+            ValueError: If the arguments conflict or are out of range.
+        """
         if self.fit_mode == "fit_preprocessors":
             if self.use_kv_cache:
                 raise ValueError(
@@ -301,7 +309,7 @@ class _FoundryBase(BaseEstimator):
         return cfg
 
     def _build_thinking_block(self) -> Dict[str, Any]:
-        """Top-level wire fields for thinking-mode. Empty when inactive.
+        """Build the top-level wire fields for thinking mode; empty when inactive.
 
         The endpoint only accepts these keys at the top level of the request
         body — nesting them under `task_config` / `tabpfn_config` /
@@ -350,6 +358,18 @@ class _FoundryBase(BaseEstimator):
         return state
 
     def fit(self, X: Any, y: Any) -> "_FoundryBase":
+        """Store the training data; the endpoint fits on the next `predict*` call.
+
+        Args:
+            X: Training features.
+            y: Training targets.
+
+        Returns:
+            The estimator itself.
+
+        Raises:
+            ValueError: If `X` and `y` have different numbers of samples.
+        """
         X_arr = X if isinstance(X, pd.DataFrame) else np.asarray(X)
         y_arr = y if isinstance(y, (pd.DataFrame, pd.Series)) else np.asarray(y)
         if X_arr.shape[0] != y_arr.shape[0]:
@@ -371,6 +391,13 @@ class _FoundryBase(BaseEstimator):
         output_type: str,
         predict_params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        """POST a predict request to the endpoint and return the JSON response.
+
+        Captures the returned `model_id` for reuse when caching is active.
+
+        Raises:
+            FoundryEndpointError: If the endpoint answers with a non-2xx status.
+        """
         check_is_fitted(self, ["X_train_", "y_train_"])
         params: Dict[str, Any] = {"output_type": output_type}
         if predict_params:
@@ -415,10 +442,12 @@ class TabPFNClassifier(_FoundryBase, ClassifierMixin):
         super().__init__(*args, task=task, **kwargs)
 
     def predict(self, X: Any) -> np.ndarray:
+        """Predict class labels for `X`."""
         result = self._invoke(X, output_type="preds")
         return np.asarray(result["prediction"])
 
     def predict_proba(self, X: Any) -> np.ndarray:
+        """Predict class probabilities for `X`."""
         result = self._invoke(X, output_type="probas")
         return np.asarray(result["prediction"])
 
@@ -448,6 +477,19 @@ class TabPFNRegressor(_FoundryBase, RegressorMixin):
         ] = "mean",
         quantiles: Optional[list] = None,
     ) -> Union[np.ndarray, list, Dict[str, np.ndarray]]:
+        """Predict regression targets for `X`.
+
+        Args:
+            X: Test features.
+            output_type: Which prediction to return.
+            quantiles: Quantile levels to compute when `output_type` is
+                "quantiles".
+
+        Returns:
+            An array for point predictions; a list with one array per quantile
+            for "quantiles"; a dict of arrays for dict-shaped outputs such as
+            "full" and "main".
+        """
         predict_params: Dict[str, Any] = {}
         if quantiles is not None:
             predict_params["quantiles"] = quantiles

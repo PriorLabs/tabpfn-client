@@ -194,6 +194,20 @@ class _HostedBase(BaseEstimator):
         return state
 
     def fit(self, X: Any, y: Any) -> "_HostedBase":
+        """Store the training data; the endpoint fits on the next `predict*` call.
+
+        Clears any `model_id_` captured from an earlier fit.
+
+        Args:
+            X: Training features.
+            y: Training targets.
+
+        Returns:
+            The estimator itself.
+
+        Raises:
+            ValueError: If `X` and `y` have different numbers of samples.
+        """
         X_arr = X if isinstance(X, pd.DataFrame) else np.asarray(X)
         y_arr = y if isinstance(y, (pd.DataFrame, pd.Series)) else np.asarray(y)
         if X_arr.shape[0] != y_arr.shape[0]:
@@ -218,6 +232,18 @@ class _HostedBase(BaseEstimator):
         output_type: str,
         predict_params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        """Send a predict request to the endpoint and return the JSON response.
+
+        Sends the cached or constructor `model_id` in place of the training
+        data when applicable, and records a returned `model_id` on
+        `model_id_`.
+
+        Raises:
+            sklearn.exceptions.NotFittedError: If neither training data nor a
+                `model_id` is available.
+            httpx.HTTPStatusError: If the endpoint answers with a non-2xx
+                status.
+        """
         params: Dict[str, Any] = {"output_type": output_type}
         if predict_params:
             params.update(predict_params)
@@ -318,10 +344,12 @@ class TabPFNClassifier(ClassifierMixin, _HostedBase):
     _TASK = "classification"
 
     def predict(self, X: Any) -> np.ndarray:
+        """Predict class labels for `X`."""
         result = self._invoke(X, output_type="preds")
         return np.asarray(result["prediction"])
 
     def predict_proba(self, X: Any) -> np.ndarray:
+        """Predict class probabilities for `X`."""
         result = self._invoke(X, output_type="probas")
         return np.asarray(result["prediction"])
 
@@ -348,6 +376,18 @@ class TabPFNRegressor(RegressorMixin, _HostedBase):
         output_type: str = "mean",
         quantiles: Optional[list] = None,
     ) -> np.ndarray:
+        """Predict regression targets for `X`.
+
+        Args:
+            X: Test features.
+            output_type: Which prediction to return, e.g. "mean", "median" or
+                "quantiles".
+            quantiles: Quantile levels to compute when `output_type` is
+                "quantiles".
+
+        Returns:
+            The endpoint's prediction as an array.
+        """
         predict_params: Dict[str, Any] = {}
         if quantiles is not None:
             predict_params["quantiles"] = quantiles

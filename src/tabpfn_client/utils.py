@@ -1,6 +1,8 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
 
+"""Helpers for model version resolution and argument validation."""
+
 from typing import Any
 from tabpfn_client.api_models import ModelLimit, ModelVersion, TextHandling
 
@@ -9,6 +11,14 @@ def model_limit_from_version(
     model_version: ModelVersion, model_limits: dict[Any, ModelLimit]
 ) -> ModelLimit:
     """Resolve limit of a model to the same or closest previous version limit.
+
+    Args:
+        model_version: Version whose limits to look up.
+        model_limits: Limits keyed by model version.
+
+    Returns:
+        The limits registered for the model version, or for the closest version
+        below it.
 
     Raises:
         ValueError: If no model limits are registered at or below the model version.
@@ -28,6 +38,12 @@ def model_version_from_path(model_path: str) -> ModelVersion:
     version marker are the v2 hash names (e.g. `gn2p4bpt`), so they resolve to
     v2. The server is the authority on what a name means; this only picks the
     limits used for client-side pre-flight checks.
+
+    Args:
+        model_path: Checkpoint filename or short model name.
+
+    Returns:
+        The model version the name refers to, or V2 when it has no version marker.
     """
     for version in ModelVersion:
         # "v3" cannot shadow "v3.5" here: both patterns need the separator that
@@ -39,7 +55,17 @@ def model_version_from_path(model_path: str) -> ModelVersion:
 
 
 def validate_text_handling(value: object) -> TextHandling:
-    """Reject unsupported text-processing presets before authentication or upload."""
+    """Reject unsupported text-processing presets before authentication or upload.
+
+    Args:
+        value: Requested text-handling preset.
+
+    Returns:
+        The value unchanged.
+
+    Raises:
+        ValueError: If the value is neither "advanced" nor "simple".
+    """
     if value not in ("advanced", "simple"):
         raise ValueError("text_handling must be 'advanced' or 'simple'")
     return value

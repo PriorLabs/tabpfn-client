@@ -11,6 +11,11 @@ from tabpfn_client.config import get_access_token
 
 
 def _shape(X: np.ndarray | pd.DataFrame, name: str) -> tuple[int, int]:
+    """Return the (rows, columns) of a two-dimensional input, validating both.
+
+    Raises:
+        ValueError: If the input is not two-dimensional or its counts are invalid.
+    """
     shape = getattr(X, "shape", None)
     if shape is None or len(shape) != 2:
         raise ValueError(f"{name} must be a two-dimensional array or DataFrame")
@@ -44,6 +49,23 @@ def estimate_cost(
     per-base-estimator count. ``cache_predict`` assumes a cache hit; fallback
     or different fitted estimator counts can change the final charge.
     A quote does not guarantee model access or dataset eligibility.
+
+    Args:
+        X_train: Training data; only its shape is used.
+        X_test: Test data; only its shape is used. Omit for ``thinking_fit``.
+        model_version: Model version to price. Resolved by the server if None.
+        operation: Operation to price.
+        n_estimators: Number of estimators. Resolved by the server if None.
+        thinking_effort: Effort level for thinking operations.
+
+    Returns:
+        The server's cost estimate.
+
+    Raises:
+        ValueError: If an input is not two-dimensional or has invalid row or
+            feature counts, if X_train and X_test differ in feature count, if
+            X_test is given for ``thinking_fit``, or if ``n_estimators`` is not a
+            positive integer.
     """
     train_rows, raw_columns = _shape(X_train, "X_train")
     test_rows = 0

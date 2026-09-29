@@ -13,7 +13,6 @@ from rich.console import Console
 
 def _should_use_color() -> bool:
     """Determine whether color output should be used."""
-
     if os.environ.get("NO_COLOR"):
         return False
     if not sys.stdout.isatty():
@@ -27,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 def notify(message: str) -> None:
-    """Status text for a human at a terminal, a log record anywhere else.
+    """Print status text at a terminal; log it at INFO level anywhere else.
 
     Output that is not part of an interactive prompt goes through here, so a
     script or batch job gets a quiet stdout it can redirect and parse.
@@ -39,19 +38,23 @@ def notify(message: str) -> None:
 
 
 def success(message: str) -> None:
+    """Print `message` in bold green."""
     console.print(f"[bold green]{message}[/bold green]")
 
 
 def warn(message: str) -> None:
+    """Print `message` in yellow."""
     console.print(f"[yellow]{message}[/yellow]")
 
 
 def fail(message: str) -> None:
+    """Print `message` in bold red."""
     console.print(f"[bold red]{message}[/bold red]")
 
 
 @contextmanager
 def status(message: str) -> Generator[None]:
+    """Show a spinner with `message` while the block runs."""
     with console.status(f"[bold]{message}[/bold]"):
         yield
 
@@ -70,7 +73,11 @@ _PRIOR_LABS_ASCII = r"""
 
 
 def print_logo(subtitle=None) -> None:
-    """Print the large Prior Labs ASCII logo with optional subtitle."""
+    """Print the large Prior Labs ASCII logo.
+
+    Args:
+        subtitle (str | None): Dimmed line printed below the logo, if given.
+    """
     console.print(_PRIOR_LABS_ASCII, style="bold blue")
     if subtitle:
         console.print(f"[dim]{subtitle}[/dim]", end="\n\n")

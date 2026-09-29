@@ -28,7 +28,12 @@ def _validated_arrays(
     zoom_quantile: float | None,
     smooth: float,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Check the arguments and return the logits and borders as float arrays."""
+    """Check the arguments and return the logits and borders as float arrays.
+
+    Raises:
+        ValueError: If any argument is invalid or the arrays have inconsistent
+            shapes.
+    """
     if not {"logits", "borders"} <= prediction.keys():
         raise ValueError(
             'prediction must be the output of predict(..., output_type="full").'
@@ -116,35 +121,29 @@ def plot_regression_distribution(
 ) -> Axes:
     """Plot the predicted target distribution for a single sample.
 
-    Parameters
-    ----------
-    prediction : mapping
-        Output of ``regressor.predict(X, output_type="full")``. It may hold
-        several samples; pick the one to plot with ``sample_idx``.
-    sample_idx : int, default=0
-        Index of the sample to plot within ``prediction``.
-    statistics : sequence of str, default=("mean", "median", "mode")
-        Point statistics to mark with a vertical line. Each one must be present
-        in ``prediction``.
-    quantile_interval : tuple of float or None, default=(0.1, 0.9)
-        Central interval to shade. Pass ``None`` to disable.
-    zoom_quantile : float or None, default=0.99
-        Fraction of probability mass to keep in view, centred on the median.
-        Pass ``None`` to show the full support.
-    smooth : float, default=0.005
-        Width of the display-only moving average over the density, as a
-        fraction of the number of bars. Pass ``0`` to show the raw bar density.
-    ax : matplotlib.axes.Axes or None, default=None
-        Existing axes to draw on. A new figure is created if omitted. When the
-        axes already holds a curve, the limits, labels and legend of that curve
-        are preserved so several distributions can be overlaid.
-    color : str, default="#1f77b4"
-        Base colour of the density curve.
+    Args:
+        prediction: Output of ``regressor.predict(X, output_type="full")``. It
+            may hold several samples; pick the one to plot with ``sample_idx``.
+        sample_idx: Index of the sample to plot within ``prediction``.
+        statistics: Point statistics to mark with a vertical line. Each one
+            must be present in ``prediction``.
+        quantile_interval: Central interval to shade. Pass ``None`` to disable.
+        zoom_quantile: Fraction of probability mass to keep in view, centred on
+            the median. Pass ``None`` to show the full support.
+        smooth: Width of the display-only moving average over the density, as
+            a fraction of the number of bars. Pass ``0`` to show the raw bar
+            density.
+        ax: Existing axes to draw on. A new figure is created if omitted. When
+            the axes already holds a curve, the limits, labels and legend of
+            that curve are preserved so several distributions can be overlaid.
+        color: Base colour of the density curve.
 
-    Returns
-    -------
-    matplotlib.axes.Axes
+    Returns:
         The axes containing the plot.
+
+    Raises:
+        ValueError: If ``prediction`` or the other arguments are invalid.
+        ModuleNotFoundError: If matplotlib is not installed.
     """
     logits, borders = _validated_arrays(
         prediction, sample_idx, statistics, quantile_interval, zoom_quantile, smooth

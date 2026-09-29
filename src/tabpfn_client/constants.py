@@ -1,6 +1,8 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
 
+"""Package-wide constants: cache location and public URLs."""
+
 from pathlib import Path
 
 # Re-export: `tabpfn_client.constants.ModelVersion` is public API.

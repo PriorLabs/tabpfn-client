@@ -1,6 +1,8 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
 
+"""Client initialization, authentication and access-token management."""
+
 import shutil
 
 from httpx import ConnectError
@@ -20,10 +22,18 @@ CONNECTION_ERROR = RuntimeError(
 
 
 class Config:
+    """Process-wide client state; used through its class attributes only.
+
+    Attributes:
+        is_initialized: Whether `init()` has completed authentication.
+        use_server: Whether inference runs on the TabPFN cloud service.
+    """
+
     def __new__(cls, *args, **kwargs):
-        """
-        This class is a singleton and should not be instantiated directly.
-        Only use class methods.
+        """Refuse instantiation; the class is a singleton used through its attributes.
+
+        Raises:
+            TypeError: Always.
         """
         raise TypeError("Cannot instantiate this class")
 
@@ -32,8 +42,7 @@ class Config:
 
 
 def init(use_server=True):
-    """
-    Initializes the TabPFN client and authenticates with the TabPFN cloud service.
+    """Initializes the TabPFN client and authenticates with the TabPFN cloud service.
 
     Authentication is token-based and never interactive. The token comes from
     `set_access_token()` or the TABPFN_TOKEN environment variable, or from a
@@ -43,10 +52,13 @@ def init(use_server=True):
     Generate a token at https://platform.priorlabs.ai/account/api-keys, or call
     `tabpfn_client.interactive_login()` to log in through the browser.
 
-    :param use_server: Whether to use the TabPFN cloud service. Currently, only
-                       True is supported.
-    :raises RuntimeError: If local inference is requested, if the server is
-                          unreachable, or if no valid access token is available.
+    Args:
+        use_server (bool): Whether to use the TabPFN cloud service. Currently, only
+            True is supported.
+
+    Raises:
+        RuntimeError: If local inference is requested, if the server is
+            unreachable, or if no valid access token is available.
     """
     # initialize config
     Config.use_server = use_server
@@ -99,8 +111,7 @@ def init(use_server=True):
 
 
 def reset():
-    """
-    Resets the client state and clears local authentication caches.
+    """Resets the client state and clears local authentication caches.
 
     Use this function if you need to log out or clear stored session data
     from the local machine.
@@ -115,12 +126,15 @@ def reset():
 
 
 def get_access_token() -> str:
-    """
-    Retrieves the current active access token.
+    """Retrieves the current active access token.
 
     If the client is not yet initialized, this will trigger the `init()` login flow.
 
-    :return: The access token string used for API requests.
+    Returns:
+        The access token string used for API requests.
+
+    Raises:
+        RuntimeError: If no access token is available after initialization.
     """
     init()
     access_token = ServiceClient.get_access_token()
@@ -130,26 +144,26 @@ def get_access_token() -> str:
 
 
 def set_access_token(access_token: str):
-    """
-    Manually sets the access token for the session.
+    """Manually sets the access token for the session.
 
     Use this in non-interactive environments (e.g. CI/CD, notebooks) as an
     alternative to the TABPFN_TOKEN environment variable.
 
     Generate a token at https://platform.priorlabs.ai/account/api-keys
 
-    :param access_token: A valid TabPFN access token string.
+    Args:
+        access_token: A valid TabPFN access token string.
     """
     UserAuthenticationClient.set_token(access_token)
     Config.is_initialized = True
 
 
 def get_api_usage() -> str:
-    """
-    Fetches and formats the current API usage statistics for the user.
+    """Fetches and formats the current API usage statistics for the user.
 
-    :return: A human-readable string detailing current credit usage,
-             the total limit, and when the limit resets.
+    Returns:
+        A human-readable string detailing current credit usage, the total limit,
+        and when the limit resets.
     """
     access_token = get_access_token()
     response = ServiceClient.get_api_usage(access_token)

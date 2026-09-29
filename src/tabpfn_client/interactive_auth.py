@@ -53,7 +53,7 @@ class InteractiveLoginError(RuntimeError):
 
 
 def _has_display() -> bool:
-    """Heuristic: is a graphical display likely available for opening a browser?"""
+    """Return whether a graphical display is likely available for opening a browser."""
     if sys.platform == "win32":
         return True
     if sys.platform == "darwin":
@@ -119,7 +119,16 @@ def _create_callback_server(
     auth_event: threading.Event,
     received_token: list[str | None],
 ) -> tuple[socketserver.TCPServer, int]:
-    """Serve the login callback on an ephemeral port. Returns ``(httpd, port)``."""
+    """Serve the login callback on an ephemeral loopback port.
+
+    Args:
+        gui_url: Base URL of the web frontend, used for the success redirect.
+        auth_event: Set once a request delivers a token.
+        received_token: Single-element list the handler writes the token into.
+
+    Returns:
+        The server, not yet serving, and the port it is bound to.
+    """
 
     class _CallbackHandler(http.server.BaseHTTPRequestHandler):
         def do_GET(self) -> None:
@@ -183,7 +192,16 @@ def _poll_for_token(
     received_token: list[str | None],
     timeout: float,
 ) -> str | None:
-    """Read a token from stdin or the browser callback, whichever arrives first."""
+    """Read a token from stdin or the browser callback, whichever arrives first.
+
+    Args:
+        auth_event: Set by the callback server once it has received a token.
+        received_token: Single-element list holding the callback's token.
+        timeout: Seconds to wait before giving up.
+
+    Returns:
+        The pasted or received token, or None on timeout or EOF.
+    """
     prompt = "API key (or press Enter to keep waiting): "
 
     if sys.platform == "win32":
@@ -343,7 +361,11 @@ def _browser_login(gui_url: str, timeout: float) -> str | None:
 
 
 def _prompt_menu() -> str:
-    """Ask whether to log in or create an account. Returns 'login'/'signup'/'q'."""
+    """Ask whether to log in or create an account.
+
+    Returns:
+        'login', 'signup', or 'q' to quit.
+    """
     sys.stdout.write(
         "\n  [1] Log in to your TabPFN account"
         "\n  [2] Create a TabPFN account"
@@ -382,18 +404,22 @@ def interactive_login(
     On success the token is verified, cached for future runs, and installed as
     the active token, so a subsequent `init()` needs no further input.
 
-    :param force_relogin: Run the login flow even when a working token is
-                          already available, for example to switch accounts.
-                          By default an existing token is returned as-is.
-    :param open_browser: Open the login page in a browser. When False (or when
-                         no display is detected) the URL is printed and you
-                         paste the API key instead. Does not affect signup,
-                         which never needs a browser.
-    :param timeout: Seconds to wait for the browser callback. The paste prompt
-                    stays available throughout.
-    :returns: The access token.
-    :raises InteractiveLoginError: If no terminal is available, the flow was
-                                   aborted, or the resulting token was rejected.
+    Args:
+        force_relogin: Run the login flow even when a working token is already
+            available, for example to switch accounts. By default an existing
+            token is returned as-is.
+        open_browser: Open the login page in a browser. When False (or when no
+            display is detected) the URL is printed and you paste the API key
+            instead. Does not affect signup, which never needs a browser.
+        timeout: Seconds to wait for the browser callback. The paste prompt
+            stays available throughout.
+
+    Returns:
+        The access token.
+
+    Raises:
+        InteractiveLoginError: If no terminal is available, the flow was
+            aborted, or the resulting token was rejected.
     """
     if not force_relogin:
         from tabpfn_client.service_wrapper import UserAuthenticationClient

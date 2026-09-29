@@ -1,6 +1,8 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
 
+"""Hosted TabPFN estimators with a scikit-learn-compatible interface."""
+
 from __future__ import annotations
 
 import logging
@@ -82,6 +84,7 @@ class TabPFNModelSelection:
 
     @classmethod
     def list_available_models(cls) -> list[str]:
+        """Return the model names accepted as `model_path`."""
         return cls._AVAILABLE_MODELS
 
     @classmethod
@@ -91,6 +94,16 @@ class TabPFNModelSelection:
         """Construct an estimator that uses the given version of the model.
 
         Any kwargs will override the default settings, except for `model_path`.
+
+        Args:
+            version: The model version to use.
+            **overrides: Constructor arguments other than `model_path`.
+
+        Returns:
+            The constructed estimator.
+
+        Raises:
+            ValueError: If `version` is not a known model version.
         """
         try:
             version = ModelVersion(version)
@@ -220,129 +233,159 @@ class TabPFNClassifier(
 
         This constructs a classifier using the latest model and settings. If you would
         like to use a previous model version, use `create_default_for_version()`
-        instead. You can also use `model_path` to specify a particular model
+        instead. You can also use `model_path` to specify a particular model.
 
-        Parameters
-        ----------
-        model_path: str, default="auto"
-            The name of the model to use. "auto" lets the server pick the
-            latest default model; "default" is accepted as a backward-compatible
-            alias. Use `create_default_for_version()` to pin to a specific
-            major version.
-        n_estimators: int, default=8
-            The number of estimators in the TabPFN ensemble. We aggregate the
-             predictions of `n_estimators`-many forward passes of TabPFN. Each forward
-             pass has (slightly) different input data. Think of this as an ensemble of
-             `n_estimators`-many "prompts" of the input data.
-        softmax_temperature: float, default=0.9
-            The temperature for the softmax function. This is used to control the
-            confidence of the model's predictions. Lower values make the model's
-            predictions more confident. This is only applied when predicting during a
-            post-processing step. Set `softmax_temperature=1.0` for no effect.
-        balance_probabilities: bool, default=False
-            Whether to balance the probabilities based on the class distribution
-            in the training data. This can help to improve predictive performance
-            when the classes are highly imbalanced. This is only applied when predicting
-            during a post-processing step.
-        average_before_softmax: bool, default=False
-             Only used if `n_estimators > 1`. Whether to average the predictions of the
-             estimators before applying the softmax function. This can help to improve
-             predictive performance when there are many classes or when calibrating the
-             model's confidence. This is only applied when predicting during a
-             post-processing.
-        ignore_pretraining_limits: bool, default=True
-            Whether to ignore the pre-training limits of the model. The TabPFN models
-            have been pre-trained on a specific range of input data. If the input data
-            is outside of this range, the model may not perform well. You may ignore
-            our limits to use the model on data outside the pre-training range.
-            Defaults to True (vs False in the OSS package): the server enforces its
-            own capacity limits, so the OSS check is redundant and stricter.
-        inference_precision: "autocast" or "auto", default="auto"
-            The precision to use for inference. This can dramatically affect the
-            speed and reproducibility of the inference.
-        random_state: int or RandomState or RandomGenerator or None, default=0
-            Controls the randomness of the model. Pass an int for reproducible
-            results; pass `None` to use a fresh random seed each run.
-        inference_config: dict or None, default=None
-            Additional advanced arguments for model interface. See the doc of InferenceConfig
-            in the tabpfn package for more details. For the client, the inference_config and the
-            preprocess transforms need to be dictionaries.
-        categorical_features_indices: list[int] or None, default=None
-            The indices of the columns that should be treated as categorical.
-            If None, the model infers which columns are categorical.
-        fit_mode: {"fit_preprocessors", "fit_with_cache"} or None, default=None
-            Controls what the server persists at fit time. None defers to the
-            server default, which is "fit_preprocessors".
-            "fit_preprocessors" fits only the preprocessing state, so every
-            predict re-runs the forward pass from the uploaded train set.
-            "fit_with_cache" additionally builds and persists a server-side KV
-            cache keyed by the resulting fitted-train-set id; later predicts
-            against that id (stored on the estimator as `model_id_`, and
-            persisted across runs by `save_model()`) are served from the cache
-            instead of re-fitting.
-        text_handling: {"advanced", "simple"}, default="advanced"
-            Text-processing preset. Both choices support text. Advanced preserves
-            the default processing; simple is an alternative whose accuracy depends
-            on the dataset. Applies when preprocessing is enabled.
-        paper_version: bool, default=False
-            If True, will use the model described in the paper, instead of the newest
-            version available on the API, which e.g handles text features better.
-        thinking_mode: bool, default=False
-            If True, spend extra fit-time compute for higher precision.
-            Equivalent to passing `thinking_effort="medium"` — setting any
-            `thinking_effort` value also enables thinking, so this flag is
-            optional when you've set the level explicitly.
-        thinking_effort: {"medium", "high"} or None, default=None
-            Effort level for thinking mode. When set, thinking is enabled
-            (you don't also need `thinking_mode=True`). When None and
-            `thinking_mode=True`, defaults to "medium".
-        thinking_timeout_s: float or None, default=None
-            Budget for the fit, in seconds. Only consulted when thinking is
-            enabled. Capped at 2400.
-        thinking_metric: str or None, default=None
-            Optimization metric for the fit. Only consulted when thinking
-            is enabled.
+        Args:
+            model_path:
+                The name of the model to use. "auto" (or None) lets the server pick
+                the latest default model; "default" is accepted as a backward-compatible
+                alias. Use `create_default_for_version()` to pin to a specific major
+                version, and `list_available_models()` for the accepted names.
 
-            Binary classification:
-                "accuracy", "balanced_accuracy", "mcc", "log_loss",
-                "pac", "quadratic_kappa", "roc_auc", "average_precision",
-                "precision", "precision_macro", "precision_micro",
-                "precision_weighted", "recall", "recall_macro",
-                "recall_micro", "recall_weighted", "f1", "f1_macro",
-                "f1_micro", "f1_weighted".
-            Multiclass classification:
-                "accuracy", "balanced_accuracy", "mcc", "log_loss",
-                "pac", "quadratic_kappa", "precision_macro",
-                "precision_micro", "precision_weighted", "recall_macro",
-                "recall_micro", "recall_weighted", "f1_macro",
-                "f1_micro", "f1_weighted", "roc_auc_ovo",
-                "roc_auc_ovo_macro", "roc_auc_ovr", "roc_auc_ovr_macro",
-                "roc_auc_ovr_micro", "roc_auc_ovr_weighted".
+            n_estimators:
+                The number of estimators in the TabPFN ensemble. We aggregate the
+                predictions of `n_estimators`-many forward passes of TabPFN. Each
+                forward pass has (slightly) different input data. Think of this as an
+                ensemble of `n_estimators`-many "prompts" of the input data. If None,
+                the server default is used.
 
-            Aliases "acc", "nll", "pac_score" are also accepted.
-        group_col: str or list[str] or None, default=None
-            New since 0.6.0. Column(s) of `X` that identify groups of related
-            rows, e.g. a patient or a session id. During the fit, the rows of
-            one group are never split between training and validation. The fit
-            may also use the other rows of a group to predict a row of it.
-            Requires thinking mode, and `X` passed to `fit` and `predict` must
-            be a pandas DataFrame that holds the column(s).
-        time_col: str or None, default=None
-            New since 0.6.0. Column of `X` that holds time, as datetimes or
-            numbers. During the fit, validation uses contiguous blocks of time.
-            Cannot be combined with `group_col`. Requires thinking mode, and
-            `X` must be a pandas DataFrame that holds the column.
-        group_time_col: str or None, default=None
-            New since 0.6.0. Column of `X` that orders the rows within a group.
-            Requires `group_col` and thinking mode, and `X` must be a pandas
-            DataFrame that holds the column.
-        api_mode: ApiMode, default=ApiMode.AUTO
-            Controls how the client calls the server.
-            SYNC: the client waits for the server to complete the request before returning.
-            ASYNC: the client returns immediately and the server completes the request in the background.
-            AUTO: the client automatically determines the best mode to use based on the request.
-        client_options : ClientOptions, default=None
-            Client specific options (e.g. timeout, headers).
+            softmax_temperature:
+                The temperature for the softmax function. This is used to control the
+                confidence of the model's predictions. Lower values make the model's
+                predictions more confident. This is only applied when predicting during
+                a post-processing step. Set `softmax_temperature=1.0` for no effect. If
+                None, the server default is used.
+
+            balance_probabilities:
+                Whether to balance the probabilities based on the class distribution
+                in the training data. This can help to improve predictive performance
+                when the classes are highly imbalanced. This is only applied when
+                predicting during a post-processing step.
+
+            average_before_softmax:
+                Only used if `n_estimators > 1`. Whether to average the predictions of
+                the estimators before applying the softmax function. This can help to
+                improve predictive performance when there are many classes or when
+                calibrating the model's confidence. This is only applied when predicting
+                during a post-processing step. If None, the server default is used.
+
+            ignore_pretraining_limits:
+                Whether to ignore the pre-training limits of the model. The TabPFN
+                models have been pre-trained on a specific range of input data. If the
+                input data is outside of this range, the model may not perform well. You
+                may ignore our limits to use the model on data outside the pre-training
+                range.
+
+            inference_precision:
+                The precision to use for inference. This can dramatically affect the
+                speed and reproducibility of the inference. `"autocast"` enables
+                mixed-precision autocast; `"auto"` decides based on the device. If None,
+                the server default is used.
+
+            random_state:
+                Controls the randomness of the model. Pass an int for reproducible
+                results; pass `None` to use a fresh random seed each run.
+
+            inference_config:
+                For advanced users, additional advanced arguments that adjust the
+                behavior of the model interface. See `InferenceConfig` in the tabpfn
+                package for details and options. For the client, the inference_config
+                and the preprocess transforms need to be dictionaries.
+
+            categorical_features_indices:
+                The indices of the columns that should be treated as categorical.
+                If None, the model infers which columns are categorical.
+
+            fit_mode:
+                Controls what the server persists at fit time. None defers to the
+                server default, which is "fit_preprocessors".
+
+                - If `"fit_preprocessors"`, only the preprocessing state is fitted, so
+                  every predict re-runs the forward pass from the uploaded train set.
+                - If `"fit_with_cache"`, a server-side KV cache is additionally built
+                  and persisted, keyed by the resulting fitted-train-set id. Later
+                  predicts against that id (stored on the estimator as `model_id_`, and
+                  persisted across runs by `save_model()`) are served from the cache
+                  instead of re-fitting.
+
+            paper_version:
+                If True, will use the model described in the paper, instead of the
+                newest version available on the API, which e.g. handles text features
+                better. Cannot be combined with thinking mode.
+
+            thinking_mode:
+                If True, spend extra fit-time compute for higher precision.
+                Equivalent to passing `thinking_effort="medium"`; setting any
+                `thinking_effort` value also enables thinking, so this flag is
+                optional when you've set the level explicitly.
+
+            thinking_effort:
+                Effort level for thinking mode. When set, thinking is enabled
+                (you don't also need `thinking_mode=True`). When None and
+                `thinking_mode=True`, defaults to "medium".
+
+            thinking_timeout_s:
+                Budget for the fit, in seconds. Only consulted when thinking is
+                enabled. Capped at 2400.
+
+            thinking_metric:
+                Optimization metric for the fit. Only consulted when thinking
+                is enabled.
+
+                Binary classification:
+                    "accuracy", "balanced_accuracy", "mcc", "log_loss",
+                    "pac", "quadratic_kappa", "roc_auc", "average_precision",
+                    "precision", "precision_macro", "precision_micro",
+                    "precision_weighted", "recall", "recall_macro",
+                    "recall_micro", "recall_weighted", "f1", "f1_macro",
+                    "f1_micro", "f1_weighted".
+
+                Multiclass classification:
+                    "accuracy", "balanced_accuracy", "mcc", "log_loss",
+                    "pac", "quadratic_kappa", "precision_macro",
+                    "precision_micro", "precision_weighted", "recall_macro",
+                    "recall_micro", "recall_weighted", "f1_macro",
+                    "f1_micro", "f1_weighted", "roc_auc_ovo",
+                    "roc_auc_ovo_macro", "roc_auc_ovr", "roc_auc_ovr_macro",
+                    "roc_auc_ovr_micro", "roc_auc_ovr_weighted".
+
+                Aliases "acc", "nll", "pac_score" are also accepted.
+
+            group_col:
+                New since 0.6.0. Column(s) of `X` that identify groups of related
+                rows, e.g. a patient or a session id. During the fit, the rows of
+                one group are never split between training and validation. The fit
+                may also use the other rows of a group to predict a row of it.
+                Requires thinking mode, and `X` passed to `fit` and `predict` must
+                be a pandas DataFrame that holds the column(s).
+
+            time_col:
+                New since 0.6.0. Column of `X` that holds time, as datetimes or
+                numbers. During the fit, validation uses contiguous blocks of time.
+                Cannot be combined with `group_col`. Requires thinking mode, and
+                `X` must be a pandas DataFrame that holds the column.
+
+            group_time_col:
+                New since 0.6.0. Column of `X` that orders the rows within a group.
+                Requires `group_col` and thinking mode, and `X` must be a pandas
+                DataFrame that holds the column.
+
+            api_mode:
+                Controls how the client calls the server.
+
+                - `SYNC`: the client waits for the server to complete the request
+                  before returning.
+                - `ASYNC`: the client returns immediately and the server completes the
+                  request in the background.
+                - `AUTO`: the client determines the best mode based on the request.
+
+            client_options:
+                Client specific options (e.g. timeout, headers).
+
+            text_handling:
+                Text-processing preset. Both choices support text. Advanced preserves
+                the default processing; simple is an alternative whose accuracy depends
+                on the dataset. Applies when preprocessing is enabled.
         """
         self.model_path = model_path
         self.categorical_features_indices = categorical_features_indices
@@ -378,6 +421,22 @@ class TabPFNClassifier(
         y: pd.Series | np.ndarray,
         description: str | None = None,
     ):
+        """Fit the model.
+
+        Uploads the training data to the server, which fits the model on it.
+
+        Args:
+            X: The input data.
+            y: The target variable.
+            description: Description of the dataset and task for the server.
+
+        Returns:
+            self
+
+        Raises:
+            ValueError: If the data or the estimator's parameters are invalid,
+                or the data exceeds the model limits.
+        """
         text_handling = validate_text_handling(self.text_handling)
         # assert init() is called
         init()
@@ -440,24 +499,25 @@ class TabPFNClassifier(
         return self
 
     def predict(self, X):
-        """Predict class labels for samples in X.
+        """Predict the class labels for the provided input samples.
 
         Args:
-            X: The input samples.
+            X: The input data for prediction.
 
         Returns:
-            The predicted class labels.
+            The predicted class labels as a NumPy array.
         """
         return self._predict(X, output_type="preds")
 
     def predict_proba(self, X):
-        """Predict class probabilities for X.
+        """Predict the probabilities of the classes for the provided input samples.
 
         Args:
-            X: The input samples.
+            X: The input data for prediction.
 
         Returns:
-            The class probabilities of the input samples.
+            The predicted probabilities of the classes as a NumPy array.
+            Shape (n_samples, n_classes).
         """
         return self._predict(X, output_type="probas")
 
@@ -466,6 +526,7 @@ class TabPFNClassifier(
         X,
         output_type: Literal["probas", "preds"],
     ) -> np.ndarray:
+        """Validate `X` and request `output_type` predictions from the server."""
         # IMPORTANT: self._get_predict_params() should be called first to make sure
         # we capture the original user-provided values.
         predict_params = self._get_predict_params(locals())
@@ -518,6 +579,7 @@ class TabPFNClassifier(
         return cast("np.ndarray", result.y_pred)
 
     def _get_tabpfn_config(self) -> ClassifierTabPFNConfig:
+        """Build the model config from the constructor parameters that are not None."""
         init_params = self.get_params()
         cfg = {
             k: v
@@ -528,16 +590,23 @@ class TabPFNClassifier(
         return ClassifierTabPFNConfig.model_validate(cfg)
 
     def _get_predict_params(self, kwargs: dict[str, Any]) -> ClassifierPredictParams:
+        """Build the predict parameters from the matching entries of `kwargs`."""
         params = {
             k: v for k, v in kwargs.items() if k in ClassifierPredictParams.model_fields
         }
         return ClassifierPredictParams.model_validate(params)
 
     def _validate_targets_and_classes(self, y) -> np.ndarray:
-        """Validate the targets and return their classes without committing
-        them to ``classes_`` — `fit()` assigns fitted state only once the
-        server fit succeeded, so a failed re-fit can't leave the old
-        ``model_id_`` paired with the new targets' classes."""
+        """Validate the targets and return their classes without setting ``classes_``.
+
+        `fit()` assigns fitted state only once the server fit succeeded, so a
+        failed re-fit can't leave the old ``model_id_`` paired with the new
+        targets' classes.
+
+        Raises:
+            ValueError: If `y` contains NaN, is not a valid classification
+                target, or has more classes than the server supports.
+        """
         y_ = column_or_1d(y, warn=True)
         if sum(pd.isnull(y_)) > 0:
             raise ValueError("Input y contains NaN.")
@@ -631,111 +700,142 @@ class TabPFNRegressor(
         like to use a previous model version, use `create_default_for_version()`
         instead. You can also use `model_path` to specify a particular model.
 
-        Parameters
-        ----------
-        model_path: str, default="auto"
-            The name of the model to use. "auto" lets the server pick the
-            latest default model; "default" is accepted as a backward-compatible
-            alias. Use `create_default_for_version()` to pin to a specific
-            major version.
-        n_estimators: int, default=8
-            The number of estimators in the TabPFN ensemble. We aggregate the
-             predictions of `n_estimators`-many forward passes of TabPFN. Each forward
-             pass has (slightly) different input data. Think of this as an ensemble of
-             `n_estimators`-many "prompts" of the input data.
-        softmax_temperature: float, default=0.9
-            The temperature for the softmax function. This is used to control the
-            confidence of the model's predictions. Lower values make the model's
-            predictions more confident. This is only applied when predicting during a
-            post-processing step. Set `softmax_temperature=1.0` for no effect.
-        average_before_softmax: bool, default=False
-            Only used if `n_estimators > 1`. Whether to average the predictions of the
-            estimators before applying the softmax function. This can help to improve
-            predictive performance when calibrating the model's confidence. This is only
-            applied when predicting during a post-processing step.
-        ignore_pretraining_limits: bool, default=False
-            Whether to ignore the pre-training limits of the model. The TabPFN models
-            have been pre-trained on a specific range of input data. If the input data
-            is outside of this range, the model may not perform well. You may ignore
-            our limits to use the model on data outside the pre-training range.
-        inference_precision: "autocast" or "auto", default="auto"
-            The precision to use for inference. This can dramatically affect the
-            speed and reproducibility of the inference.
-        random_state: int or RandomState or RandomGenerator or None, default=0
-            Controls the randomness of the model. Pass an int for reproducible
-            results; pass `None` to use a fresh random seed each run.
-        inference_config: dict or None, default=None
-            Additional advanced arguments for model interface. See the doc of InferenceConfig
-            in the tabpfn package for more details. For the client, the inference_config and the
-            preprocess transforms need to be dictionaries.
-        categorical_features_indices: list[int] or None, default=None
-            The indices of the columns that should be treated as categorical.
-            If None, the model infers which columns are categorical.
-        fit_mode: {"fit_preprocessors", "fit_with_cache"} or None, default=None
-            Controls what the server persists at fit time. None defers to the
-            server default, which is "fit_preprocessors".
-            "fit_preprocessors" fits only the preprocessing state, so every
-            predict re-runs the forward pass from the uploaded train set.
-            "fit_with_cache" additionally builds and persists a server-side KV
-            cache keyed by the resulting fitted-train-set id; later predicts
-            against that id (stored on the estimator as `model_id_`, and
-            persisted across runs by `save_model()`) are served from the cache
-            instead of re-fitting.
-        text_handling: {"advanced", "simple"}, default="advanced"
-            Text-processing preset. Both choices support text. Advanced preserves
-            the default processing; simple is an alternative whose accuracy depends
-            on the dataset. Applies when preprocessing is enabled.
-        paper_version: bool, default=False
-            If True, will use the model described in the paper, instead of the newest
-            version available on the API, which e.g handles text features better.
-        thinking_mode: bool, default=False
-            If True, spend extra fit-time compute for higher precision.
-            Equivalent to passing `thinking_effort="medium"` — setting any
-            `thinking_effort` value also enables thinking, so this flag is
-            optional when you've set the level explicitly.
-        thinking_effort: {"medium", "high"} or None, default=None
-            Effort level for thinking mode. When set, thinking is enabled
-            (you don't also need `thinking_mode=True`). When None and
-            `thinking_mode=True`, defaults to "medium".
-        thinking_timeout_s: float or None, default=None
-            Budget for the fit, in seconds. Only consulted when thinking is
-            enabled. Capped at 2400.
-        thinking_metric: str or None, default=None
-            Optimization metric for the fit. Only consulted when thinking
-            is enabled.
+        Args:
+            model_path:
+                The name of the model to use. "auto" (or None) lets the server pick
+                the latest default model; "default" is accepted as a backward-compatible
+                alias. Use `create_default_for_version()` to pin to a specific major
+                version, and `list_available_models()` for the accepted names.
 
-            Regression:
-                "r2", "mean_squared_error", "root_mean_squared_error",
-                "mean_absolute_error", "median_absolute_error",
-                "mean_absolute_percentage_error",
-                "symmetric_mean_absolute_percentage_error", "spearmanr",
-                "pearsonr".
+            n_estimators:
+                The number of estimators in the TabPFN ensemble. We aggregate the
+                predictions of `n_estimators`-many forward passes of TabPFN. Each
+                forward pass has (slightly) different input data. Think of this as an
+                ensemble of `n_estimators`-many "prompts" of the input data. If None,
+                the server default is used.
 
-            Aliases "mse", "rmse", "mae", "mape", "smape" are also
-            accepted.
-        group_col: str or list[str] or None, default=None
-            New since 0.6.0. Column(s) of `X` that identify groups of related
-            rows, e.g. a patient or a session id. During the fit, the rows of
-            one group are never split between training and validation. The fit
-            may also use the other rows of a group to predict a row of it.
-            Requires thinking mode, and `X` passed to `fit` and `predict` must
-            be a pandas DataFrame that holds the column(s).
-        time_col: str or None, default=None
-            New since 0.6.0. Column of `X` that holds time, as datetimes or
-            numbers. During the fit, validation uses contiguous blocks of time.
-            Cannot be combined with `group_col`. Requires thinking mode, and
-            `X` must be a pandas DataFrame that holds the column.
-        group_time_col: str or None, default=None
-            New since 0.6.0. Column of `X` that orders the rows within a group.
-            Requires `group_col` and thinking mode, and `X` must be a pandas
-            DataFrame that holds the column.
-        api_mode: ApiMode, default=ApiMode.AUTO
-            Controls how the client calls the server.
-            SYNC: the client waits for the server to complete the request before returning.
-            ASYNC: the client returns immediately and the server completes the request in the background.
-            AUTO: the client automatically determines the best mode to use based on the request.
-        client_options : ClientOptions, default=None
-            Client specific options (e.g. timeout, headers).
+            softmax_temperature:
+                The temperature for the softmax function. This is used to control the
+                confidence of the model's predictions. Lower values make the model's
+                predictions more confident. This is only applied when predicting during
+                a post-processing step. Set `softmax_temperature=1.0` for no effect. If
+                None, the server default is used.
+
+            average_before_softmax:
+                Only used if `n_estimators > 1`. Whether to average the predictions of
+                the estimators before applying the softmax function. This can help to
+                improve predictive performance when calibrating the model's confidence.
+                This is only applied when predicting during a post-processing step. If
+                None, the server default is used.
+
+            ignore_pretraining_limits:
+                Whether to ignore the pre-training limits of the model. The TabPFN
+                models have been pre-trained on a specific range of input data. If the
+                input data is outside of this range, the model may not perform well. You
+                may ignore our limits to use the model on data outside the pre-training
+                range.
+
+            inference_precision:
+                The precision to use for inference. This can dramatically affect the
+                speed and reproducibility of the inference. `"autocast"` enables
+                mixed-precision autocast; `"auto"` decides based on the device. If None,
+                the server default is used.
+
+            random_state:
+                Controls the randomness of the model. Pass an int for reproducible
+                results; pass `None` to use a fresh random seed each run.
+
+            inference_config:
+                For advanced users, additional advanced arguments that adjust the
+                behavior of the model interface. See `InferenceConfig` in the tabpfn
+                package for details and options. For the client, the inference_config
+                and the preprocess transforms need to be dictionaries.
+
+            categorical_features_indices:
+                The indices of the columns that should be treated as categorical.
+                If None, the model infers which columns are categorical.
+
+            fit_mode:
+                Controls what the server persists at fit time. None defers to the
+                server default, which is "fit_preprocessors".
+
+                - If `"fit_preprocessors"`, only the preprocessing state is fitted, so
+                  every predict re-runs the forward pass from the uploaded train set.
+                - If `"fit_with_cache"`, a server-side KV cache is additionally built
+                  and persisted, keyed by the resulting fitted-train-set id. Later
+                  predicts against that id (stored on the estimator as `model_id_`, and
+                  persisted across runs by `save_model()`) are served from the cache
+                  instead of re-fitting.
+
+            paper_version:
+                If True, will use the model described in the paper, instead of the
+                newest version available on the API, which e.g. handles text features
+                better. Cannot be combined with thinking mode.
+
+            thinking_mode:
+                If True, spend extra fit-time compute for higher precision.
+                Equivalent to passing `thinking_effort="medium"`; setting any
+                `thinking_effort` value also enables thinking, so this flag is
+                optional when you've set the level explicitly.
+
+            thinking_effort:
+                Effort level for thinking mode. When set, thinking is enabled
+                (you don't also need `thinking_mode=True`). When None and
+                `thinking_mode=True`, defaults to "medium".
+
+            thinking_timeout_s:
+                Budget for the fit, in seconds. Only consulted when thinking is
+                enabled. Capped at 2400.
+
+            thinking_metric:
+                Optimization metric for the fit. Only consulted when thinking
+                is enabled.
+
+                Regression:
+                    "r2", "mean_squared_error", "root_mean_squared_error",
+                    "mean_absolute_error", "median_absolute_error",
+                    "mean_absolute_percentage_error",
+                    "symmetric_mean_absolute_percentage_error", "spearmanr",
+                    "pearsonr".
+
+                Aliases "mse", "rmse", "mae", "mape", "smape" are also
+                accepted.
+
+            group_col:
+                New since 0.6.0. Column(s) of `X` that identify groups of related
+                rows, e.g. a patient or a session id. During the fit, the rows of
+                one group are never split between training and validation. The fit
+                may also use the other rows of a group to predict a row of it.
+                Requires thinking mode, and `X` passed to `fit` and `predict` must
+                be a pandas DataFrame that holds the column(s).
+
+            time_col:
+                New since 0.6.0. Column of `X` that holds time, as datetimes or
+                numbers. During the fit, validation uses contiguous blocks of time.
+                Cannot be combined with `group_col`. Requires thinking mode, and
+                `X` must be a pandas DataFrame that holds the column.
+
+            group_time_col:
+                New since 0.6.0. Column of `X` that orders the rows within a group.
+                Requires `group_col` and thinking mode, and `X` must be a pandas
+                DataFrame that holds the column.
+
+            api_mode:
+                Controls how the client calls the server.
+
+                - `SYNC`: the client waits for the server to complete the request
+                  before returning.
+                - `ASYNC`: the client returns immediately and the server completes the
+                  request in the background.
+                - `AUTO`: the client determines the best mode based on the request.
+
+            client_options:
+                Client specific options (e.g. timeout, headers).
+
+            text_handling:
+                Text-processing preset. Both choices support text. Advanced preserves
+                the default processing; simple is an alternative whose accuracy depends
+                on the dataset. Applies when preprocessing is enabled.
         """
         self.model_path = model_path
         self.categorical_features_indices = categorical_features_indices
@@ -770,6 +870,22 @@ class TabPFNRegressor(
         y: pd.Series | np.ndarray,
         description: str | None = None,
     ):
+        """Fit the model.
+
+        Uploads the training data to the server, which fits the model on it.
+
+        Args:
+            X: The input data.
+            y: The target variable.
+            description: Description of the dataset and task for the server.
+
+        Returns:
+            self
+
+        Raises:
+            ValueError: If the data or the estimator's parameters are invalid,
+                or the data exceeds the model limits.
+        """
         text_handling = validate_text_handling(self.text_handling)
         # assert init() is called
         init()
@@ -831,26 +947,37 @@ class TabPFNRegressor(
     ) -> np.ndarray | list[np.ndarray] | dict[str, np.ndarray]:
         """Predict regression target for X.
 
-        Parameters
-        ----------
-        X : array-like of shape (n_samples, n_features)
-            The input samples.
-        output_type : str, default="mean"
-            The type of prediction to return:
-            - "mean": Return mean prediction
-            - "median": Return median prediction
-            - "mode": Return mode prediction
-            - "quantiles": Return predictions for specified quantiles
-            - "full": Return full prediction details
-            - "main": Return main prediction metrics
-        quantiles : list[float] or None, default=None
-            Quantiles to compute when output_type="quantiles".
-            Default is [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+        Args:
+            X: The input data, of shape (n_samples, n_features).
+            output_type: Determines the type of output to return.
 
-        Returns
-        -------
-        array-like or dict
-            The predicted values.
+                - If `"mean"`, we return the mean over the predicted distribution.
+                - If `"median"`, we return the median over the predicted
+                  distribution.
+                - If `"mode"`, we return the mode over the predicted distribution.
+                - If `"quantiles"`, we return the quantiles of the predicted
+                  distribution. The parameter `quantiles` determines which
+                  quantiles are returned.
+                - If `"main"`, we return all the output types above in a dict.
+                - If `"full"`, we return the full output of the model, including
+                  the logits, the borders and all the output types from "main".
+                  The criterion is included when the optional `tabpfn` and
+                  `torch` packages are installed.
+
+            quantiles: The quantiles to return if `output_type="quantiles"`.
+                By default, the `[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]`
+                quantiles are returned.
+
+        Returns:
+            An array of predictions for `"mean"`, `"median"` and `"mode"`; a
+            list with one array per quantile for `"quantiles"`; a dict of arrays
+            for `"main"` and `"full"`.
+
+        Raises:
+            ValueError: If `X` exceeds the model limits or the group columns are
+                invalid.
+            RuntimeError: If a `"full"` prediction split across several requests
+                returns fields that cannot be combined.
         """
         # IMPORTANT: self._get_predict_params() should be called first to make sure
         # we capture the original user-provided values.
@@ -961,6 +1088,7 @@ class TabPFNRegressor(
         return output
 
     def _get_tabpfn_config(self) -> RegressorTabPFNConfig:
+        """Build the model config from the constructor parameters that are not None."""
         init_params = self.get_params()
         cfg = {
             k: v
@@ -971,6 +1099,7 @@ class TabPFNRegressor(
         return RegressorTabPFNConfig.model_validate(cfg)
 
     def _get_predict_params(self, kwargs: dict[str, Any]) -> RegressorPredictParams:
+        """Build the predict parameters from the non-None entries of `kwargs`."""
         params = {
             k: v
             for k, v in kwargs.items()
@@ -980,6 +1109,11 @@ class TabPFNRegressor(
         return RegressorPredictParams.model_validate(params)
 
     def _validate_targets(self, y) -> None:
+        """Check that `y` is one-dimensional and free of NaN.
+
+        Raises:
+            ValueError: If `y` contains NaN.
+        """
         y_ = column_or_1d(y, warn=True)
         if sum(pd.isnull(y_)) > 0:
             raise ValueError("Input y contains NaN.")
@@ -990,8 +1124,17 @@ def validate_train_set(
     y: pd.Series | np.ndarray | None = None,
     model_path: str | None = None,
 ) -> None:
-    """Check the integrity of the training data."""
+    """Check the integrity of the training data.
 
+    Args:
+        X: The training input data.
+        y: The training targets, if available.
+        model_path: The model the data is fitted with; selects the limits.
+
+    Raises:
+        ValueError: If `X` and `y` differ in length, or `X` exceeds the model's
+            row, column or upload-cell limits.
+    """
     # check if the number of samples is consistent (ValueError)
     if y is not None:
         if X.shape[0] != y.shape[0]:
@@ -1044,10 +1187,19 @@ def validate_test_set(
 ):
     """Check the integrity of the test data.
 
-    `split_full_output` marks that the caller will honour the full-output row
-    cap by splitting the request, so that cap is not enforced here.
-    """
+    Args:
+        X: The test input data.
+        output_type: The requested prediction output type.
+        model_path: The model the data is predicted with; selects the limits.
+        train_rows: Rows of the fitted train set. Caps the test rows through the
+            server's row-pairs budget unless `inference_config` subsamples.
+        split_full_output: Whether the caller honours the full-output row cap by
+            splitting the request, so that cap is not enforced here.
+        inference_config: The estimator's inference config.
 
+    Raises:
+        ValueError: If `X` exceeds the model's row, column or cell limits.
+    """
     limit = _limit_for_model_path(model_path)
     if limit is None:
         return
@@ -1138,10 +1290,11 @@ def _clean_text_features(X: pd.DataFrame) -> pd.DataFrame: ...
 @overload
 def _clean_text_features(X: np.ndarray) -> np.ndarray: ...
 def _clean_text_features(X):
-    """
-    Clean text features in the input data. This is used to avoid
-    serialization errors, which happens when the input data contains
-    commas or weird spaces, and to limit the length of the text features.
+    """Clean text features in the input data.
+
+    Removes commas and collapses whitespace in text columns so the data
+    serializes cleanly, and truncates text to 2500 characters. Numeric arrays
+    are returned unchanged and torch tensors are converted to numpy.
     """
     # Convert numpy array to pandas DataFrame if necessary
     # not necessary if numpy array of numbers
@@ -1184,6 +1337,7 @@ def _clean_text_features(X):
 
 
 def _build_fit_task_config(tabpfn_config: TabPFNConfig) -> FitTaskConfig:
+    """Wrap a classifier or regressor model config in its fit task config."""
     match tabpfn_config:
         case ClassifierTabPFNConfig():
             return ClassifierFitTaskConfig(
@@ -1198,6 +1352,11 @@ def _build_fit_task_config(tabpfn_config: TabPFNConfig) -> FitTaskConfig:
 def _build_tabpfn_systems(
     paper_version: bool, thinking_mode: bool
 ) -> list[TabPFNSystem]:
+    """Return the server-side systems to run for the given mode.
+
+    Raises:
+        ValueError: If both `paper_version` and `thinking_mode` are set.
+    """
     if paper_version and thinking_mode:
         raise ValueError(
             "Paper version and thinking mode cannot be enabled at the same time"
@@ -1210,6 +1369,7 @@ def _build_tabpfn_systems(
 
 
 def _resolve_thinking_mode(enabled: bool, effort: str | None = None) -> bool:
+    """Return whether thinking is enabled, either explicitly or by setting an effort."""
     # To honour previous contract, setting effort alone is enough to enable thinking.
     if enabled:
         return True
@@ -1229,6 +1389,7 @@ def _build_thinking_config(
     time_col: str | None = None,
     group_time_col: str | None = None,
 ) -> ThinkingConfig | None:
+    """Validate the group columns and build the thinking config, or None if disabled."""
     _validate_group_columns(
         X,
         enabled=enabled,

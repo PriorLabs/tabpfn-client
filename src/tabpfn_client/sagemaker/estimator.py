@@ -33,6 +33,7 @@ ThinkingEffort = Literal["medium", "high"]
 
 
 def _require_boto3() -> None:
+    """Raise ImportError if boto3 is not installed."""
     if not _BOTO3_AVAILABLE:
         raise ImportError(
             "boto3 is required for tabpfn_client.sagemaker. "
@@ -140,7 +141,7 @@ class _SagemakerBase(BaseEstimator):
         return cfg
 
     def _build_thinking_block(self) -> Dict[str, Any]:
-        """Top-level wire fields for thinking-mode. Empty when inactive."""
+        """Build the top-level wire fields for thinking mode; empty when inactive."""
         if not self._thinking_active:
             return {}
         block: Dict[str, Any] = {
@@ -193,6 +194,18 @@ class _SagemakerBase(BaseEstimator):
         return state
 
     def fit(self, X: Any, y: Any) -> "_SagemakerBase":
+        """Store the training data; the endpoint fits on the next `predict*` call.
+
+        Args:
+            X: Training features.
+            y: Training targets.
+
+        Returns:
+            The estimator itself.
+
+        Raises:
+            ValueError: If `X` and `y` have different numbers of samples.
+        """
         X_arr = X if isinstance(X, pd.DataFrame) else np.asarray(X)
         y_arr = y if isinstance(y, (pd.DataFrame, pd.Series)) else np.asarray(y)
         if X_arr.shape[0] != y_arr.shape[0]:
@@ -213,6 +226,11 @@ class _SagemakerBase(BaseEstimator):
         output_type: str,
         predict_params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        """Invoke the endpoint with a predict request and return the JSON response.
+
+        Sends the cached `model_id` in place of the training data when caching
+        is active, and captures a returned `model_id` for the next call.
+        """
         check_is_fitted(self, ["X_train_", "y_train_"])
         params: Dict[str, Any] = {"output_type": output_type}
         if predict_params:
@@ -251,9 +269,22 @@ class _SagemakerBase(BaseEstimator):
         return payload
 
     def _invoke_async(self, body_bytes: bytes) -> Dict[str, Any]:
-        """Async Inference path: stage input through S3, invoke_endpoint_async,
-        poll the OutputLocation S3 object. Required for payloads > 6 MB or
-        compute > 60 s; the endpoint must be created with AsyncInferenceConfig.
+        """Run the request through SageMaker Async Inference.
+
+        Stages the input in S3, calls `invoke_endpoint_async`, and polls the
+        OutputLocation S3 object. Required for payloads > 6 MB or compute
+        > 60 s; the endpoint must be created with AsyncInferenceConfig.
+
+        Args:
+            body_bytes: The JSON-encoded request body.
+
+        Returns:
+            The decoded JSON response.
+
+        Raises:
+            RuntimeError: If `s3_bucket` is unset or the endpoint reports a
+                failure.
+            TimeoutError: If no output appears within `async_timeout_s`.
         """
         if not self.s3_bucket:
             raise RuntimeError(
@@ -326,10 +357,12 @@ class TabPFNClassifier(_SagemakerBase, ClassifierMixin):
     _TASK = "classification"
 
     def predict(self, X: Any) -> np.ndarray:
+        """Predict class labels for `X`."""
         result = self._invoke(X, output_type="preds")
         return np.asarray(result["prediction"])
 
     def predict_proba(self, X: Any) -> np.ndarray:
+        """Predict class probabilities for `X`."""
         result = self._invoke(X, output_type="probas")
         return np.asarray(result["prediction"])
 
@@ -345,6 +378,18 @@ class TabPFNRegressor(_SagemakerBase, RegressorMixin):
         output_type: str = "mean",
         quantiles: Optional[list] = None,
     ) -> np.ndarray:
+        """Predict regression targets for `X`.
+
+        Args:
+            X: Test features.
+            output_type: Which prediction to return, e.g. "mean", "median" or
+                "quantiles".
+            quantiles: Quantile levels to compute when `output_type` is
+                "quantiles".
+
+        Returns:
+            The endpoint's prediction as an array.
+        """
         predict_params: Dict[str, Any] = {}
         if quantiles is not None:
             predict_params["quantiles"] = quantiles

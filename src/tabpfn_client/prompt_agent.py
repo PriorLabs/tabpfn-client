@@ -1,5 +1,7 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
+"""Interactive terminal prompts for welcome, signup, and account management."""
+
 from __future__ import annotations
 
 import getpass
@@ -42,6 +44,7 @@ ROLES = [
 
 
 def maybe_graceful_exit() -> None:
+    """Exit with status 1 if IPython is not installed; otherwise return."""
     try:
         from IPython import get_ipython  # type: ignore
 
@@ -53,19 +56,24 @@ def maybe_graceful_exit() -> None:
 
 
 class PromptAgent:
+    """Namespace of classmethods that drive the interactive terminal prompts."""
+
     def __new__(cls):
+        """Refuse instantiation; use the classmethods directly."""
         raise RuntimeError(
             "This class should not be instantiated. Use classmethods instead."
         )
 
     @staticmethod
     def indent(text: str):
+        """Indent every line of `text` by two spaces."""
         indent_factor = 2
         indent_str = " " * indent_factor
         return textwrap.indent(text, indent_str)
 
     @classmethod
     def prompt_welcome(cls):
+        """Print the logo, a development notice, and the issue-tracker link."""
         # Large Prior Labs ASCII logo with a short tagline
         print_logo("Thanks for being part of the journey")
         console.print(
@@ -80,10 +88,14 @@ class PromptAgent:
 
     @classmethod
     def token_instructions(cls, rejected: bool = False) -> str:
-        """The message shown when no usable access token is available.
+        """Build the message shown when no usable access token is available.
 
-        `rejected` distinguishes a token that the server turned down from no
-        token having been supplied at all.
+        Args:
+            rejected: True if the server turned down a supplied token, False if
+                no token was supplied at all.
+
+        Returns:
+            Instructions for obtaining and setting an access token.
         """
         headline = (
             "Your TabPFN access token was rejected by the server."
@@ -107,9 +119,7 @@ class PromptAgent:
 
     @staticmethod
     def password_req_to_policy(password_req: list[str]):
-        """
-        Convert password requirement strings like "Length(8)" into a PasswordPolicy.
-        """
+        """Convert password requirement strings like "Length(8)" into a PasswordPolicy."""
         requirements = {}
         for req in password_req:
             word_part, number_part = req.split("(")
@@ -121,7 +131,13 @@ class PromptAgent:
     def display_requirement_status(
         cls, password: str, password_req: list[str], password_policy: PasswordPolicy
     ) -> None:
-        """Display check marks for met/unmet requirements."""
+        """Display check marks for met/unmet requirements.
+
+        Args:
+            password: The password to check; nothing is printed if empty.
+            password_req: Requirement strings like "Length(8)", as displayed.
+            password_policy: Policy built from `password_req`.
+        """
         if not password:
             return
 
@@ -139,7 +155,15 @@ class PromptAgent:
 
     @classmethod
     def prompt_multi_select(cls, options: list[str], prompt: str) -> str:
-        """Creates an interactive single-choice menu over `options`."""
+        """Show a lettered single-choice menu over `options` until one is picked.
+
+        Args:
+            options: Choices to display, labelled a, b, c, ...
+            prompt: Question printed above the options.
+
+        Returns:
+            The chosen option.
+        """
         console.print(f"\n[bold]{prompt}[/bold]")
         for i, option in enumerate(options):
             console.print(f"[bold cyan]\\[{chr(ord('a') + i)}][/bold cyan] {option}")
@@ -161,7 +185,15 @@ class PromptAgent:
 
     @classmethod
     def prompt_and_retry(cls, prompt: str, min_length: int = 2) -> str:
-        """Prompt with a minimum-length check."""
+        """Prompt repeatedly until the stripped input has at least `min_length` characters.
+
+        Args:
+            prompt: Question to print.
+            min_length: Minimum accepted length.
+
+        Returns:
+            The stripped input.
+        """
         console.print(f"\n{prompt}:")
         while True:
             value = console.input("→ ").strip()
@@ -173,7 +205,12 @@ class PromptAgent:
 
     @classmethod
     def _prompt_account_details(cls) -> tuple[str, str]:
-        """Step 1: email and password. Returns (email, password)."""
+        """Prompt for email and password (signup step 1).
+
+        Returns:
+            The validated email and the confirmed password that meets the
+            server's password policy.
+        """
         console.print("\n[bold cyan]Step 1/3[/bold cyan] - Account details")
 
         # Replaces the separate Terms and Data Privacy steps. Printed before the
@@ -227,7 +264,12 @@ class PromptAgent:
 
     @classmethod
     def _prompt_profile(cls) -> dict:
-        """Step 2: profile and the marketing opt-in."""
+        """Prompt for profile details and the marketing opt-in (signup step 2).
+
+        Returns:
+            Registration fields: name, company, role, email opt-in, and the
+            terms/privacy acceptance flags.
+        """
         console.print("\n[bold cyan]Step 2/3[/bold cyan] - Complete your profile")
 
         while True:
@@ -271,11 +313,16 @@ class PromptAgent:
 
     @classmethod
     def prompt_signup(cls) -> str | None:
-        """Run the three-step signup. Returns an access token, or None if aborted.
+        """Run the three-step signup.
 
-        The token is only returned once the email is verified: an unverified
-        account cannot authenticate, so handing the token back earlier would
-        just fail downstream.
+        The token is only returned once the email is verified, since an
+        unverified account cannot authenticate.
+
+        Returns:
+            The access token, or None if email verification was aborted.
+
+        Raises:
+            RuntimeError: If the server rejects the registration.
         """
         email, password = cls._prompt_account_details()
         additional_info = cls._prompt_profile()
@@ -306,6 +353,15 @@ class PromptAgent:
 
     @classmethod
     def _verify_user_email(cls, access_token: str | None) -> bool:
+        """Prompt for the email verification code, supporting 'resend' and 'quit'.
+
+        Args:
+            access_token: Token of the newly registered account.
+
+        Returns:
+            True once the email is verified; False if no token was given or the
+            user quit.
+        """
         if access_token is None:
             fail("No access token available for email verification.")
             return False
@@ -356,6 +412,7 @@ class PromptAgent:
 
     @classmethod
     def prompt_retrieved_greeting_messages(cls, greeting_messages: list[str]):
+        """Print each server-provided greeting message, indented."""
         for message in greeting_messages:
             notify(cls.indent(message))
 
@@ -363,6 +420,11 @@ class PromptAgent:
 
     @classmethod
     def confirm_user_account_deletion(cls) -> bool:
+        """Warn about account deletion and ask the user to type the confirmation phrase.
+
+        Returns:
+            True if the user typed `CONFIRM_DELETION_PHRASE` (case-insensitive).
+        """
         warn(
             "You are about to delete your account. This is permanent and "
             "cannot be undone."
@@ -374,4 +436,5 @@ class PromptAgent:
 
     @classmethod
     def prompt_account_deleted(cls):
+        """Report that the account has been deleted."""
         success("Your account has been deleted.")
