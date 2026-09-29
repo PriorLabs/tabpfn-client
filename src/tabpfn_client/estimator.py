@@ -246,8 +246,15 @@ class TabPFNClassifier(
                 The number of estimators in the TabPFN ensemble. We aggregate the
                 predictions of `n_estimators`-many forward passes of TabPFN. Each
                 forward pass has (slightly) different input data. Think of this as an
-                ensemble of `n_estimators`-many "prompts" of the input data. If None,
-                the server default is used.
+                ensemble of `n_estimators`-many "prompts" of the input data. The
+                server accepts at most 8. If None, it applies the model's default:
+
+                - v3.5 (`"v3.5_default"`, the default model): 8.
+                - v3.5-fast (`"v3.5-fast_default"`): 4.
+                - v3 (`"v3_default"`): 8, raised on wide datasets until every
+                  feature is seen by at least one estimator, up to 32.
+
+                These are server defaults and may change with server releases.
 
             softmax_temperature:
                 The temperature for the softmax function. This is used to control the
@@ -711,8 +718,15 @@ class TabPFNRegressor(
                 The number of estimators in the TabPFN ensemble. We aggregate the
                 predictions of `n_estimators`-many forward passes of TabPFN. Each
                 forward pass has (slightly) different input data. Think of this as an
-                ensemble of `n_estimators`-many "prompts" of the input data. If None,
-                the server default is used.
+                ensemble of `n_estimators`-many "prompts" of the input data. The
+                server accepts at most 8. If None, it applies the model's default:
+
+                - v3.5 (`"v3.5_default"`, the default model): 8.
+                - v3.5-fast (`"v3.5-fast_default"`): 4.
+                - v3 (`"v3_default"`): 8, raised on wide datasets until every
+                  feature is seen by at least one estimator, up to 32.
+
+                These are server defaults and may change with server releases.
 
             softmax_temperature:
                 The temperature for the softmax function. This is used to control the
