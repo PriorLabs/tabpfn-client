@@ -6,3 +6,22 @@ extend-exclude = [
     "examples/*"
 ]
 force-exclude = true
+
+[lint]
+extend-select = ["D"]
+ignore = [
+    "D104", # Missing docstring in public package
+    "D105", # Missing docstring in magic method
+    "D107", # Missing docstring in __init__
+    "D205", # 1 blank line between summary and description
+    "D401", # First line of docstring should be in imperative mood
+]
+
+[lint.pydocstyle]
+convention = "google"
+ignore-decorators = ["typing.overload", "typing_extensions.override"]
+
+[lint.per-file-ignores]
+"tests/**" = ["D"]
+"scripts/**" = ["D"]
+".trunk/**" = ["D"]
