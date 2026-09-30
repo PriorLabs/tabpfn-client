@@ -41,7 +41,7 @@ class Config:
     use_server = False
 
 
-def init(use_server=True):
+def init(use_server: bool = True):
     """Initializes the TabPFN client and authenticates with the TabPFN cloud service.
 
     Authentication is token-based and never interactive. The token comes from
@@ -53,7 +53,7 @@ def init(use_server=True):
     `tabpfn_client.interactive_login()` to log in through the browser.
 
     Args:
-        use_server (bool): Whether to use the TabPFN cloud service. Currently, only
+        use_server: Whether to use the TabPFN cloud service. Currently, only
             True is supported.
 
     Raises:

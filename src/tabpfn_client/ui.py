@@ -72,11 +72,11 @@ _PRIOR_LABS_ASCII = r"""
 """
 
 
-def print_logo(subtitle=None) -> None:
+def print_logo(subtitle: str | None = None) -> None:
     """Print the large Prior Labs ASCII logo.
 
     Args:
-        subtitle (str | None): Dimmed line printed below the logo, if given.
+        subtitle: Dimmed line printed below the logo, if given.
     """
     console.print(_PRIOR_LABS_ASCII, style="bold blue")
     if subtitle:

@@ -1154,11 +1154,11 @@ class ServiceClient(Singleton):
         return found_valid_connection
 
     @classmethod
-    def is_auth_token_outdated(cls, access_token) -> bool | None:
+    def is_auth_token_outdated(cls, access_token: str) -> bool | None:
         """Check if the provided access token is valid.
 
         Args:
-            access_token (str): The access token to check.
+            access_token: The access token to check.
 
         Returns:
             True if the token is valid, None if the user is not verified,
