@@ -1,6 +1,8 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
 
+"""TabPFN client: scikit-learn-style estimators backed by the TabPFN cloud service."""
+
 from importlib.metadata import PackageNotFoundError, version
 
 from tabpfn_client.config import (

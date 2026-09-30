@@ -1,6 +1,8 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
 
+"""Low-level HTTP client for the TabPFN API."""
+
 from __future__ import annotations
 
 from uuid import UUID
@@ -86,7 +88,8 @@ class PredictResponseWithDownloadURI(BaseModel):
     """A predict answered with a signed download URL for the prediction.
 
     Not among the generated API models: the server doesn't return this shape
-    today, but the client follows it if it ever does."""
+    today, but the client follows it if it ever does.
+    """
 
     prediction_uri: str
     prediction_uri_expires_in_secs: int
@@ -129,6 +132,7 @@ def _on_giveup(details: Mapping[str, Any]):
 
 
 def _contains_none(value: Any) -> bool:
+    """Return whether ``value`` is None or a (nested) list containing None."""
     if value is None:
         return True
     if isinstance(value, list):
@@ -144,6 +148,7 @@ SERVER_CONFIG = cast(DictConfig, OmegaConf.load(SERVER_CONFIG_FILE))
 
 
 def get_client_version() -> str:
+    """Return the installed package version, or ``"5.5.5"`` if not installed."""
     try:
         return version("tabpfn_client")
     except PackageNotFoundError:
@@ -153,12 +158,17 @@ def get_client_version() -> str:
 
 
 def _get_crc32c_hash(data: bytes) -> str:
-    """Computes the CRC32C checksum and returns it as a base64 encoded string."""
+    """Compute the CRC32C checksum of ``data`` as a base64-encoded string."""
     crc32c_value = google_crc32c.value(data)
     return base64.b64encode(struct.pack(">I", crc32c_value)).decode("ascii")
 
 
 def _serialize_to_parquet(df: pd.DataFrame) -> tuple[bytes, str]:
+    """Serialize ``df`` to zstd-compressed parquet.
+
+    Returns:
+        The parquet bytes and their base64-encoded CRC32C checksum.
+    """
     buf = io.BytesIO()
     df.to_parquet(buf, index=False, compression="zstd")
     parquet_bytes = buf.getvalue()
@@ -175,8 +185,8 @@ _MIN_RETRY_INTERVAL_SECS = 0.3
 
 
 class ServiceClient(Singleton):
-    """
-    Singleton class for handling communication with the server.
+    """Singleton class for handling communication with the server.
+
     It encapsulates all the API calls to the server.
     """
 
@@ -212,14 +222,17 @@ class ServiceClient(Singleton):
 
     @classmethod
     def get_access_token(cls):
+        """Return the access token set by ``authorize``, or None."""
         return cls._access_token
 
     @classmethod
     def get_settings(cls) -> GetSettingsResponse | None:
-        """Fetch and cache dataset limits. The cache expires after 1 hour.
+        """Fetch and cache dataset limits.
 
-        Not thread-safe, but concurrent calls are benign: duplicates fetch the
-        same data and the reference assignment is atomic under the GIL."""
+        The cache expires after 1 hour. If fetching fails, the stale cached value
+        (or None) is returned. Not thread-safe, but concurrent calls are benign: duplicates fetch the
+        same data and the reference assignment is atomic under the GIL.
+        """
         ttl = 3600.0  # 1 hour
         if (
             cls._api_settings is not None
@@ -238,7 +251,7 @@ class ServiceClient(Singleton):
 
     @classmethod
     def _resolve_async_settings(cls) -> AsyncSettings:
-        """Resolve the async-fit settings: environment > server default > client default.
+        """Resolve async-fit settings: environment > server default > client default.
 
         An option explicitly set via the environment wins; otherwise the
         server-sent value applies; the client default is the fallback when the
@@ -268,6 +281,7 @@ class ServiceClient(Singleton):
 
     @classmethod
     def authorize(cls, access_token: str):
+        """Store ``access_token`` and send it as bearer token on all requests."""
         get_opts().TABPFN_TOKEN = access_token
         cls._access_token = access_token
         cls.httpx_client.headers.update(
@@ -276,6 +290,7 @@ class ServiceClient(Singleton):
 
     @classmethod
     def reset_authorization(cls):
+        """Clear the stored access token and the Authorization header."""
         cls._access_token = None
         cls.httpx_client.headers.pop("Authorization", None)
 
@@ -294,7 +309,7 @@ class ServiceClient(Singleton):
         description: str | None = None,
         text_handling: TextHandling = "advanced",
     ) -> UUID:
-        """Same as `fit_with_result`, returning only the fitted train set id."""
+        """Same as ``fit_with_result``, returning only the fitted train set ID."""
         return cls.fit_with_result(
             X,
             y,
@@ -322,33 +337,26 @@ class ServiceClient(Singleton):
         description: str | None = None,
         text_handling: TextHandling = "advanced",
     ) -> FitResult:
-        """
-        Upload a train set to server and fit it.
+        """Upload a train set to server and fit it.
 
-        Parameters
-        ----------
-        X : array-like of shape (n_samples, n_features)
-            The training input samples.
-        y : array-like of shape (n_samples,) or (n_samples, n_outputs)
-            The target values.
-        task_config: FitTaskConfig
-            The configuration for the fit task.
-        tabpfn_systems: Sequence[TabPFNSystem], optional
-            The systems to use for the fit method. Defaults to ["preprocessing", "text"].
-        thinking_config: ThinkingConfig, optional
-            The configuration for the thinking mode.
-        api_mode: ApiMode, default=ApiMode.AUTO, optional
-            The API mode to use for the fit method. SYNC, ASYNC, or AUTO.
-        client_options : ClientOptions, optional
-            Client specific options (e.g. timeout, headers).
-        description: str, optional
-            Description of the dataset and task for the server.
+        Args:
+            X: The training input samples, of shape (n_samples, n_features).
+            y: The target values, of shape (n_samples,) or (n_samples, n_outputs).
+            task_config: The configuration for the fit task.
+            tabpfn_systems: The systems to use for the fit method.
+            thinking_config: The configuration for the thinking mode.
+            api_mode: The API mode to use for the fit method: SYNC, ASYNC, or AUTO.
+            client_options: Client specific options (e.g. timeout, headers).
+            description: Description of the dataset and task for the server.
+            text_handling: Text-processing preset, ``"advanced"`` or ``"simple"``.
 
-        Returns
-        -------
-        fit_result: FitResult
+        Returns:
             The unique ID of the fitted train set in the server, and the
             server-reported timings of the fit (None if the server reports none).
+
+        Raises:
+            ValueError: If ``text_handling`` is invalid or the in-memory size of
+                ``X`` or ``y`` exceeds the server limit.
         """
         validate_text_handling(text_handling)
         api_mode = ApiMode(api_mode)
@@ -498,7 +506,7 @@ class ServiceClient(Singleton):
         fitted_train_set_id: UUID,
         headers: dict[str, str] | None = None,
     ) -> GetFitStatusResponse:
-        """Poll ``POST /tabpfn/get_fit_status`` until the fit reaches a terminal state.
+        """Poll ``/tabpfn/get_fit_status`` until the fit reaches a terminal state.
 
         The first poll happens immediately; between polls we sleep for the
         server's per-response ``retry_in_secs`` hint (5s until the first hint
@@ -599,6 +607,11 @@ class ServiceClient(Singleton):
         timeout: float,
         headers: dict[str, str] | None = None,
     ) -> GetFitStatusResponse:
+        """Fetch the status of a fit once.
+
+        Raises:
+            CappedRetryableServerError: On HTTP 429 or 500.
+        """
         res = cls.httpx_client.post(
             url="/tabpfn/get_fit_status",
             json=req.model_dump(mode="json", exclude_none=True),
@@ -641,6 +654,7 @@ class ServiceClient(Singleton):
         timeout: float,
         headers: dict[str, str] | None = None,
     ) -> SubmitFitJobResponse:
+        """Submit an asynchronous fit job for an uploaded train set."""
         res = cls.httpx_client.post(
             url="/tabpfn/submit_fit_job",
             json=req.model_dump(mode="json", exclude_none=True),
@@ -676,6 +690,7 @@ class ServiceClient(Singleton):
         timeout: float,
         headers: dict[str, str] | None = None,
     ) -> FitResponse:
+        """Fit an uploaded train set synchronously."""
         res = cls.httpx_client.post(
             url="/tabpfn/fit",
             json=req.model_dump(mode="json", exclude_none=True),
@@ -696,28 +711,21 @@ class ServiceClient(Singleton):
         task_config: ClassifierConfig | RegressorConfig,
         client_options: ClientOptions | None = None,
     ) -> PredictionResult:
-        """
-        Predict the class labels for the provided data (test set).
+        """Upload a test set and predict it with a fitted train set.
 
-        Parameters
-        ----------
-        fitted_train_set_id : UUID
-            The unique ID of the fitted train set in the server.
-        x_test : array-like of shape (n_samples, n_features)
-            The test input.
-        task: PredictionTask, optional
-            Task type: "classification" or "regression"
-        tabpfn_config : dict, optional
-            Configuration used to initialize the the TabPFN model.
-        predict_params: dict, optional
-            Parameters for the predict method.
-        client_options : ClientOptions, optional
-            Client specific options (e.g. timeout, headers).
+        Args:
+            fitted_train_set_id: The unique ID of the fitted train set in the server.
+            x_test: The test input, of shape (n_samples, n_features).
+            task_config: The classification or regression task configuration.
+            client_options: Client specific options (e.g. timeout, headers).
 
-        Returns
-        -------
-        prediction_result : PredictionResult
-            The result from the predict API call containing the prediction and metadata.
+        Returns:
+            The result from the predict API call containing the prediction,
+            metadata, and server-reported timings.
+
+        Raises:
+            ValueError: If the in-memory size of ``x_test`` exceeds the server limit.
+            FittedModelNotFoundError: If the fitted train set is not found.
         """
         client_options = client_options or ClientOptions()
 
@@ -848,6 +856,7 @@ class ServiceClient(Singleton):
         timeout: float,
         headers: dict[str, str] | None = None,
     ) -> PredictResponseUnion:
+        """Request a prediction for an uploaded test set."""
         res = cls.httpx_client.post(
             url="/tabpfn/predict",
             json=req.model_dump(mode="json", exclude_none=True),
@@ -877,6 +886,7 @@ class ServiceClient(Singleton):
         on_giveup=_on_giveup,
     )
     def _download_prediction(cls, uri: str, timeout: float) -> Prediction:
+        """Download a prediction from a signed URL."""
         # The signed URL is the credential here, so the API bearer token on
         # `httpx_client` has no business reaching the object store; use a bare
         # request instead.
@@ -899,6 +909,7 @@ class ServiceClient(Singleton):
 
     @classmethod
     def _upload_to_gcs(cls, dataset: str, data: bytes, info: FileUploadInfo) -> None:
+        """Upload ``data`` to the signed URLs in ``info``, one chunk per URL."""
         num_chunks = len(info.signed_urls)
         chunk_size = len(data) // num_chunks
         chunks = []
@@ -958,6 +969,7 @@ class ServiceClient(Singleton):
         dataset: str,
         chunk_index: int = 0,
     ) -> None:
+        """Upload one chunk to a signed URL."""
         resp = cls.httpx_client.put(
             url,
             content=chunk,
@@ -978,6 +990,7 @@ class ServiceClient(Singleton):
 
     @staticmethod
     def _warn_if_deprecated(response: httpx.Response) -> None:
+        """Emit a ``DeprecationWarning`` if the response marks the client deprecated."""
         if response.headers.get("deprecation", "").lower() != "true":
             return
 
@@ -997,8 +1010,12 @@ class ServiceClient(Singleton):
 
     @staticmethod
     def _read_json_body(response: httpx.Response) -> tuple[dict[str, Any], str]:
-        """Read the body ({} unless it is a JSON object) and a display message
-        drawn from it, falling back to the HTTP reason phrase or raw text."""
+        """Read the response body and a display message.
+
+        Returns:
+            The body (``{}`` unless it is a JSON object) and a display message
+            drawn from it, falling back to the HTTP reason phrase or raw text.
+        """
         body: dict[str, Any] = {}
         try:
             # Streaming responses must be read explicitly to prevent
@@ -1020,8 +1037,10 @@ class ServiceClient(Singleton):
 
     @staticmethod
     def _check_version(response: httpx.Response) -> None:
-        """Warn if the endpoint is deprecated and raise if the server requires
-        a newer client version (HTTP 426).
+        """Warn if the endpoint is deprecated.
+
+        Raises:
+            RuntimeError: If the server requires a newer client version (HTTP 426).
         """
         ServiceClient._warn_if_deprecated(response)
         if response.status_code == 426:
@@ -1032,6 +1051,12 @@ class ServiceClient(Singleton):
     def _raise_http_error(
         response: httpx.Response, method_name: str, body: dict[str, Any], message: str
     ) -> NoReturn:
+        """Raise the error for a failed response.
+
+        Raises:
+            RetryableServerError: On HTTP 408, 502, 503, or 504.
+            RuntimeError: On any other status.
+        """
         error_message = (
             f"Fail to call {method_name}: [HTTP {response.status_code}] {message}."
         )
@@ -1064,6 +1089,23 @@ class ServiceClient(Singleton):
         success_model: type[SuccessT] | TypeAdapter[SuccessT],
         error_models: dict[int, type[ErrorT]] | None = None,
     ) -> SuccessT | ErrorT:
+        """Parse a response into its success or expected error model.
+
+        Args:
+            response: The HTTP response.
+            method_name: Name of the called method, used in error messages.
+            success_model: Model or adapter the body is validated against on success.
+            error_models: Models to parse error bodies into, keyed by status code.
+
+        Returns:
+            The validated success model, or the matching error model instance.
+
+        Raises:
+            RuntimeError: On a streamed error, or an error status without a
+                matching error model.
+            RetryableServerError: On HTTP 408, 502, 503, or 504 without a
+                matching error model.
+        """
         error_models = error_models or {}
 
         ServiceClient._check_version(response)
@@ -1097,9 +1139,7 @@ class ServiceClient(Singleton):
 
     @classmethod
     def try_connection(cls) -> bool:
-        """
-        Check if server is reachable and accepts the connection.
-        """
+        """Check if server is reachable and accepts the connection."""
         found_valid_connection = False
         try:
             response = cls.httpx_client.get(cls.server_endpoints.root.path)
@@ -1114,9 +1154,15 @@ class ServiceClient(Singleton):
         return found_valid_connection
 
     @classmethod
-    def is_auth_token_outdated(cls, access_token) -> bool | None:
-        """
-        Check if the provided access token is valid and return True if successful.
+    def is_auth_token_outdated(cls, access_token: str) -> bool | None:
+        """Check if the provided access token is valid.
+
+        Args:
+            access_token: The access token to check.
+
+        Returns:
+            True if the token is valid, None if the user is not verified,
+            False otherwise.
         """
         is_authenticated = False
         response = cls.httpx_client.get(
@@ -1134,19 +1180,11 @@ class ServiceClient(Singleton):
 
     @classmethod
     def validate_email(cls, email: str) -> tuple[bool, str]:
-        """
-        Send entered email to server that checks if it is valid and not already in use.
+        """Check with the server that an email is valid and not already in use.
 
-        Parameters
-        ----------
-        email : str
-
-        Returns
-        -------
-        is_valid : bool
-            True if the email is valid.
-        message : str
-            The message returned from the server.
+        Returns:
+            Whether the email is valid, and the message returned from the server
+            (empty if valid).
         """
         response = cls.httpx_client.post(
             cls.server_endpoints.validate_email.path, params={"email": email}
@@ -1171,25 +1209,19 @@ class ServiceClient(Singleton):
         validation_link: str,
         additional_info: dict,
     ):
+        """Register a new user with the provided credentials.
+
+        Args:
+            email: The user's email.
+            password: The password.
+            password_confirm: The password, repeated.
+            validation_link: Link sent to the user to verify the email.
+            additional_info: Extra fields merged into the request body.
+
+        Returns:
+            Whether the user was created, the message returned from the server,
+            and the access token (None if not created).
         """
-        Register a new user with the provided credentials.
-
-        Parameters
-        ----------
-        email : str
-        password : str
-        password_confirm : str
-        validation_link: str
-        additional_info : dict
-
-        Returns
-        -------
-        is_created : bool
-            True if the user is created successfully.
-        message : str
-            The message returned from the server.
-        """
-
         response = cls.httpx_client.post(
             cls.server_endpoints.register.path,
             json={
@@ -1214,22 +1246,12 @@ class ServiceClient(Singleton):
 
     @classmethod
     def verify_email(cls, token: str, access_token: str) -> tuple[bool, str]:
+        """Verify the email with the provided token.
+
+        Returns:
+            Whether the email was verified, and the message returned from the
+            server.
         """
-        Verify the email with the provided token.
-
-        Parameters
-        ----------
-        token : str
-        access_token : str
-
-        Returns
-        -------
-        is_verified : bool
-            True if the email is verified successfully.
-        message : str
-            The message returned from the server.
-        """
-
         response = cls.httpx_client.get(
             cls.server_endpoints.verify_email.path,
             params={"token": token, "access_token": access_token},
@@ -1246,15 +1268,7 @@ class ServiceClient(Singleton):
 
     @classmethod
     def get_password_policy(cls) -> list[str]:
-        """
-        Get the password policy from the server.
-
-        Returns
-        -------
-        password_policy : {}
-            The password policy returned from the server.
-        """
-
+        """Get the password policy requirements from the server."""
         response = cls.httpx_client.get(
             cls.server_endpoints.password_policy.path,
         )
@@ -1264,8 +1278,10 @@ class ServiceClient(Singleton):
 
     @classmethod
     def send_verification_email(cls, access_token: str) -> tuple[bool, str]:
-        """
-        Let the server send an email for verifying the email.
+        """Let the server send an email for verifying the email.
+
+        Returns:
+            Whether the email was sent, and the message returned from the server.
         """
         response = cls.httpx_client.post(
             cls.server_endpoints.send_verification_email.path,
@@ -1281,9 +1297,7 @@ class ServiceClient(Singleton):
 
     @classmethod
     def retrieve_greeting_messages(cls) -> list[str]:
-        """
-        Retrieve greeting messages that are new for the user.
-        """
+        """Retrieve greeting messages that are new for the user."""
         response = cls.httpx_client.get(
             cls.server_endpoints.retrieve_greeting_messages.path
         )
@@ -1297,14 +1311,7 @@ class ServiceClient(Singleton):
 
     @classmethod
     def get_data_summary(cls) -> dict:
-        """
-        Get the data summary of the user from the server.
-
-        Returns
-        -------
-        data_summary : dict
-            The data summary returned from the server.
-        """
+        """Get the data summary of the user from the server."""
         response = cls.httpx_client.get(
             cls.server_endpoints.get_data_summary.path,
         )
@@ -1314,16 +1321,14 @@ class ServiceClient(Singleton):
 
     @classmethod
     def download_all_data(cls, save_dir: Path) -> Path | None:
+        """Download all data uploaded by the user from the server.
+
+        Args:
+            save_dir: Directory to save the downloaded file to.
+
+        Returns:
+            The path to the downloaded file.
         """
-        Download all data uploaded by the user from the server.
-
-        Returns
-        -------
-        save_path : Path | None
-            The path to the downloaded file. Return None if download fails.
-
-        """
-
         save_path = None
 
         full_url = cls.base_url + cls.server_endpoints.download_all_data.path
@@ -1347,20 +1352,15 @@ class ServiceClient(Singleton):
 
     @classmethod
     def delete_dataset(cls, dataset_uid: str) -> list[str]:
-        """
-        Delete the dataset with the provided UID from the server.
-        Note that deleting a train set with lead to deleting all associated test sets.
+        """Delete the dataset with the provided UID from the server.
 
-        Parameters
-        ----------
-        dataset_uid : str
-            The UID of the dataset to be deleted.
+        Deleting a train set also deletes all associated test sets.
 
-        Returns
-        -------
-        deleted_dataset_uids : [str]
-            The list of deleted dataset UIDs.
+        Args:
+            dataset_uid: The UID of the dataset to be deleted.
 
+        Returns:
+            The UIDs of all deleted datasets.
         """
         response = cls.httpx_client.delete(
             cls.server_endpoints.delete_dataset.path,
@@ -1373,13 +1373,10 @@ class ServiceClient(Singleton):
 
     @classmethod
     def delete_all_datasets(cls) -> list[str]:
-        """
-        Delete all datasets uploaded by the user from the server.
+        """Delete all datasets uploaded by the user from the server.
 
-        Returns
-        -------
-        deleted_dataset_uids : list[str]
-            The list of deleted dataset UIDs.
+        Returns:
+            The UIDs of the deleted datasets.
         """
         response = cls.httpx_client.delete(
             cls.server_endpoints.delete_all_datasets.path,
@@ -1391,6 +1388,7 @@ class ServiceClient(Singleton):
 
     @classmethod
     def delete_user_account(cls) -> None:
+        """Delete the user's account on the server."""
         response = cls.httpx_client.delete(
             cls.server_endpoints.delete_user_account.path,
         )
@@ -1411,9 +1409,10 @@ class ServiceClient(Singleton):
 
     @classmethod
     def get_api_usage(cls, access_token: str):
-        """
-        Retrieve current API usage data of the user from the server.
-        Returns summary: str
+        """Retrieve current API usage data of the user from the server.
+
+        Returns:
+            The usage data as parsed from the JSON response.
         """
         response = cls.httpx_client.post(
             cls.server_endpoints.get_api_usage.path,

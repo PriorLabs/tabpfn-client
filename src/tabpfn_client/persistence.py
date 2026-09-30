@@ -94,8 +94,19 @@ def _jsonable(value: Any) -> Any:
 
 
 def _read_record(source: str | Path | dict[str, Any]) -> _ModelRecord:
-    """Parse a record from a `save_model()` dict or JSON file, failing with a
-    message that names the source rather than a bare validation error."""
+    """Parse a record from a `save_model()` dict or JSON file.
+
+    Args:
+        source: The dict returned by `save_model()`, or the path of the JSON
+            file it wrote.
+
+    Returns:
+        The validated record.
+
+    Raises:
+        ValueError: If `source` is not a valid record; the message names the
+            source rather than showing a bare validation error.
+    """
     if isinstance(source, dict):
         raw: Any = source
         origin = "The given dict"
@@ -153,14 +164,11 @@ class ModelPersistenceMixin(BaseEstimator):
         with the same account, and they stay usable for as long as the training
         data remains on the server (see `UserDataClient` to delete it).
 
-        Parameters
-        ----------
-        path : str or Path, optional
-            Where to write the record as JSON. Nothing is written when omitted.
+        Args:
+            path: Where to write the record as JSON. Nothing is written when
+                omitted.
 
-        Returns
-        -------
-        dict
+        Returns:
             The record as a JSON-serialisable dict, whether or not `path` was
             given, so it can also be kept elsewhere (a database, an experiment
             tracker) and handed to `load_model()` directly.
@@ -193,19 +201,18 @@ class ModelPersistenceMixin(BaseEstimator):
         here; the first `predict()` authenticates (like `fit()` would) and
         raises `FittedModelNotFoundError` if the server no longer has the model.
 
-        Parameters
-        ----------
-        source : str, Path or dict
-            The path of a file written by `save_model(path)`, or the dict it
-            returned.
+        Args:
+            source: The path of a file written by `save_model(path)`, or the
+                dict it returned.
 
-        Raises
-        ------
-        ValueError
-            If `source` is not a record written by `save_model()`, holds a model
-            of the other task (a regression model loaded into a classifier),
-            or has parameters this class does not accept, for instance because
-            a newer tabpfn-client saved it.
+        Returns:
+            A fitted estimator of this class.
+
+        Raises:
+            ValueError: If `source` is not a record written by `save_model()`,
+                holds a model of the other task (a regression model loaded into
+                a classifier), or has parameters this class does not accept,
+                for instance because a newer tabpfn-client saved it.
         """
         record = _read_record(source)
         task = _task_of(cls)

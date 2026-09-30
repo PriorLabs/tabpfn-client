@@ -1,6 +1,8 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 #  Licensed under the Apache License, Version 2.0
 
+"""Classmethod wrappers around `ServiceClient` for auth, user data and inference."""
+
 from __future__ import annotations
 
 import logging
@@ -30,28 +32,34 @@ logger = logging.getLogger(__name__)
 
 
 class ServiceClientWrapper:
+    """Base class of the `ServiceClient` wrappers."""
+
     pass
 
 
 # Singleton class for user authentication
 class UserAuthenticationClient(ServiceClientWrapper, Singleton):
-    """
-    Wrapper of ServiceClient to handle user authentication, including:
-    - user registration and login
-    - access token caching
+    """Wrapper of ServiceClient to handle user authentication.
 
-    This is implemented as a singleton class with classmethods.
+    Covers user registration and login, and access token caching. Implemented
+    as a singleton class with classmethods.
     """
 
     CACHED_TOKEN_FILE = constants.CACHE_DIR / "config"
 
     def __new__(cls):
+        """Refuse instantiation; use the classmethods instead.
+
+        Raises:
+            TypeError: Always.
+        """
         raise TypeError(
             "This class should not be instantiated. Use classmethods instead."
         )
 
     @classmethod
     def is_accessible_connection(cls) -> bool:
+        """Return whether the server is reachable and accepts the connection."""
         return ServiceClient.try_connection()
 
     @classmethod
@@ -85,18 +93,34 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
 
     @classmethod
     def validate_email(cls, email: str) -> tuple[bool, str]:
+        """Check with the server that an email is valid and not already in use.
+
+        Returns:
+            Whether the email is valid, and the message returned by the server.
+        """
         return ServiceClient.validate_email(email)
 
     @classmethod
     def get_password_policy(cls):
+        """Return the password policy from the server."""
         return ServiceClient.get_password_policy()
 
     @classmethod
     def send_verification_email(cls, access_token: str) -> tuple[bool, str]:
+        """Ask the server to send an email-verification email.
+
+        Returns:
+            Whether the email was sent, and the message returned by the server.
+        """
         return ServiceClient.send_verification_email(access_token)
 
     @classmethod
     def verify_email(cls, token: str, access_token: str) -> tuple[bool, str]:
+        """Verify the user's email with the token from the verification email.
+
+        Returns:
+            Whether the email was verified, and the message returned by the server.
+        """
         return ServiceClient.verify_email(token, access_token)
 
     @classmethod
@@ -108,6 +132,12 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
         validation_link: str,
         additional_info: dict,
     ) -> tuple[bool, str, str | None]:
+        """Register a new user and, on success, set and cache the returned token.
+
+        Returns:
+            Whether the user was created, the message returned by the server, and
+            the access token, which is None if registration failed.
+        """
         is_created, message, access_token = ServiceClient.register(
             email, password, password_confirm, validation_link, additional_info
         )
@@ -131,6 +161,10 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
 
         The source matters when a token turns out to be bad: only the source
         that produced it may be discarded.
+
+        Returns:
+            The token and its source (``"process"``, ``"env"`` or ``"cache"``),
+            or ``(None, None)`` if no token is found.
         """
         access_token = ServiceClient.get_access_token()
         if access_token:
@@ -154,6 +188,15 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
 
     @classmethod
     def try_reuse_existing_token(cls) -> tuple[bool, str | None]:
+        """Validate the resolved token with the server and use it if valid.
+
+        A rejected token is discarded from the source that produced it.
+
+        Returns:
+            Whether the token is valid, and the token. The token is None when none
+            was found or it was rejected; it is returned with False when the
+            account's email is unverified.
+        """
         access_token, source = cls.resolve_token_with_source()
         if access_token is None:
             return False, None
@@ -175,6 +218,7 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
 
     @classmethod
     def reset_cache(cls):
+        """Drop the process token, the cached token and the TABPFN_TOKEN option."""
         cls._reset_token()
 
     @classmethod
@@ -190,6 +234,7 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
 
     @classmethod
     def _reset_token(cls):
+        """Drop the process token, the cached token and the TABPFN_TOKEN option."""
         ServiceClient.reset_authorization()
         cls.CACHED_TOKEN_FILE.unlink(missing_ok=True)
         # The TABPFN_TOKEN var is always set externally in the environment, in
@@ -200,22 +245,35 @@ class UserAuthenticationClient(ServiceClientWrapper, Singleton):
 
     @classmethod
     def retrieve_greeting_messages(cls):
+        """Return greeting messages from the server that are new for the user."""
         return ServiceClient.retrieve_greeting_messages()
 
 
 class UserDataClient(ServiceClientWrapper, Singleton):
-    """
-    Wrapper of ServiceClient to handle user data, including:
-    - query, or delete user account data
-    - query, download, or delete uploaded data
+    """Wrapper of ServiceClient to handle user data.
+
+    Queries or deletes user account data, and queries, downloads or deletes
+    uploaded data.
     """
 
     @classmethod
     def get_data_summary(cls) -> dict:
+        """Return the summary of the user's data from the server."""
         return ServiceClient.get_data_summary()
 
     @classmethod
     def download_all_data(cls, save_dir: Path = Path(".")) -> Path:
+        """Download all data uploaded by the user.
+
+        Args:
+            save_dir: Directory to save the download into.
+
+        Returns:
+            The path to the downloaded file.
+
+        Raises:
+            RuntimeError: If the download fails.
+        """
         saved_path = ServiceClient.download_all_data(save_dir)
         if saved_path is None:
             raise RuntimeError("Failed to download data.")
@@ -225,18 +283,32 @@ class UserDataClient(ServiceClientWrapper, Singleton):
 
     @classmethod
     def delete_dataset(cls, dataset_uid: str) -> list[str]:
+        """Delete a dataset; deleting a train set also deletes its test sets.
+
+        Args:
+            dataset_uid: The UID of the dataset to delete.
+
+        Returns:
+            The UIDs of the deleted datasets.
+        """
         deleted_datasets = ServiceClient.delete_dataset(dataset_uid)
         logger.info(f"Deleted datasets: {deleted_datasets}")
         return deleted_datasets
 
     @classmethod
     def delete_all_datasets(cls) -> list[str]:
+        """Delete all datasets uploaded by the user.
+
+        Returns:
+            The UIDs of the deleted datasets.
+        """
         deleted_datasets = ServiceClient.delete_all_datasets()
         logger.info(f"Deleted datasets: {deleted_datasets}")
         return deleted_datasets
 
     @classmethod
     def delete_user_account(cls):
+        """Delete the user account after the user confirms it interactively."""
         # local import to avoid circular import
         from tabpfn_client.prompt_agent import PromptAgent
 
@@ -249,13 +321,14 @@ class UserDataClient(ServiceClientWrapper, Singleton):
 
 
 class InferenceClient(ServiceClientWrapper, Singleton):
-    """
-    Wrapper of ServiceClient to handle inference, including:
-    - fitting
-    - prediction
-    """
+    """Wrapper of ServiceClient to handle inference (fitting and prediction)."""
 
     def __new__(cls):
+        """Refuse instantiation; use the classmethods instead.
+
+        Raises:
+            TypeError: Always.
+        """
         raise TypeError(
             "This class should not be instantiated. Use classmethods instead."
         )
@@ -273,6 +346,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         description: str | None,
         text_handling: TextHandling = "advanced",
     ) -> UUID:
+        """Same as `fit_with_result`, returning only the fitted train set id."""
         return ServiceClient.fit(
             X,
             y,
@@ -298,6 +372,10 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         description: str | None,
         text_handling: TextHandling = "advanced",
     ) -> FitResult:
+        """Upload a train set to the server and fit it.
+
+        See `ServiceClient.fit_with_result`.
+        """
         return ServiceClient.fit_with_result(
             X,
             y,
@@ -318,6 +396,10 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         task_config: ClassifierConfig | RegressorConfig,
         client_options: ClientOptions | None = None,
     ) -> PredictionResult:
+        """Predict on a test set with a fitted train set.
+
+        See `ServiceClient.predict`.
+        """
         return ServiceClient.predict(
             x_test=X,
             fitted_train_set_id=fitted_train_set_id,
