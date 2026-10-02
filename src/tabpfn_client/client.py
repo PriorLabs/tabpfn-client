@@ -1104,7 +1104,8 @@ class ServiceClient(Singleton):
             RuntimeError: On a streamed error, or an error status without a
                 matching error model.
             RetryableServerError: On HTTP 408, 502, 503, or 504 without a
-                matching error model.
+                matching error model, or on a success status whose body is
+                empty (keepalive whitespace only).
         """
         error_models = error_models or {}
 
@@ -1123,6 +1124,15 @@ class ServiceClient(Singleton):
 
         # Success with expected schema.
         if is_success:
+            # Long-running endpoints stream whitespace keepalive pings before
+            # the final payload. A success body with nothing but whitespace
+            # means the stream ended without a result, e.g. the server died
+            # mid-request without emitting a `_streamed_error` envelope.
+            if not response.text.strip():
+                raise RetryableServerError(
+                    f"Fail to call {method_name}: [HTTP {status_code}] the "
+                    "server closed the response without a final payload."
+                )
             if isinstance(success_model, TypeAdapter):
                 return success_model.validate_python(body)
             return success_model.model_validate(body)
