@@ -13,6 +13,17 @@ class CappedRetryableServerError(Exception):
     pass
 
 
+class EmptyResponseError(RuntimeError):
+    """A success response ended without a final payload.
+
+    Long-running endpoints stream whitespace keepalive pings before the result.
+    A body holding nothing else means the server ended the request without a
+    result, so it is treated like an internal server error (HTTP 500).
+    """
+
+    pass
+
+
 class FittedModelNotFoundError(RuntimeError):
     """The server has no fitted model for the id the estimator refers to.
 
