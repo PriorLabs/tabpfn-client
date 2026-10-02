@@ -17,11 +17,13 @@ from tabpfn_client.client import (
     RetryableServerError,
     ServiceClient,
 )
+from tabpfn_client.errors import CappedRetryableServerError, EmptyResponseError
 from tabpfn_client.api_models import (
     ClassifierConfig,
     DuplicateTrainSetErrorResponse,
     FitResponse,
     FitStatus,
+    GetFitStatusRequest,
     GetFitStatusResponse,
     RegressorConfig,
     RegressorOutputType,
@@ -326,18 +328,29 @@ class TestServiceClient(unittest.TestCase):
             )
         self.assertEqual(str(cm.exception), "Fail to call fit with error: streamed, OK")
 
-    def test_validate_response_empty_success_body_raises_retryable(self):
+    def test_validate_response_empty_success_body_raises_empty_response_error(self):
         # A chunked 200 that only carried keepalive pings and no final
         # payload means the request failed, even without `_streamed_error`.
         for content in (b"", b" ", b"\n \n  \n"):
             with self.subTest(content=content):
-                with self.assertRaises(RetryableServerError) as cm:
+                with self.assertRaises(EmptyResponseError) as cm:
                     ServiceClient._validate_response(
                         self._http_response(200, content=content),
                         "fit",
                         success_model=FitResponse,
                     )
                 self.assertIn("without a final payload", str(cm.exception))
+
+    def test_get_fit_status_empty_body_is_capped_retryable(self):
+        with patch.object(
+            ServiceClient.httpx_client,
+            "post",
+            return_value=self._http_response(200, content=b"\n \n"),
+        ):
+            with self.assertRaises(CappedRetryableServerError):
+                ServiceClient._get_fit_status(
+                    req=GetFitStatusRequest(fitted_train_set_id=UUID(int=0)), timeout=1
+                )
 
     def test_validate_response_keepalive_then_payload_succeeds(self):
         with patch.object(FitResponse, "model_validate") as model_validate:

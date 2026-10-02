@@ -34,6 +34,7 @@ from tabpfn_client.models import (
 from tabpfn_client.errors import (
     RetryableServerError,
     CappedRetryableServerError,
+    EmptyResponseError,
     FittedModelNotFoundError,
 )
 
@@ -610,7 +611,8 @@ class ServiceClient(Singleton):
         """Fetch the status of a fit once.
 
         Raises:
-            CappedRetryableServerError: On HTTP 429 or 500.
+            CappedRetryableServerError: On HTTP 429 or 500, or an empty
+                success body (treated as a 500).
         """
         res = cls.httpx_client.post(
             url="/tabpfn/get_fit_status",
@@ -626,11 +628,14 @@ class ServiceClient(Singleton):
             raise CappedRetryableServerError(
                 f"Fail to call get_fit_status: [HTTP {res.status_code}] {res.text}."
             )
-        return cls._validate_response(
-            res,
-            "get_fit_status",
-            success_model=GetFitStatusResponse,
-        )
+        try:
+            return cls._validate_response(
+                res,
+                "get_fit_status",
+                success_model=GetFitStatusResponse,
+            )
+        except EmptyResponseError as exc:
+            raise CappedRetryableServerError(str(exc)) from exc
 
     @classmethod
     # Every fit call creates a new fit job, no dedup logic exists on the server.
@@ -1104,8 +1109,9 @@ class ServiceClient(Singleton):
             RuntimeError: On a streamed error, or an error status without a
                 matching error model.
             RetryableServerError: On HTTP 408, 502, 503, or 504 without a
-                matching error model, or on a success status whose body is
-                empty (keepalive whitespace only).
+                matching error model.
+            EmptyResponseError: On a success status whose body is empty
+                (keepalive whitespace only).
         """
         error_models = error_models or {}
 
@@ -1125,13 +1131,13 @@ class ServiceClient(Singleton):
         # Success with expected schema.
         if is_success:
             # Long-running endpoints stream whitespace keepalive pings before
-            # the final payload. A success body with nothing but whitespace
-            # means the stream ended without a result, e.g. the server died
-            # mid-request without emitting a `_streamed_error` envelope.
+            # the final payload. A success body with nothing else means the
+            # stream ended without a result, e.g. the server died mid-request
+            # without emitting a `_streamed_error` envelope.
             if not response.text.strip():
-                raise RetryableServerError(
+                raise EmptyResponseError(
                     f"Fail to call {method_name}: [HTTP {status_code}] the "
-                    "server closed the response without a final payload."
+                    "server ended the response without a final payload."
                 )
             if isinstance(success_model, TypeAdapter):
                 return success_model.validate_python(body)
