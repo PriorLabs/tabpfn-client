@@ -55,11 +55,11 @@ def _fitted_classifier(classes: list[Any], **params: Any) -> TabPFNClassifier:
 
 
 def _model_params(estimator: TabPFNClassifier | TabPFNRegressor) -> dict[str, Any]:
-    """Constructor params minus the transport-only `client_options`."""
+    """Constructor params minus the session-only `client_options` and `resume_dir`."""
     return {
         k: v
         for k, v in estimator.get_params(deep=False).items()
-        if k != "client_options"
+        if k not in ("client_options", "resume_dir")
     }
 
 
@@ -128,14 +128,20 @@ class TestRecord:
             "params",
             "n_train_rows",
             "classes",
+            "fit_status",
+            "train_data_fingerprint",
         }
         assert record["tabpfn_client_version"] == __version__
         assert record["task"] == "regression"
         assert record["model_id"] == str(MODEL_ID)
         assert record["n_train_rows"] == N_TRAIN_ROWS
         assert record["classes"] is None
+        assert record["fit_status"] == "completed"
+        # Only an estimator with a `resume_dir` hashes the training data.
+        assert record["train_data_fingerprint"] is None
         assert record["params"] == _model_params(reg)
         assert "client_options" not in record["params"]
+        assert "resume_dir" not in record["params"]
         json.dumps(record)  # JSON-serialisable as returned
 
     def test_none_valued_params_survive(self):
@@ -243,13 +249,17 @@ class TestLoadRejects:
         assert "99.0.0" in str(excinfo.value)
         assert "upgrade" in str(excinfo.value).lower()
 
-    def test_transport_params(self):
-        # `client_options` is per-process and never saved. A record carrying it
-        # (hand-made from get_params(), say) must not smuggle a plain dict into
-        # the estimator, where the first predict() would trip over it.
+    @pytest.mark.parametrize(
+        ("param", "value"),
+        [("client_options", {"timeout": 5}), ("resume_dir", "fits")],
+    )
+    def test_transport_params(self, param, value):
+        # `client_options` and `resume_dir` belong to a process, not to the model,
+        # and are never saved. A record carrying one (hand-made from get_params(),
+        # say) must not smuggle it into the loaded estimator.
         record = _fitted_regressor().save_model()
-        record["params"]["client_options"] = {"timeout": 5}
-        with pytest.raises(ValueError, match="client_options"):
+        record["params"][param] = value
+        with pytest.raises(ValueError, match=param):
             TabPFNRegressor.load_model(record)
 
     def test_unknown_top_level_fields_are_ignored(self):

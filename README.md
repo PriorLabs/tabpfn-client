@@ -162,19 +162,35 @@ Notes:
 - `load_model()` makes no request. A fitted model stays usable for as long as its training data remains on the server; if it was deleted (for instance with `UserDataClient`), the first `predict()` raises `FittedModelNotFoundError`.
 - Pickling with `pickle` or `joblib` works too and stays small, since the estimator holds no training data. The JSON record is the format that is readable and meant to stay loadable across tabpfn-client versions.
 
-A script that reruns often can reuse the fit when it is available and fit otherwise:
+A script that reruns often can let the estimator keep the record itself: see [Resuming a fit](#resuming-a-fit).
+
+### Resuming a fit
+
+A fit can run for a long time, thinking mode in particular, and the process waiting for it can stop: a closed notebook, a crash, a timeout. Give the estimator a `resume_dir`, and running the same code again resumes the fit instead of starting another, which would take the time and the cost again:
 
 ```python
-from tabpfn_client import FittedModelNotFoundError
-
-try:
-    model = TabPFNClassifier.load_model("model.json")
-    predictions = model.predict(X_test)
-except (FileNotFoundError, FittedModelNotFoundError):
-    model = TabPFNClassifier().fit(X_train, y_train)
-    model.save_model("model.json")
-    predictions = model.predict(X_test)
+model = TabPFNClassifier(thinking_mode=True, resume_dir="tabpfn_fits")
+model.fit(X_train, y_train)
+model.predict(X_test)
 ```
+
+`fit()` records the fit in `resume_dir` as soon as the server accepts it, and again once it completes. A later `fit()` of an estimator with the same parameters, on the same training data, takes that fit on: it waits for it if it is still running, and returns as soon as the server confirms it otherwise. Run the code again tomorrow and the model is there.
+
+Since `resume_dir` is an estimator parameter, it also works where the estimator is cloned and fitted for you, as in pipelines, cross-validation and grid search: each fit gets a file of its own, named after the estimator, its parameters and the training data, so every fold and every candidate resumes its own fit.
+
+```python
+from sklearn.model_selection import cross_val_score
+
+scores = cross_val_score(TabPFNClassifier(thinking_mode=True, resume_dir="tabpfn_fits"), X, y)
+```
+
+Notes:
+
+- Each file is a `save_model()` record with a `fit_status` of `"pending"` or `"completed"`. `load_model()` loads a completed one; a pending one is resumed by fitting again.
+- A fit that the server failed or no longer has is fitted again, and its file is replaced.
+- `fit()` hashes the training data to find the file, so it needs the same data to resume.
+- With the default `api_mode="auto"`, a resumable fit is submitted as a background job so that it is recorded before it runs. With `api_mode="sync"` it is only recorded once it completes.
+- Two processes fitting the same estimator on the same data at the same time each start a fit; the file keeps the one recorded last.
 
 ## Timings
 

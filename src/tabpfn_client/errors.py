@@ -34,3 +34,13 @@ class FittedModelNotFoundError(RuntimeError):
     """
 
     pass
+
+
+class FitFailedError(RuntimeError):
+    """The server reports that a fit it accepted has failed.
+
+    Raised by ``fit()`` when it polls the server for the outcome of the fit, as
+    in ASYNC mode. The message holds the server's reason.
+    """
+
+    pass

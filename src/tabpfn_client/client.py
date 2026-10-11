@@ -35,6 +35,7 @@ from tabpfn_client.errors import (
     RetryableServerError,
     CappedRetryableServerError,
     EmptyResponseError,
+    FitFailedError,
     FittedModelNotFoundError,
 )
 
@@ -162,6 +163,20 @@ def _get_crc32c_hash(data: bytes) -> str:
     """Compute the CRC32C checksum of ``data`` as a base64-encoded string."""
     crc32c_value = google_crc32c.value(data)
     return base64.b64encode(struct.pack(">I", crc32c_value)).decode("ascii")
+
+
+def _fitted_model_not_found(
+    fitted_train_set_id: UUID, response: NotFoundErrorResponse
+) -> FittedModelNotFoundError:
+    """Build the error for a fit id the server does not know."""
+    message = (
+        f"Fitted model {fitted_train_set_id} was not found on the server. "
+        "It may have been deleted (see UserDataClient), or it was fitted "
+        "under a different account. Call fit() again to create a new one."
+    )
+    if response.trace_id:
+        message += f" Report trace ID: {response.trace_id}."
+    return FittedModelNotFoundError(message)
 
 
 def _serialize_to_parquet(df: pd.DataFrame) -> tuple[bytes, str]:
@@ -337,6 +352,7 @@ class ServiceClient(Singleton):
         client_options: ClientOptions | None = None,
         description: str | None = None,
         text_handling: TextHandling = "advanced",
+        wait: bool = True,
     ) -> FitResult:
         """Upload a train set to server and fit it.
 
@@ -350,10 +366,16 @@ class ServiceClient(Singleton):
             client_options: Client specific options (e.g. timeout, headers).
             description: Description of the dataset and task for the server.
             text_handling: Text-processing preset, ``"advanced"`` or ``"simple"``.
+            wait: Whether to poll the server until the fit completes. When
+                False, return as soon as the server answers the fit request,
+                which in ASYNC mode is right after it accepted the job; the
+                result's ``pending`` then says whether the fit is still
+                running, and ``_wait_for_fit`` waits for it.
 
         Returns:
-            The unique ID of the fitted train set in the server, and the
-            server-reported timings of the fit (None if the server reports none).
+            The unique ID of the fitted train set in the server, the
+            server-reported timings of the fit (None if the server reports none),
+            and whether the fit is still pending.
 
         Raises:
             ValueError: If ``text_handling`` is invalid or the in-memory size of
@@ -466,10 +488,8 @@ class ServiceClient(Singleton):
                 timeout=client_options.timeout,
                 headers=client_options.headers,
             )
-            timings = cls._wait_for_fit(
-                fit_resp.fitted_train_set_id,
-                headers=client_options.headers,
-            ).timings
+            timings = None
+            pending = True
         else:
             fit_resp = cls._fit(
                 req=FitRequest(
@@ -490,15 +510,19 @@ class ServiceClient(Singleton):
             # (`FitStatus | UnknownEnum`), so treat anything that is not
             # COMPLETED as still in progress instead of silently skipping
             # the wait when a newer server adds a status.
-            if fit_resp.status != FitStatus.COMPLETED:
-                timings = cls._wait_for_fit(
-                    fit_resp.fitted_train_set_id,
-                    headers=client_options.headers,
-                ).timings
+            pending = fit_resp.status != FitStatus.COMPLETED
+
+        if pending and wait:
+            timings = cls._wait_for_fit(
+                fit_resp.fitted_train_set_id,
+                headers=client_options.headers,
+            ).timings
+            pending = False
 
         return FitResult(
             fitted_train_set_id=fit_resp.fitted_train_set_id,
             timings=timings.model_dump(mode="json") if timings is not None else None,
+            pending=pending,
         )
 
     @classmethod
@@ -513,12 +537,15 @@ class ServiceClient(Singleton):
         server's per-response ``retry_in_secs`` hint (5s until the first hint
         arrives), clamped to the ``_MIN_RETRY_INTERVAL_SECS`` floor so a
         zero/negative hint can neither busy-poll the endpoint nor crash
-        ``time.sleep``.
+        ``time.sleep``. The server derives the hint from how long the fit has
+        been pending, so a process resuming the wait for a fit another process
+        submitted polls at the same cadence.
 
-        Returns once the fit is COMPLETED. Raises if the fit FAILED, or
-        ``TimeoutError`` when no terminal state is reached within the resolved
-        poll timeout. The timeout is a hard bound: the loop gives up as soon
-        as the next poll could no longer start before the deadline, instead
+        Returns once the fit is COMPLETED. Raises ``FitFailedError`` if the fit
+        FAILED, ``FittedModelNotFoundError`` if the server has no fit with this
+        id, or ``TimeoutError`` when no terminal state is reached within the
+        resolved poll timeout. The timeout is a hard bound: the loop gives up as
+        soon as the next poll could no longer start before the deadline, instead
         of sleeping up to the deadline and polling once more past it.
         A failed fit is reported by the server as HTTP 200 with
         ``status=failed`` (only an unknown/foreign id is a 404), so the status
@@ -574,7 +601,7 @@ class ServiceClient(Singleton):
                 if status_resp.status == FitStatus.COMPLETED:
                     return status_resp
                 if status_resp.status == FitStatus.FAILED:
-                    raise RuntimeError(
+                    raise FitFailedError(
                         f"Fit {fitted_train_set_id} failed: "
                         f"{status_resp.error or 'no error message provided'}"
                     )
@@ -611,6 +638,7 @@ class ServiceClient(Singleton):
         """Fetch the status of a fit once.
 
         Raises:
+            FittedModelNotFoundError: If the server has no fit with this ID.
             CappedRetryableServerError: On HTTP 429 or 500, or an empty
                 success body (treated as a 500).
         """
@@ -629,13 +657,17 @@ class ServiceClient(Singleton):
                 f"Fail to call get_fit_status: [HTTP {res.status_code}] {res.text}."
             )
         try:
-            return cls._validate_response(
+            status_resp = cls._validate_response(
                 res,
                 "get_fit_status",
                 success_model=GetFitStatusResponse,
+                error_models={404: NotFoundErrorResponse},
             )
         except EmptyResponseError as exc:
             raise CappedRetryableServerError(str(exc)) from exc
+        if isinstance(status_resp, NotFoundErrorResponse):
+            raise _fitted_model_not_found(req.fitted_train_set_id, status_resp)
+        return status_resp
 
     @classmethod
     # Every fit call creates a new fit job, no dedup logic exists on the server.
@@ -778,14 +810,7 @@ class ServiceClient(Singleton):
         )
 
         if isinstance(prepare_resp, NotFoundErrorResponse):
-            message = (
-                f"Fitted model {fitted_train_set_id} was not found on the server. "
-                "It may have been deleted (see UserDataClient), or it was fitted "
-                "under a different account. Call fit() again to create a new one."
-            )
-            if prepare_resp.trace_id:
-                message += f" Report trace ID: {prepare_resp.trace_id}."
-            raise FittedModelNotFoundError(message)
+            raise _fitted_model_not_found(fitted_train_set_id, prepare_resp)
 
         if isinstance(prepare_resp, DuplicateTestSetErrorResponse):
             logger.debug("Test set already exists, skipping upload.")

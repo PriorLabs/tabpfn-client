@@ -17,7 +17,13 @@ from tabpfn_client.client import (
     RetryableServerError,
     ServiceClient,
 )
-from tabpfn_client.errors import CappedRetryableServerError, EmptyResponseError
+from tabpfn_client.errors import (
+    CappedRetryableServerError,
+    EmptyResponseError,
+    FitFailedError,
+    FittedModelNotFoundError,
+)
+from tabpfn_client.models import ApiMode
 from tabpfn_client.api_models import (
     ClassifierConfig,
     DuplicateTrainSetErrorResponse,
@@ -625,6 +631,97 @@ class TestServiceClient(unittest.TestCase):
         self.assertIn("boom", str(cm.exception))
 
     @with_mock_server()
+    def test_fit_without_waiting_returns_once_the_job_is_submitted(self, mock_server):
+        # No /tabpfn/get_fit_status route: the mock server rejects any poll.
+        fitted_train_set_id = "00000000-0000-0000-0000-000000000002"
+        mock_server.router.post("/tabpfn/prepare_train_set_upload").respond(
+            200,
+            json=self._prepare_train_set_upload_response(
+                "00000000-0000-0000-0000-000000000001"
+            ),
+        )
+        mock_server.router.post("/tabpfn/submit_fit_job").respond(
+            200, json={"fitted_train_set_id": fitted_train_set_id}
+        )
+        ServiceClient.authorize("dummy_access_token")
+
+        with patch.object(ServiceClient, "_upload_to_gcs"):
+            result = ServiceClient.fit_with_result(
+                self.X_train,
+                self.y_train,
+                tabpfn_systems=["preprocessing", "text"],
+                task_config=ClassifierFitTaskConfig(),
+                api_mode=ApiMode.ASYNC,
+                wait=False,
+            )
+
+        self.assertEqual(result.fitted_train_set_id, UUID(fitted_train_set_id))
+        self.assertTrue(result.pending)
+        self.assertIsNone(result.timings)
+
+    @with_mock_server()
+    def test_sync_fit_without_waiting_returns_what_the_server_answered(
+        self, mock_server
+    ):
+        # A sync fit that outlives the server's own wait comes back pending;
+        # without `wait`, the client hands that back instead of polling.
+        fitted_train_set_id = "00000000-0000-0000-0000-000000000002"
+        mock_server.router.post("/tabpfn/prepare_train_set_upload").respond(
+            200,
+            json=self._prepare_train_set_upload_response(
+                "00000000-0000-0000-0000-000000000001"
+            ),
+        )
+        mock_server.router.post("/tabpfn/fit").respond(
+            200,
+            json={
+                "fitted_train_set_id": fitted_train_set_id,
+                "status": "pending",
+                "timings": {"elapsed_s": 900.0},
+            },
+        )
+        ServiceClient.authorize("dummy_access_token")
+
+        with patch.object(ServiceClient, "_upload_to_gcs"):
+            result = ServiceClient.fit_with_result(
+                self.X_train,
+                self.y_train,
+                tabpfn_systems=["preprocessing", "text"],
+                task_config=ClassifierFitTaskConfig(),
+                api_mode=ApiMode.SYNC,
+                wait=False,
+            )
+
+        self.assertEqual(result.fitted_train_set_id, UUID(fitted_train_set_id))
+        self.assertTrue(result.pending)
+
+    @with_mock_server()
+    def test_waiting_for_an_unknown_fit_stops_at_once(self, mock_server):
+        # A 404 is not transient: the poll loop must not retry it until its
+        # deadline, so a resumed fit the server no longer has is fitted again.
+        fitted_train_set_id = UUID("00000000-0000-0000-0000-000000000002")
+        mock_server.router.post("/tabpfn/get_fit_status").respond(
+            404,
+            json={
+                "message": "Fitted train set not found",
+                "error_code": "NOT_FOUND",
+                "trace_id": "00000000-0000-0000-0000-00000000beef",
+            },
+        )
+        ServiceClient.authorize("dummy_access_token")
+
+        with (
+            patch("tabpfn_client.client.time.sleep") as mock_sleep,
+            self.assertRaises(FittedModelNotFoundError) as cm,
+        ):
+            ServiceClient._wait_for_fit(fitted_train_set_id)
+
+        mock_sleep.assert_not_called()
+
+        self.assertIn(str(fitted_train_set_id), str(cm.exception))
+        self.assertIn("00000000-0000-0000-0000-00000000beef", str(cm.exception))
+
+    @with_mock_server()
     def test_predict_with_same_test_set_calls_prepare_and_predict_each_time(
         self, mock_server
     ):
@@ -911,13 +1008,15 @@ class TestWaitForFit(unittest.TestCase):
         self.assertEqual(fake_time.sleeps, [5.0, 5.0])
         self.assertEqual(mock.call_count, 3)
 
-    def test_failed_fit_raises_runtime_error_without_sleeping(self):
+    def test_failed_fit_raises_fit_failed_error_without_sleeping(self):
         with self._patched([_fit_status(FitStatus.FAILED, error="boom")]) as (
             fake_time,
             _,
         ):
-            with self.assertRaises(RuntimeError) as cm:
+            with self.assertRaises(FitFailedError) as cm:
                 ServiceClient._wait_for_fit(self.FIT_ID)
+        # Still a RuntimeError, which is what a failed fit raised before.
+        self.assertIsInstance(cm.exception, RuntimeError)
         self.assertIn("boom", str(cm.exception))
         self.assertEqual(fake_time.sleeps, [])
 

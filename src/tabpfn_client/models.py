@@ -35,11 +35,14 @@ class FitResult:
         fitted_train_set_id: Server-side id of the fitted train set.
         timings: Seconds per stage as reported by the server, or None when it
             reports none.
+        pending: Whether the server was still running the fit when the result
+            was returned, which only happens when the caller did not wait.
     """
 
     fitted_train_set_id: UUID
     # Seconds per stage as reported by the server; None when it reports none.
     timings: dict[str, Any] | None = None
+    pending: bool = False
 
 
 @dataclass(frozen=True)
