@@ -176,9 +176,10 @@ except (FileNotFoundError, FittedModelNotFoundError):
     predictions = model.predict(X_test)
 ```
 
-### Saving a fit while it runs
+### Resuming a pending fit
 
-A fit can run for a long time, thinking mode in particular, and the process waiting for it can stop: a closed notebook, a crash, a timeout. Give the estimator a `save_model_to` path, and `fit()` saves the model there as soon as the server has accepted the fit, before it completes:
+A fit can run for a long time and the process waiting for it can stop: a closed notebook, a crash, a timeout.
+Give the estimator a `save_model_to` path, and `fit()` saves the model there as soon as the server has accepted the fit, before it completes:
 
 ```python
 model = TabPFNClassifier(thinking_mode=True, api_mode="async", save_model_to="model.json")
