@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import warnings
 from pathlib import Path
@@ -15,7 +14,6 @@ from typing_extensions import Self
 
 import numpy as np
 import pandas as pd
-from pandas.util import hash_pandas_object
 from sklearn.base import ClassifierMixin, RegressorMixin
 from sklearn.utils import column_or_1d
 from sklearn.utils.multiclass import check_classification_targets
@@ -146,7 +144,8 @@ class _ServerTimingsMixin:
 
         Queue wait is time spent waiting for the server to start the work. An
         entry is None before the first call, on a model restored with
-        `load_model()`, and when the server does not report timings.
+        `load_model()` from a completed fit, and when the server does not
+        report timings.
         """
         return {
             "fit": getattr(self, "fit_timings_", None),
@@ -173,74 +172,18 @@ def _timings_dict(timings: FitTimings | None) -> dict[str, Any] | None:
     return timings.model_dump(mode="json") if timings is not None else None
 
 
-def _fit_api_mode(api_mode: ApiMode, resumable: bool) -> ApiMode:
-    """Return the API mode `fit()` uses: ASYNC for a resumable fit, unless SYNC is set.
-
-    An ASYNC fit is accepted as a job, which returns its id before the fit runs,
-    so it can be recorded before the wait. A SYNC request returns the id only
-    once the fit has completed.
-    """
-    if resumable and ApiMode(api_mode) == ApiMode.AUTO:
-        return ApiMode.ASYNC
-    return api_mode
-
-
 class _ServerFitMixin(ModelPersistenceMixin):
-    """Fits the estimator on the TabPFN server, and resumes a recorded fit.
+    """Fits the estimator on the TabPFN server, saving the fit as it goes.
 
     `fit()` uploads the training data and waits for the server to complete the
-    fit. With a `resume_dir`, it records the fit there as soon as the server
-    accepts it and again once it completes, and a later `fit()` of the same
-    estimator on the same data resumes that fit instead of starting another.
+    fit. With `save_model_to`, it saves the fit there as soon as the server
+    returns its id, and again once it completes; `load_model()` waits for a fit
+    saved before it completed.
     """
 
     # Set by the estimator's `__init__`.
     client_options: ClientOptions
-    resume_dir: str | Path | None
-
-    def _resume_fit(
-        self,
-        checkpoint: Path,
-        train_data_fingerprint: str,
-        *,
-        n_train_rows: int,
-        classes: np.ndarray | None,
-    ) -> bool:
-        """Take on the fit recorded in `checkpoint`, waiting for it if it runs.
-
-        Returns:
-            Whether the estimator now holds the recorded fit. False when there
-            is nothing to resume: no record, the record of another fit, or a
-            fit that the server failed or no longer has. `fit()` then fits.
-        """
-        record = self._checkpoint_record(checkpoint, train_data_fingerprint)
-        if record is None:
-            # The fit is recorded right after it is submitted, so the directory
-            # has to exist by then.
-            checkpoint.parent.mkdir(parents=True, exist_ok=True)
-            return False
-        logger.info(f"Resuming fit {record.model_id} recorded in {checkpoint}.")
-        try:
-            # Also confirms that a completed fit is still on the server.
-            response = InferenceClient.wait_for_fit(
-                record.model_id, client_options=self.client_options
-            )
-        except (FitFailedError, FittedModelNotFoundError) as exc:
-            logger.warning(
-                f"Cannot resume fit {record.model_id} recorded in {checkpoint}, "
-                f"fitting again: {exc}"
-            )
-            return False
-        self._set_fit(
-            record.model_id,
-            n_train_rows=n_train_rows,
-            classes=classes,
-            timings=_timings_dict(response.timings),
-            train_data_fingerprint=train_data_fingerprint,
-        )
-        if record.fit_status != "completed":
-            self.save_model(checkpoint)
-        return True
+    save_model_to: str | Path | None
 
     def _finish_fit(
         self,
@@ -248,40 +191,52 @@ class _ServerFitMixin(ModelPersistenceMixin):
         *,
         n_train_rows: int,
         classes: np.ndarray | None,
-        checkpoint: Path | None,
-        train_data_fingerprint: str | None,
     ) -> None:
         """Wait for the fit the server accepted, then take it on.
 
-        Given a `checkpoint`, the fit is recorded there before the wait, so that
-        a process stopped while waiting can resume it, and again once it
-        completed.
+        With `save_model_to`, a fit the server is still running is saved there
+        before the wait, so that a process stopped while waiting leaves it to
+        `load_model()`, and saved again once it completed. A fit the server
+        fails, or loses, while `fit()` waits for it removes the file.
         """
         fit_id = fit_result.fitted_train_set_id
         timings = fit_result.timings
+        save_to = self.save_model_to
         if fit_result.pending:
-            if checkpoint is not None:
+            if save_to is not None:
                 self._save_pending_fit(
-                    checkpoint,
-                    fit_id,
-                    n_train_rows=n_train_rows,
-                    classes=classes,
-                    train_data_fingerprint=train_data_fingerprint,
+                    save_to, fit_id, n_train_rows=n_train_rows, classes=classes
                 )
-                logger.info(f"Recorded fit {fit_id} in {checkpoint}.")
-            response = InferenceClient.wait_for_fit(
-                fit_id, client_options=self.client_options
-            )
+                logger.info(f"Saved fit {fit_id} to {save_to} while it runs.")
+            try:
+                response = InferenceClient.wait_for_fit(
+                    fit_id, client_options=self.client_options
+                )
+            except (FitFailedError, FittedModelNotFoundError):
+                if save_to is not None:
+                    Path(save_to).unlink(missing_ok=True)
+                raise
             timings = _timings_dict(response.timings)
         self._set_fit(
-            fit_id,
-            n_train_rows=n_train_rows,
-            classes=classes,
-            timings=timings,
-            train_data_fingerprint=train_data_fingerprint,
+            fit_id, n_train_rows=n_train_rows, classes=classes, timings=timings
         )
-        if checkpoint is not None:
-            self.save_model(checkpoint)
+        if save_to is not None:
+            self.save_model(save_to)
+
+    def _wait_for_recorded_fit(self, model_id: UUID) -> None:
+        """Wait for the server to complete a fit that a record holds as pending.
+
+        Raises:
+            FitFailedError: If the server reports that the fit failed.
+            FittedModelNotFoundError: If the server does not have the fit.
+        """
+        # `load_model()` may be the first call of the process.
+        init()
+        logger.info(f"Waiting for fit {model_id} to complete.")
+        response = InferenceClient.wait_for_fit(
+            model_id, client_options=self.client_options
+        )
+        self.fit_timings_ = _timings_dict(response.timings)
 
     def _set_fit(
         self,
@@ -290,13 +245,11 @@ class _ServerFitMixin(ModelPersistenceMixin):
         n_train_rows: int,
         classes: np.ndarray | None,
         timings: dict[str, Any] | None,
-        train_data_fingerprint: str | None,
     ) -> None:
         """Assign the fitted state of one completed fit, all slots together."""
         self.model_id_ = fit_id
         self.fit_timings_ = timings
         self._n_train_rows = n_train_rows
-        self._train_data_fingerprint = train_data_fingerprint
         # NOTE: Previously classes were assigned in-place before a fit
         # succeeded, consider this failure mode:
         #  1. first fit() -> succeeds, model_id_ and classes_ are assigned
@@ -371,7 +324,7 @@ class TabPFNClassifier(
         api_mode: ApiMode = ApiMode.AUTO,
         client_options: ClientOptions | None = None,
         text_handling: TextHandling = "advanced",
-        resume_dir: str | Path | None = None,
+        save_model_to: str | Path | None = None,
     ):
         """Construct a TabPFN classifier.
 
@@ -529,9 +482,9 @@ class TabPFNClassifier(
                   client polls it until it completes.
                 - `AUTO`: `ASYNC` for large training sets, `SYNC` otherwise.
 
-                In every mode `fit()` returns once the fit has completed. Set
-                `resume_dir` to resume a fit that a stopped process was waiting
-                for.
+                In every mode `fit()` returns once the fit has completed. See
+                `save_model_to` for keeping a fit that a stopped process was
+                waiting for.
 
             client_options:
                 Client specific options (e.g. timeout, headers).
@@ -541,19 +494,11 @@ class TabPFNClassifier(
                 the default processing; simple is an alternative whose accuracy depends
                 on the dataset. Applies when preprocessing is enabled.
 
-            resume_dir:
-                A directory that makes fits resumable, for fits that take long
-                enough for the process waiting on them to stop. `fit()` records
-                the fit there as soon as the server accepts it and again once it
-                completes. A later `fit()` of an estimator with the same
-                parameters on the same data, in this process or another one,
-                takes that fit on instead of starting another, and waits for it
-                if it still runs; a fit the server failed or no longer has is
-                fitted again. Each fit has a file of its own, named after the
-                estimator, its parameters and the training data, so clones that
-                share the directory, such as the folds of a cross-validation,
-                resume their own fits. The files are records that
-                `load_model()` reads once the fit completed.
+            save_model_to:
+                A path that `fit()` saves the fitted model to, as `save_model()`
+                does. In ASYNC mode, whether set or chosen by AUTO, a pending
+                model is saved there first, before the fit completes;
+                `load_model()` waits for its fit to complete.
         """
         self.model_path = model_path
         self.categorical_features_indices = categorical_features_indices
@@ -577,7 +522,7 @@ class TabPFNClassifier(
         self.group_time_col = group_time_col
         self.api_mode = api_mode
         self.client_options = client_options or ClientOptions()
-        self.resume_dir = resume_dir
+        self.save_model_to = save_model_to
 
         self._last_trace_id = None
         self._last_meta = {}
@@ -604,8 +549,7 @@ class TabPFNClassifier(
 
         Raises:
             ValueError: If the data or the estimator's parameters are invalid,
-                the data exceeds the model limits, or the file in `resume_dir`
-                for this fit does not hold a model record.
+                or the data exceeds the model limits.
             FitFailedError: If the server reports that the fit failed while
                 `fit()` polled for it, as in ASYNC mode.
         """
@@ -634,20 +578,10 @@ class TabPFNClassifier(
         )
 
         if Config.use_server:
-            checkpoint = train_data_fingerprint = None
-            if self.resume_dir is not None:
-                train_data_fingerprint = _data_fingerprint(X_clean, y)
-                checkpoint = self._checkpoint_path(
-                    self.resume_dir, train_data_fingerprint
-                )
-                if self._resume_fit(
-                    checkpoint,
-                    train_data_fingerprint,
-                    n_train_rows=X.shape[0],
-                    classes=classes,
-                ):
-                    self._fit_count += 1
-                    return self
+            if self.save_model_to is not None:
+                # The fit is saved as soon as the server returns its id, which
+                # is too late to find out that the file cannot be written.
+                Path(self.save_model_to).parent.mkdir(parents=True, exist_ok=True)
 
             # NOTE(@trace_id)
             # Create a new sentry trace at every fit, provided that:
@@ -658,8 +592,8 @@ class TabPFNClassifier(
 
             self._last_trace_id = self.client_options.headers["sentry-trace"]
 
-            # Returns as soon as the server has accepted the fit, so that
-            # `_finish_fit` can record it before waiting for it to complete.
+            # Returns as soon as the server has answered, so that `_finish_fit`
+            # can save a fit it is still running before waiting for it.
             fit_result = InferenceClient.fit_with_result(
                 X_clean,
                 y,
@@ -667,18 +601,12 @@ class TabPFNClassifier(
                 tabpfn_systems=tabpfn_systems,
                 text_handling=text_handling,
                 thinking_config=thinking_config,
-                api_mode=_fit_api_mode(self.api_mode, checkpoint is not None),
+                api_mode=self.api_mode,
                 client_options=self.client_options,
                 description=description,
                 wait=False,
             )
-            self._finish_fit(
-                fit_result,
-                n_train_rows=X.shape[0],
-                classes=classes,
-                checkpoint=checkpoint,
-                train_data_fingerprint=train_data_fingerprint,
-            )
+            self._finish_fit(fit_result, n_train_rows=X.shape[0], classes=classes)
             self._fit_count += 1
         else:
             raise NotImplementedError(
@@ -881,7 +809,7 @@ class TabPFNRegressor(
         api_mode: ApiMode = ApiMode.AUTO,
         client_options: ClientOptions | None = None,
         text_handling: TextHandling = "advanced",
-        resume_dir: str | Path | None = None,
+        save_model_to: str | Path | None = None,
     ):
         """Construct a TabPFN regressor.
 
@@ -1024,9 +952,9 @@ class TabPFNRegressor(
                   client polls it until it completes.
                 - `AUTO`: `ASYNC` for large training sets, `SYNC` otherwise.
 
-                In every mode `fit()` returns once the fit has completed. Set
-                `resume_dir` to resume a fit that a stopped process was waiting
-                for.
+                In every mode `fit()` returns once the fit has completed. See
+                `save_model_to` for keeping a fit that a stopped process was
+                waiting for.
 
             client_options:
                 Client specific options (e.g. timeout, headers).
@@ -1036,19 +964,11 @@ class TabPFNRegressor(
                 the default processing; simple is an alternative whose accuracy depends
                 on the dataset. Applies when preprocessing is enabled.
 
-            resume_dir:
-                A directory that makes fits resumable, for fits that take long
-                enough for the process waiting on them to stop. `fit()` records
-                the fit there as soon as the server accepts it and again once it
-                completes. A later `fit()` of an estimator with the same
-                parameters on the same data, in this process or another one,
-                takes that fit on instead of starting another, and waits for it
-                if it still runs; a fit the server failed or no longer has is
-                fitted again. Each fit has a file of its own, named after the
-                estimator, its parameters and the training data, so clones that
-                share the directory, such as the folds of a cross-validation,
-                resume their own fits. The files are records that
-                `load_model()` reads once the fit completed.
+            save_model_to:
+                A path that `fit()` saves the fitted model to, as `save_model()`
+                does. In ASYNC mode, whether set or chosen by AUTO, a pending
+                model is saved there first, before the fit completes;
+                `load_model()` waits for its fit to complete.
         """
         self.model_path = model_path
         self.categorical_features_indices = categorical_features_indices
@@ -1071,7 +991,7 @@ class TabPFNRegressor(
         self.group_time_col = group_time_col
         self.api_mode = api_mode
         self.client_options = client_options or ClientOptions()
-        self.resume_dir = resume_dir
+        self.save_model_to = save_model_to
 
         self._last_trace_id = None
         self._last_meta = {}
@@ -1098,8 +1018,7 @@ class TabPFNRegressor(
 
         Raises:
             ValueError: If the data or the estimator's parameters are invalid,
-                the data exceeds the model limits, or the file in `resume_dir`
-                for this fit does not hold a model record.
+                or the data exceeds the model limits.
             FitFailedError: If the server reports that the fit failed while
                 `fit()` polled for it, as in ASYNC mode.
         """
@@ -1127,28 +1046,18 @@ class TabPFNRegressor(
         )
 
         if Config.use_server:
-            checkpoint = train_data_fingerprint = None
-            if self.resume_dir is not None:
-                train_data_fingerprint = _data_fingerprint(X_clean, y)
-                checkpoint = self._checkpoint_path(
-                    self.resume_dir, train_data_fingerprint
-                )
-                if self._resume_fit(
-                    checkpoint,
-                    train_data_fingerprint,
-                    n_train_rows=X.shape[0],
-                    classes=None,
-                ):
-                    self._fit_count += 1
-                    return self
+            if self.save_model_to is not None:
+                # The fit is saved as soon as the server returns its id, which
+                # is too late to find out that the file cannot be written.
+                Path(self.save_model_to).parent.mkdir(parents=True, exist_ok=True)
 
             if self._fit_count > 0 or "sentry-trace" not in self.client_options.headers:
                 self.client_options.headers["sentry-trace"] = uuid4().hex
 
             self._last_trace_id = self.client_options.headers["sentry-trace"]
 
-            # Returns as soon as the server has accepted the fit, so that
-            # `_finish_fit` can record it before waiting for it to complete.
+            # Returns as soon as the server has answered, so that `_finish_fit`
+            # can save a fit it is still running before waiting for it.
             fit_result = InferenceClient.fit_with_result(
                 X_clean,
                 y,
@@ -1156,18 +1065,12 @@ class TabPFNRegressor(
                 tabpfn_systems=tabpfn_systems,
                 text_handling=text_handling,
                 thinking_config=thinking_config,
-                api_mode=_fit_api_mode(self.api_mode, checkpoint is not None),
+                api_mode=self.api_mode,
                 client_options=self.client_options,
                 description=description,
                 wait=False,
             )
-            self._finish_fit(
-                fit_result,
-                n_train_rows=X.shape[0],
-                classes=None,
-                checkpoint=checkpoint,
-                train_data_fingerprint=train_data_fingerprint,
-            )
+            self._finish_fit(fit_result, n_train_rows=X.shape[0], classes=None)
             self._fit_count += 1
         else:
             raise NotImplementedError(
@@ -1522,31 +1425,6 @@ def _merge_full_outputs(parts: list[dict[str, np.ndarray]]) -> dict[str, np.ndar
             else np.concatenate([p[key] for p in parts], axis=axis)
         )
     return merged
-
-
-def _data_fingerprint(X: Any, y: Any) -> str:
-    """Return a hash of the training data that `fit()` sends to the server.
-
-    It covers the values, the column names and the dtypes. Hashed through
-    pandas rather than through the uploaded parquet bytes, which change with the
-    version of the library that writes them.
-    """
-    digest = hashlib.sha256()
-    for frame in (
-        X if isinstance(X, pd.DataFrame) else pd.DataFrame(X),
-        pd.DataFrame(np.asarray(y)),
-    ):
-        layout = (
-            frame.shape,
-            [str(c) for c in frame.columns],
-            [str(t) for t in frame.dtypes],
-        )
-        digest.update(repr(layout).encode())
-        # `pandas.util` loads its members lazily, which hides this signature
-        # from type checkers.
-        rows = cast(Any, hash_pandas_object)(frame, index=False)
-        digest.update(np.asarray(rows).tobytes())
-    return digest.hexdigest()
 
 
 @overload

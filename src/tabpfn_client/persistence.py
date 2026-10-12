@@ -16,18 +16,15 @@ derives fittedness from them, and turns them into a small JSON record with
 `save_model()` and back into a ready-to-predict estimator with `load_model()`.
 Nothing else needs to survive, which is also what keeps pickling cheap.
 
-The same record makes a fit resumable. The server assigns the id when it
-accepts the fit, before it runs it, so an estimator with a `resume_dir` writes
-the record there as soon as the fit is accepted and again once it completes. A
-later `fit()` of the same estimator on the same data picks that fit up instead
-of starting another. Each such fit has a file of its own, named after the
-estimator, its parameters and the training data (`_checkpoint_path`).
+The same record lets a fit outlive the process waiting for it. The server
+assigns the id when it accepts an ASYNC fit, before it runs it, so an estimator
+with `save_model_to` writes the record there as a pending fit right away, and
+again once the fit completes. `load_model()` waits for a pending fit.
 """
 
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 import logging
 import os
@@ -48,9 +45,9 @@ logger = logging.getLogger(__name__)
 # Constructor params that describe the session rather than the model. They are
 # left out of the record, and a record that carries them is rejected:
 # `client_options` holds per-session headers and timeouts (and is not JSON),
-# `resume_dir` is a local directory, and a loaded estimator should run with the
+# `save_model_to` is a local path, and a loaded estimator should run with the
 # defaults of the process it is loaded into.
-_TRANSPORT_PARAMS = frozenset({"client_options", "resume_dir"})
+_TRANSPORT_PARAMS = frozenset({"client_options", "save_model_to"})
 
 
 class _ModelRecord(BaseModel):
@@ -69,13 +66,10 @@ class _ModelRecord(BaseModel):
     n_train_rows: int | None = None
     # Classification only; None for regressors.
     classes: list[Any] | None = None
-    # "pending" while the server may still be running the fit: what an
-    # estimator with a `resume_dir` records as soon as the server accepts the
-    # fit. Records written before this field existed only held completed fits.
+    # "pending" while the server may still be running the fit: what `fit()`
+    # saves to `save_model_to` as soon as the server accepts an ASYNC fit.
+    # Records written before this field existed only held completed fits.
     fit_status: Literal["pending", "completed"] = "completed"
-    # Hash of the training data, recorded by an estimator with a `resume_dir`
-    # so that a later fit resumes this one only for the same data.
-    train_data_fingerprint: str | None = None
 
 
 def _task_of(estimator_cls: type) -> PredictionTask:
@@ -174,10 +168,6 @@ class ModelPersistenceMixin(BaseEstimator):
     # n_train_rows * n_test_rows, so this bounds the test rows per call.
     _n_train_rows: int | None = None
 
-    # Hash of the training data, kept by an estimator with a `resume_dir` so
-    # that the records it writes tell a later fit what data they were fitted on.
-    _train_data_fingerprint: str | None = None
-
     # NOTE: Some "*_" attributes may be assigned before a fit succeeds (it used
     # to be the case for `classes_`), so we override sklearn's default of
     # inferring fittedness from any "*_" attribute and use `model_id_` as the
@@ -214,7 +204,6 @@ class ModelPersistenceMixin(BaseEstimator):
             n_train_rows=self._n_train_rows,
             classes=getattr(self, "classes_", None),
             fit_status="completed",
-            train_data_fingerprint=self._train_data_fingerprint,
         )
         if path is not None:
             _write_record(path, record)
@@ -226,8 +215,14 @@ class ModelPersistenceMixin(BaseEstimator):
 
         The estimator comes back with the saved hyperparameters and fitted
         state, ready to `predict()` without calling `fit()`. No request is made
-        here; the first `predict()` authenticates (like `fit()` would) and
-        raises `FittedModelNotFoundError` if the server no longer has the model.
+        for a completed fit; the first `predict()` authenticates (like `fit()`
+        would) and raises `FittedModelNotFoundError` if the server no longer has
+        the model.
+
+        A record that `fit()` saved to `save_model_to` before the fit completed
+        holds a pending fit. Then the server is asked for the fit, which is
+        waited for if it is still running, and the file is saved again as a
+        completed fit, so the next load makes no request.
 
         Args:
             source: The path of a file written by `save_model(path)`, or the
@@ -239,19 +234,14 @@ class ModelPersistenceMixin(BaseEstimator):
         Raises:
             ValueError: If `source` is not a record written by `save_model()`,
                 holds a model of the other task (a regression model loaded into
-                a classifier), has parameters this class does not accept, for
-                instance because a newer tabpfn-client saved it, or holds a fit
-                that had not completed yet, which `fit()` with a `resume_dir`
-                resumes.
+                a classifier), or has parameters this class does not accept,
+                for instance because a newer tabpfn-client saved it.
+            FitFailedError: If the record holds a pending fit that the server
+                reports as failed.
+            FittedModelNotFoundError: If the record holds a pending fit that
+                the server does not have.
         """
         record = _read_record(source)
-        if record.fit_status != "completed":
-            raise ValueError(
-                f"Cannot load this model into {cls.__name__}: its fit "
-                f"{record.model_id} had not completed when it was recorded. Fit "
-                "the estimator again on the same data, with `resume_dir` set to "
-                "the directory of the record, to wait for the fit."
-            )
         task = _task_of(cls)
         if record.task != task:
             raise ValueError(
@@ -289,12 +279,32 @@ class ModelPersistenceMixin(BaseEstimator):
         # Deep-copied so that estimators loaded from the same dict share nothing
         # mutable with it, or with each other (as `sklearn.base.clone` does).
         estimator = cls(**copy.deepcopy(record.params))
+        if record.fit_status == "pending":
+            estimator._wait_for_recorded_fit(record.model_id)
         estimator.model_id_ = record.model_id
         estimator._n_train_rows = record.n_train_rows
-        estimator._train_data_fingerprint = record.train_data_fingerprint
         if record.classes is not None:
             setattr(estimator, "classes_", np.asarray(record.classes))
+        if record.fit_status == "pending" and not isinstance(source, dict):
+            try:
+                estimator.save_model(source)
+            except OSError as exc:
+                logger.warning(
+                    f"Fit {record.model_id} has completed, but {source} could "
+                    f"not be updated, so the next load waits for it again: {exc}"
+                )
         return estimator
+
+    def _wait_for_recorded_fit(self, model_id: UUID) -> None:
+        """Wait for the server to complete a fit that a record holds as pending.
+
+        Raises:
+            FitFailedError: If the server reports that the fit failed.
+            FittedModelNotFoundError: If the server does not have the fit.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} cannot wait for a fit on the server."
+        )
 
     def _record_params(self) -> dict[str, Any]:
         """Return the hyperparameters a record holds, as JSON types."""
@@ -311,7 +321,6 @@ class ModelPersistenceMixin(BaseEstimator):
         n_train_rows: int | None,
         classes: Any,
         fit_status: Literal["pending", "completed"],
-        train_data_fingerprint: str | None,
     ) -> dict[str, Any]:
         """Return the record of a fit of this estimator, as `save_model()` writes it."""
         return _ModelRecord(
@@ -322,7 +331,6 @@ class ModelPersistenceMixin(BaseEstimator):
             n_train_rows=n_train_rows,
             classes=None if classes is None else np.asarray(classes).tolist(),
             fit_status=fit_status,
-            train_data_fingerprint=train_data_fingerprint,
         ).model_dump(mode="json")
 
     def _save_pending_fit(
@@ -332,9 +340,8 @@ class ModelPersistenceMixin(BaseEstimator):
         *,
         n_train_rows: int,
         classes: Any,
-        train_data_fingerprint: str | None,
     ) -> None:
-        """Record at `path` a fit that the server accepted but has not completed."""
+        """Save at `path` a fit that the server accepted but has not completed."""
         _write_record(
             path,
             self._model_record(
@@ -342,79 +349,5 @@ class ModelPersistenceMixin(BaseEstimator):
                 n_train_rows=n_train_rows,
                 classes=classes,
                 fit_status="pending",
-                train_data_fingerprint=train_data_fingerprint,
             ),
         )
-
-    def _checkpoint_path(
-        self, resume_dir: str | Path, train_data_fingerprint: str
-    ) -> Path:
-        """Return the file in `resume_dir` that records this estimator's fit.
-
-        The name hashes the estimator type, its parameters and the training
-        data, so that every distinct fit gets a file of its own: each fold of a
-        cross-validation and each candidate of a grid search, whose estimators
-        are clones sharing `resume_dir`. The directory itself is not part of
-        the hash, so the files stay valid when it moves.
-
-        Args:
-            resume_dir: The estimator's `resume_dir`.
-            train_data_fingerprint: Hash of the training data given to `fit()`.
-
-        Returns:
-            The path of the record.
-        """
-        key = json.dumps(
-            [_task_of(type(self)).value, self._record_params(), train_data_fingerprint],
-            sort_keys=True,
-            default=str,
-        )
-        digest = hashlib.sha256(key.encode()).hexdigest()[:32]
-        return Path(resume_dir) / f"{type(self).__name__}-{digest}.json"
-
-    def _checkpoint_record(
-        self, path: str | Path, train_data_fingerprint: str
-    ) -> _ModelRecord | None:
-        """Return the record at `path` if it holds a fit that `fit()` may resume.
-
-        That is a fit of this estimator type, with the same parameters, on the
-        training data with this fingerprint, which `_checkpoint_path` already
-        makes likely. The record of any other fit, copied there by hand say, is
-        reported and ignored, so that the new fit replaces it.
-
-        Args:
-            path: The record's `_checkpoint_path`.
-            train_data_fingerprint: Hash of the training data given to `fit()`.
-
-        Returns:
-            The record, or None if `path` does not exist or records another fit.
-
-        Raises:
-            ValueError: If `path` exists but does not hold a model record. The
-                file is left as it is rather than overwritten.
-        """
-        if not Path(path).exists():
-            return None
-        record = _read_record(path)
-        differences: list[str] = []
-        if record.task != _task_of(type(self)):
-            differences.append(f"a {record.task.value} model")
-        params = self._record_params()
-        changed = sorted(
-            k
-            for k in set(params) | set(record.params)
-            if params.get(k) != record.params.get(k)
-        )
-        if changed:
-            differences.append(f"other values for {changed}")
-        if record.train_data_fingerprint is None:
-            differences.append("no record of its training data")
-        elif record.train_data_fingerprint != train_data_fingerprint:
-            differences.append("other training data")
-        if differences:
-            logger.warning(
-                f"{path} records a fit with {', '.join(differences)}; fitting "
-                "again and replacing it."
-            )
-            return None
-        return record
