@@ -12,6 +12,7 @@ first `predict()`.
 from __future__ import annotations
 
 import json
+import os
 import pickle
 import shutil
 from contextlib import contextmanager
@@ -182,6 +183,42 @@ class TestRecord:
             assert loaded._n_train_rows == N_TRAIN_ROWS
             np.testing.assert_array_equal(loaded.classes_, np.array(["café", "dog"]))
             assert _model_params(loaded) == _model_params(clf)
+
+    def test_each_write_goes_through_a_file_of_its_own(self, tmp_path):
+        # Writers racing for one path (clones sharing `save_model_to` in a
+        # parallel cross-validation) must not share the file a record is written
+        # to before it is renamed into place, or one could install the other's
+        # half-written record.
+        path = tmp_path / "model.json"
+        reg = _fitted_regressor()
+
+        with patch("tabpfn_client.persistence.os.replace", wraps=os.replace) as replace:
+            reg.save_model(path)
+            reg.save_model(path)
+
+        (first, _), (second, _) = (c.args for c in replace.call_args_list)
+        assert first != second
+        assert [p.name for p in tmp_path.iterdir()] == ["model.json"]
+
+    def test_a_failed_write_keeps_the_previous_file_and_leaves_nothing_behind(
+        self, tmp_path
+    ):
+        path = tmp_path / "model.json"
+        reg = _fitted_regressor()
+        reg.save_model(path)
+        before = path.read_text()
+
+        with (
+            patch(
+                "tabpfn_client.persistence.os.replace",
+                side_effect=OSError("disk full"),
+            ),
+            pytest.raises(OSError, match="disk full"),
+        ):
+            reg.save_model(path)
+
+        assert path.read_text() == before
+        assert [p.name for p in tmp_path.iterdir()] == ["model.json"]
 
     def test_directly_assigned_id_saves_without_classes_or_row_count(self):
         # Reusing a fit by assigning `model_id_` leaves no classes or row count

@@ -30,7 +30,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Any, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import numpy as np
 from pydantic import BaseModel, ValidationError
@@ -109,13 +109,19 @@ def _jsonable(value: Any) -> Any:
 def _write_record(path: str | Path, record: dict[str, Any]) -> None:
     """Write `record` to `path` as JSON, replacing the file in one step.
 
-    Written aside and renamed over `path`, so a process stopped mid-write leaves
-    the previous record whole instead of a truncated one.
+    Written to a file of its own beside `path` and renamed over it, so that a
+    process stopped mid-write leaves the previous record whole instead of a
+    truncated one, and writers racing for one path (clones sharing
+    `save_model_to` in a parallel cross-validation) each install a whole record.
     """
     path = Path(path)
-    aside = path.with_name(f"{path.name}.tmp")
-    aside.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
-    os.replace(aside, path)
+    aside = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        aside.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+        os.replace(aside, path)
+    except BaseException:
+        aside.unlink(missing_ok=True)
+        raise
 
 
 def _read_record(source: str | Path | dict[str, Any]) -> _ModelRecord:

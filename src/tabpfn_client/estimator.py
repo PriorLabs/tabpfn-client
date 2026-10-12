@@ -207,7 +207,7 @@ class _ServerFitMixin(ModelPersistenceMixin):
                 self._save_pending_fit(
                     save_to, fit_id, n_train_rows=n_train_rows, classes=classes
                 )
-                logger.info(f"Saved fit {fit_id} to {save_to} while it runs.")
+                logger.debug(f"Saved fit {fit_id} to {save_to} while it runs.")
             try:
                 response = InferenceClient.wait_for_fit(
                     fit_id, client_options=self.client_options
@@ -232,7 +232,7 @@ class _ServerFitMixin(ModelPersistenceMixin):
         """
         # `load_model()` may be the first call of the process.
         init()
-        logger.info(f"Waiting for fit {model_id} to complete.")
+        logger.debug(f"Waiting for fit {model_id} to complete.")
         response = InferenceClient.wait_for_fit(
             model_id, client_options=self.client_options
         )
