@@ -275,6 +275,11 @@ class TabPFNClassifier(
           or outlier removal is needed.
     """
 
+    # The class labels of the fit `model_id_` refers to. Assigned only together
+    # with it, by `fit()` or `load_model()`, so annotation only: an unfitted
+    # instance has no `classes_`, as sklearn expects.
+    classes_: np.ndarray
+
     _AVAILABLE_MODELS = [
         # Downstream packages (e.g. tabpfn-time-series) read this list in order
         # to parse model names by substring, so "v2.5_default-2" must precede "v2.5_default".

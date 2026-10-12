@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -73,7 +73,7 @@ def _read(path: Path) -> dict[str, Any]:
 
 
 @contextmanager
-def _offline_server() -> Iterator[SimpleNamespace]:
+def _offline_server() -> Generator[SimpleNamespace]:
     """Run the estimators with no network: no auth, no settings, mocked inference.
 
     By default the server accepts the fit as `FIT_ID` and is still running it,
@@ -152,7 +152,7 @@ class TestFit:
 
         with _offline_server() as server:
             server.fit.side_effect = fit
-            TabPFNRegressor(api_mode="sync", save_model_to=path).fit(
+            TabPFNRegressor(api_mode=ApiMode.SYNC, save_model_to=path).fit(
                 X_TRAIN, np.arange(9.0)
             )
 
@@ -219,7 +219,9 @@ class TestFit:
         clf = TabPFNClassifier(save_model_to=tmp_path / "model.json")
 
         assert clf.get_params()["save_model_to"] == tmp_path / "model.json"
-        assert clone(clf).save_model_to == tmp_path / "model.json"
+        cloned = clone(clf)
+        assert isinstance(cloned, TabPFNClassifier)
+        assert cloned.save_model_to == tmp_path / "model.json"
 
     def test_clones_in_a_cross_validation_share_the_file(self, tmp_path):
         path = tmp_path / "model.json"
@@ -405,7 +407,7 @@ class TestWithServer:
             init(use_server=True)
             with pytest.raises(_Stopped):
                 TabPFNClassifier(
-                    thinking_mode=True, api_mode="async", save_model_to=path
+                    thinking_mode=True, api_mode=ApiMode.ASYNC, save_model_to=path
                 ).fit(X_TRAIN, Y_TRAIN)
             assert _read(path)["fit_status"] == "pending"
             assert _read(path)["model_id"] == fit_id
