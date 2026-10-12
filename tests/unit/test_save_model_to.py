@@ -201,6 +201,25 @@ class TestFit:
         with pytest.raises(NotFittedError):
             check_is_fitted(clf)
 
+    @FIT_ERRORS
+    def test_a_fit_lost_while_waiting_keeps_a_fit_saved_there_since(
+        self, tmp_path, error
+    ):
+        path = tmp_path / "model.json"
+
+        def wait(fit_id: UUID, **kwargs: Any) -> GetFitStatusResponse:
+            # A clone sharing the path saves its own fit in the meantime.
+            other = {**_read(path), "model_id": str(NEW_FIT_ID)}
+            path.write_text(json.dumps(other), encoding="utf-8")
+            raise error
+
+        with _offline_server() as server:
+            server.wait.side_effect = wait
+            with pytest.raises(type(error)):
+                TabPFNClassifier(save_model_to=path).fit(X_TRAIN, Y_TRAIN)
+
+        assert _read(path)["model_id"] == str(NEW_FIT_ID)
+
     def test_every_fit_overwrites_the_file(self, tmp_path):
         path = tmp_path / "model.json"
         clf = TabPFNClassifier(save_model_to=path)

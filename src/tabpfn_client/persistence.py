@@ -357,3 +357,17 @@ class ModelPersistenceMixin(BaseEstimator):
                 fit_status="pending",
             ),
         )
+
+    def _remove_saved_fit(self, path: str | Path, model_id: UUID) -> None:
+        """Remove the record at `path` if it still holds the fit `model_id`.
+
+        Clones share their `save_model_to` path, so another one may have saved
+        its own fit there since; that record, or any file that is not a record,
+        is left in place.
+        """
+        try:
+            record = _read_record(path)
+        except (OSError, ValueError):
+            return
+        if record.model_id == model_id:
+            Path(path).unlink(missing_ok=True)

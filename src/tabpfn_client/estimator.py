@@ -197,7 +197,8 @@ class _ServerFitMixin(ModelPersistenceMixin):
         With `save_model_to`, a fit the server is still running is saved there
         before the wait, so that a process stopped while waiting leaves it to
         `load_model()`, and saved again once it completed. A fit the server
-        fails, or loses, while `fit()` waits for it removes the file.
+        fails, or loses, while `fit()` waits for it removes the file, unless a
+        clone sharing the path has saved another fit there since.
         """
         fit_id = fit_result.fitted_train_set_id
         timings = fit_result.timings
@@ -214,7 +215,7 @@ class _ServerFitMixin(ModelPersistenceMixin):
                 )
             except (FitFailedError, FittedModelNotFoundError):
                 if save_to is not None:
-                    Path(save_to).unlink(missing_ok=True)
+                    self._remove_saved_fit(save_to, fit_id)
                 raise
             timings = _timings_dict(response.timings)
         self._set_fit(
