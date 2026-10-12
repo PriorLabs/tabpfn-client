@@ -1,7 +1,8 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 #  Licensed under the Apache License, Version 2.0
-"""`save_model_to`: what `fit()` saves there as a fit progresses, and how
-`load_model()` takes on a fit that was saved before it completed.
+"""`save_model_to`: what `fit()` saves there as a fit progresses, and how a
+model loaded from a fit saved before it completed takes it on: `load_model()`
+asks the server nothing, `predict()` asks once, and `fit()` waits for it.
 
 Hermetic by default: `init` and the `InferenceClient` boundary are patched. The
 mock-server test at the end runs the real HTTP layer for a fit whose process
@@ -50,6 +51,7 @@ TIMINGS = {
 
 X_TRAIN = np.arange(18, dtype=float).reshape(9, 2)
 Y_TRAIN = np.array([0, 1, 2] * 3)
+Y_TRAIN_REGRESSION = np.arange(9.0)
 X_TEST = np.ones((3, 2))
 
 FIT_ERRORS = pytest.mark.parametrize(
@@ -68,6 +70,12 @@ def _completed(fit_id: UUID = FIT_ID) -> GetFitStatusResponse:
     )
 
 
+def _running(fit_id: UUID = FIT_ID) -> GetFitStatusResponse:
+    return GetFitStatusResponse.model_validate(
+        {"fitted_train_set_id": str(fit_id), "status": "pending", "retry_in_secs": 5}
+    )
+
+
 def _read(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -77,8 +85,8 @@ def _offline_server() -> Generator[SimpleNamespace]:
     """Run the estimators with no network: no auth, no settings, mocked inference.
 
     By default the server accepts the fit as `FIT_ID` and is still running it,
-    waiting for a fit completes it with `TIMINGS`, and a prediction is a row of
-    zeros per test row.
+    waiting for a fit, or asking for its status, finds it completed with
+    `TIMINGS`, and a prediction is a row of zeros per test row.
     """
     use_server_before = Config.use_server
     Config.use_server = True
@@ -98,23 +106,40 @@ def _offline_server() -> Generator[SimpleNamespace]:
             ) as wait,
             patch.object(
                 InferenceClient,
+                "get_fit_status",
+                side_effect=lambda fit_id, **kwargs: _completed(fit_id),
+            ) as status,
+            patch.object(
+                InferenceClient,
                 "predict",
                 side_effect=lambda X, **kwargs: PredictionResult(
                     y_pred=np.zeros(len(X), dtype=int)
                 ),
             ) as predict,
         ):
-            yield SimpleNamespace(fit=fit, wait=wait, predict=predict)
+            yield SimpleNamespace(fit=fit, wait=wait, status=status, predict=predict)
     finally:
         Config.use_server = use_server_before
 
 
-def _stopped_while_waiting(path: Path) -> None:
-    """Fit with `save_model_to`, stopping the process during the wait."""
+def _stopped_while_waiting(
+    path: Path, estimator: TabPFNClassifier | TabPFNRegressor | None = None
+) -> None:
+    """Fit `estimator` (a classifier by default) saving to `path`, stopping the
+    process during the wait."""
+    estimator = estimator or TabPFNClassifier()
+    estimator.set_params(save_model_to=path)
+    y = Y_TRAIN if isinstance(estimator, TabPFNClassifier) else Y_TRAIN_REGRESSION
     with _offline_server() as server:
         server.wait.side_effect = KeyboardInterrupt
         with pytest.raises(KeyboardInterrupt):
-            TabPFNClassifier(save_model_to=path).fit(X_TRAIN, Y_TRAIN)
+            estimator.fit(X_TRAIN, y)
+
+
+def _load_pending(path: Path) -> TabPFNClassifier:
+    """Return a classifier loaded from a fit saved at `path` before it completed."""
+    _stopped_while_waiting(path)
+    return TabPFNClassifier.load_model(path)
 
 
 class TestFit:
@@ -153,7 +178,7 @@ class TestFit:
         with _offline_server() as server:
             server.fit.side_effect = fit
             TabPFNRegressor(api_mode=ApiMode.SYNC, save_model_to=path).fit(
-                X_TRAIN, np.arange(9.0)
+                X_TRAIN, Y_TRAIN_REGRESSION
             )
 
         server.wait.assert_not_called()
@@ -261,24 +286,24 @@ class TestFit:
 
 
 class TestLoadModel:
-    def test_waits_for_a_pending_fit_and_saves_it_as_completed(self, tmp_path):
+    def test_loads_a_pending_fit_without_a_request(self, tmp_path):
         path = tmp_path / "model.json"
         _stopped_while_waiting(path)
+        before = path.read_text()
 
         with _offline_server() as server:
             loaded = TabPFNClassifier.load_model(path)
-            loaded.predict(X_TEST)
 
-        server.fit.assert_not_called()
-        assert server.wait.call_args.args == (FIT_ID,)
-        assert server.predict.call_args.kwargs["fitted_train_set_id"] == FIT_ID
+        server.status.assert_not_called()
+        server.wait.assert_not_called()
+        check_is_fitted(loaded)
+        assert loaded.model_id_ == FIT_ID
         np.testing.assert_array_equal(loaded.classes_, [0, 1, 2])
         assert loaded._n_train_rows == 9
-        assert loaded.get_timings()["fit"] == TIMINGS
         assert loaded.save_model_to is None
-        record = _read(path)
-        assert record["fit_status"] == "completed"
-        assert record == loaded.save_model()
+        assert path.read_text() == before
+        # Saved again, it is still pending.
+        assert loaded.save_model() == _read(path)
 
     def test_loads_a_completed_fit_without_a_request(self, tmp_path):
         path = tmp_path / "model.json"
@@ -288,53 +313,209 @@ class TestLoadModel:
 
         with _offline_server() as server:
             loaded = TabPFNClassifier.load_model(path)
+            loaded.predict(X_TEST)
 
+        server.status.assert_not_called()
         server.wait.assert_not_called()
-        check_is_fitted(loaded)
         assert loaded.get_timings()["fit"] is None
         assert path.read_text() == before
 
-    @FIT_ERRORS
-    def test_a_pending_fit_the_server_lost_raises(self, tmp_path, error):
+
+class TestPredictOnAPendingFit:
+    def test_predicts_once_the_fit_completed_and_saves_it_as_completed(self, tmp_path):
         path = tmp_path / "model.json"
-        _stopped_while_waiting(path)
+        loaded = _load_pending(path)
+
+        with _offline_server() as server:
+            loaded.predict(X_TEST)
+            loaded.predict_proba(X_TEST)
+
+        assert server.status.call_count == 1, "asked once, then known completed"
+        assert server.status.call_args.args == (FIT_ID,)
+        server.wait.assert_not_called()
+        server.fit.assert_not_called()
+        assert server.predict.call_args.kwargs["fitted_train_set_id"] == FIT_ID
+        assert loaded.get_timings()["fit"] == TIMINGS
+        record = _read(path)
+        assert record["fit_status"] == "completed"
+        assert record == loaded.save_model()
+
+    def test_a_regressor_asks_once_too(self, tmp_path):
+        path = tmp_path / "model.json"
+        _stopped_while_waiting(path, TabPFNRegressor())
+        loaded = TabPFNRegressor.load_model(path)
+
+        with _offline_server() as server:
+            loaded.predict(X_TEST)
+            loaded.predict(X_TEST)
+
+        assert server.status.call_count == 1
+        assert server.predict.call_count == 2
+        assert _read(path)["fit_status"] == "completed"
+
+    def test_a_fit_still_running_raises_without_waiting(self, tmp_path):
+        path = tmp_path / "model.json"
+        loaded = _load_pending(path)
         before = path.read_text()
 
-        with _offline_server() as server, pytest.raises(type(error)):
-            server.wait.side_effect = error
-            TabPFNClassifier.load_model(path)
+        with _offline_server() as server:
+            server.status.side_effect = lambda fit_id, **kwargs: _running(fit_id)
+            with pytest.raises(NotFittedError, match=r"Call fit\(\) with its"):
+                loaded.predict(X_TEST)
+            with pytest.raises(NotFittedError):
+                loaded.predict(X_TEST)
 
+        assert server.status.call_count == 2, "each predict asks once"
+        server.wait.assert_not_called()
+        server.predict.assert_not_called()
         assert path.read_text() == before
 
-    def test_a_pending_record_given_as_a_dict_is_waited_for(self, tmp_path):
+    @FIT_ERRORS
+    def test_a_fit_the_server_lost_leaves_the_estimator_unfitted(self, tmp_path, error):
+        path = tmp_path / "model.json"
+        loaded = _load_pending(path)
+        before = path.read_text()
+
+        with _offline_server() as server:
+            server.status.side_effect = error
+            with pytest.raises(type(error)):
+                loaded.predict(X_TEST)
+
+        with pytest.raises(NotFittedError):
+            check_is_fitted(loaded)
+        assert path.read_text() == before
+
+    def test_a_pending_record_given_as_a_dict_writes_nothing(self, tmp_path):
         path = tmp_path / "model.json"
         _stopped_while_waiting(path)
         record = _read(path)
+        before = path.read_text()
 
-        with _offline_server() as server:
+        with _offline_server():
             loaded = TabPFNClassifier.load_model(record)
+            loaded.predict(X_TEST)
 
-        assert server.wait.call_args.args == (FIT_ID,)
-        assert loaded.model_id_ == FIT_ID
         assert record["fit_status"] == "pending"
+        assert loaded.save_model()["fit_status"] == "completed"
+        assert path.read_text() == before
+        assert [p.name for p in tmp_path.iterdir()] == ["model.json"]
 
-    def test_a_file_that_cannot_be_updated_still_loads(self, tmp_path, caplog):
+    def test_a_file_that_cannot_be_updated_still_predicts(self, tmp_path, caplog):
         path = tmp_path / "model.json"
-        _stopped_while_waiting(path)
+        loaded = _load_pending(path)
 
         with (
-            _offline_server(),
+            _offline_server() as server,
             patch(
                 "tabpfn_client.persistence._write_record",
                 side_effect=PermissionError("read-only"),
             ),
             caplog.at_level(logging.WARNING),
         ):
-            loaded = TabPFNClassifier.load_model(path)
+            loaded.predict(X_TEST)
 
-        assert loaded.model_id_ == FIT_ID
+        server.predict.assert_called_once()
         assert _read(path)["fit_status"] == "pending"
         assert "read-only" in caplog.text
+
+
+class TestFitOnAPendingFit:
+    def test_waits_for_the_fit_instead_of_fitting_again(self, tmp_path):
+        path = tmp_path / "model.json"
+        loaded = _load_pending(path)
+
+        with _offline_server() as server:
+            assert loaded.fit(X_TRAIN, Y_TRAIN) is loaded
+            loaded.predict(X_TEST)
+
+        server.fit.assert_not_called()
+        assert server.wait.call_args.args == (FIT_ID,)
+        server.status.assert_not_called()
+        assert server.predict.call_args.kwargs["fitted_train_set_id"] == FIT_ID
+        assert loaded.get_timings()["fit"] == TIMINGS
+        record = _read(path)
+        assert record["fit_status"] == "completed"
+        assert record == loaded.save_model()
+
+    def test_a_regressor_waits_for_its_fit(self, tmp_path):
+        path = tmp_path / "model.json"
+        _stopped_while_waiting(path, TabPFNRegressor())
+        loaded = TabPFNRegressor.load_model(path)
+
+        with _offline_server() as server:
+            loaded.fit(X_TRAIN, Y_TRAIN_REGRESSION)
+
+        server.fit.assert_not_called()
+        assert server.wait.call_args.args == (FIT_ID,)
+        assert _read(path)["fit_status"] == "completed"
+
+    @pytest.mark.parametrize(
+        ("X", "y"),
+        [(X_TRAIN[:6], Y_TRAIN[:6]), (X_TRAIN, Y_TRAIN + 1)],
+        ids=["other-rows", "other-classes"],
+    )
+    def test_other_training_data_raises(self, tmp_path, X, y):
+        path = tmp_path / "model.json"
+        loaded = _load_pending(path)
+        before = path.read_text()
+
+        with _offline_server() as server:
+            with pytest.raises(ValueError, match="not its training data"):
+                loaded.fit(X, y)
+
+        server.fit.assert_not_called()
+        server.wait.assert_not_called()
+        assert loaded.model_id_ == FIT_ID
+        assert path.read_text() == before
+
+    def test_a_stopped_wait_keeps_the_fit_pending(self, tmp_path):
+        path = tmp_path / "model.json"
+        loaded = _load_pending(path)
+
+        with _offline_server() as server:
+            server.wait.side_effect = KeyboardInterrupt
+            with pytest.raises(KeyboardInterrupt):
+                loaded.fit(X_TRAIN, Y_TRAIN)
+            server.wait.side_effect = lambda fit_id, **kwargs: _completed(fit_id)
+            loaded.fit(X_TRAIN, Y_TRAIN)
+
+        server.fit.assert_not_called()
+        assert server.wait.call_count == 2
+        assert _read(path)["fit_status"] == "completed"
+
+    @FIT_ERRORS
+    def test_a_fit_the_server_lost_leaves_the_estimator_to_fit_again(
+        self, tmp_path, error
+    ):
+        path = tmp_path / "model.json"
+        loaded = _load_pending(path)
+        before = path.read_text()
+
+        with _offline_server() as server:
+            server.wait.side_effect = error
+            with pytest.raises(type(error)):
+                loaded.fit(X_TRAIN, Y_TRAIN)
+            with pytest.raises(NotFittedError):
+                check_is_fitted(loaded)
+            assert path.read_text() == before
+
+            server.wait.side_effect = lambda fit_id, **kwargs: _completed(fit_id)
+            server.fit.return_value = FitResult(fitted_train_set_id=NEW_FIT_ID)
+            loaded.fit(X_TRAIN, Y_TRAIN)
+
+        server.fit.assert_called_once()
+        assert loaded.model_id_ == NEW_FIT_ID
+
+    def test_also_saves_to_save_model_to(self, tmp_path):
+        path = tmp_path / "model.json"
+        loaded = _load_pending(path)
+        loaded.set_params(save_model_to=tmp_path / "copy" / "model.json")
+
+        with _offline_server():
+            loaded.fit(X_TRAIN, Y_TRAIN)
+
+        assert _read(tmp_path / "copy" / "model.json") == _read(path)
+        assert _read(path)["fit_status"] == "completed"
 
 
 class _Stopped(Exception):
@@ -362,7 +543,7 @@ class TestWithServer:
         self.tmp_path = tmp_path
 
     @with_mock_server()
-    def test_a_fit_stopped_while_waiting_loads_in_a_later_run(self, mock_server):
+    def test_a_fit_stopped_while_waiting_completes_in_a_later_run(self, mock_server):
         fit_id = "00000000-0000-0000-0000-000000000002"
         path = self.tmp_path / "model.json"
         UserAuthenticationClient.CACHED_TOKEN_FILE.parent.mkdir(
@@ -389,6 +570,14 @@ class TestWithServer:
         status_route = mock_server.router.post("/tabpfn/get_fit_status")
         status_route.side_effect = [
             _Stopped("the process stopped"),
+            httpx.Response(
+                200,
+                json={
+                    "fitted_train_set_id": fit_id,
+                    "status": "pending",
+                    "retry_in_secs": 5,
+                },
+            ),
             httpx.Response(
                 200,
                 json={
@@ -431,16 +620,21 @@ class TestWithServer:
             assert _read(path)["fit_status"] == "pending"
             assert _read(path)["model_id"] == fit_id
 
-            # A later run, in a new process.
+            # A later run, in a new process: loading asks nothing, a predict
+            # asks once and finds the fit still running, and fit() waits for it.
             Config.is_initialized = False
             ServiceClient.reset_authorization()
             clf = TabPFNClassifier.load_model(path)
+            assert status_route.call_count == 1
+            with pytest.raises(NotFittedError):
+                clf.predict(X_TEST)
+            clf.fit(X_TRAIN, Y_TRAIN)
             result = clf.predict(X_TEST)
 
         np.testing.assert_array_equal(result, [1, 0, 1])
         assert upload_route.call_count == 1
         assert submit_route.call_count == 1
-        assert status_route.call_count == 2
+        assert status_route.call_count == 3
         assert auth_route.call_count == 2, "each run authenticates once"
         predict_request = json.loads(predict_route.calls.last.request.content)
         assert predict_request["fitted_train_set_id"] == fit_id

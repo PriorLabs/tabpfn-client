@@ -179,6 +179,16 @@ def _fitted_model_not_found(
     return FittedModelNotFoundError(message)
 
 
+def _fit_failed(
+    fitted_train_set_id: UUID, response: GetFitStatusResponse
+) -> FitFailedError:
+    """Build the error for a fit the server reports as failed."""
+    return FitFailedError(
+        f"Fit {fitted_train_set_id} failed: "
+        f"{response.error or 'no error message provided'}"
+    )
+
+
 def _serialize_to_parquet(df: pd.DataFrame) -> tuple[bytes, str]:
     """Serialize ``df`` to zstd-compressed parquet.
 
@@ -198,6 +208,9 @@ ErrorT = TypeVar("ErrorT", bound=BaseModel, default=Never)
 # Floor for the server's `retry_in_secs` polling hint — defensive: a zero or
 # negative value must neither busy-poll the endpoint nor crash `time.sleep`.
 _MIN_RETRY_INTERVAL_SECS = 0.3
+
+# Timeout of a single `get_fit_status` request.
+_FIT_STATUS_TIMEOUT_SECS = 15.0
 
 
 class ServiceClient(Singleton):
@@ -556,7 +569,6 @@ class ServiceClient(Singleton):
         polls are failing, the ``TimeoutError`` chains the most recent poll
         error so the cause is not lost.
         """
-        single_poll_timeout = 15.0
         async_settings = cls._resolve_async_settings()
         total_timeout = async_settings.poll_timeout_secs
         deadline = time.monotonic() + total_timeout
@@ -571,7 +583,7 @@ class ServiceClient(Singleton):
             try:
                 status_resp = cls._get_fit_status(
                     req=GetFitStatusRequest(fitted_train_set_id=fitted_train_set_id),
-                    timeout=single_poll_timeout,
+                    timeout=_FIT_STATUS_TIMEOUT_SECS,
                     headers=headers,
                 )
             except (
@@ -601,10 +613,7 @@ class ServiceClient(Singleton):
                 if status_resp.status == FitStatus.COMPLETED:
                     return status_resp
                 if status_resp.status == FitStatus.FAILED:
-                    raise FitFailedError(
-                        f"Fit {fitted_train_set_id} failed: "
-                        f"{status_resp.error or 'no error message provided'}"
-                    )
+                    raise _fit_failed(fitted_train_set_id, status_resp)
                 if status_resp.retry_in_secs is not None:
                     retry_in_secs = max(
                         status_resp.retry_in_secs, _MIN_RETRY_INTERVAL_SECS
@@ -624,6 +633,35 @@ class ServiceClient(Singleton):
                     message += f" The last status poll failed: {last_error}"
                 raise TimeoutError(message) from last_error
             time.sleep(retry_in_secs)
+
+    @classmethod
+    def get_fit_status(
+        cls,
+        fitted_train_set_id: UUID,
+        headers: dict[str, str] | None = None,
+    ) -> GetFitStatusResponse:
+        """Ask the server once for the status of a fit, without waiting for it.
+
+        Args:
+            fitted_train_set_id: The id the server assigned to the fit.
+            headers: Headers for the request overriding the default headers.
+
+        Returns:
+            The status response. Its ``status`` is COMPLETED, or any other value
+            while the server is still running the fit.
+
+        Raises:
+            FitFailedError: If the server reports that the fit failed.
+            FittedModelNotFoundError: If the server has no fit with this id.
+        """
+        status_resp = cls._get_fit_status(
+            req=GetFitStatusRequest(fitted_train_set_id=fitted_train_set_id),
+            timeout=_FIT_STATUS_TIMEOUT_SECS,
+            headers=headers,
+        )
+        if status_resp.status == FitStatus.FAILED:
+            raise _fit_failed(fitted_train_set_id, status_resp)
+        return status_resp
 
     # NOTE: no backoff decorator here on purpose — the `_wait_for_fit` polling
     # loop already retries transient errors until its deadline, and a nested

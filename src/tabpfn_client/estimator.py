@@ -15,6 +15,7 @@ from typing_extensions import Self
 import numpy as np
 import pandas as pd
 from sklearn.base import ClassifierMixin, RegressorMixin
+from sklearn.exceptions import NotFittedError
 from sklearn.utils import column_or_1d
 from sklearn.utils.multiclass import check_classification_targets
 from sklearn.utils.validation import check_is_fitted
@@ -48,6 +49,7 @@ from tabpfn_client.api_models import (
     ThinkingEffort,
     TabPFNSystem,
     TextHandling,
+    FitStatus,
     FitTimings,
 )
 from tabpfn_client.models import ApiMode, FitResult, TabPFNConfig, FitModeLiteral
@@ -177,8 +179,9 @@ class _ServerFitMixin(ModelPersistenceMixin):
 
     `fit()` uploads the training data and waits for the server to complete the
     fit. With `save_model_to`, it saves the fit there as soon as the server
-    returns its id, and again once it completes; `load_model()` waits for a fit
-    saved before it completed.
+    returns its id, and again once it completes. On a model `load_model()`
+    restored before its fit completed, `predict()` asks the server once whether
+    the fit has completed, and `fit()` waits for it.
     """
 
     # Set by the estimator's `__init__`.
@@ -224,20 +227,75 @@ class _ServerFitMixin(ModelPersistenceMixin):
         if save_to is not None:
             self.save_model(save_to)
 
-    def _wait_for_recorded_fit(self, model_id: UUID) -> None:
-        """Wait for the server to complete a fit that a record holds as pending.
+    def _check_pending_fit(self) -> None:
+        """Ask the server once whether a pending fit `load_model()` restored has completed.
+
+        `predict()` calls this before predicting, and does not wait for a fit
+        the server is still running.
 
         Raises:
-            FitFailedError: If the server reports that the fit failed.
-            FittedModelNotFoundError: If the server does not have the fit.
+            NotFittedError: If the server is still running the fit.
+            FitFailedError: If the server reports that the fit failed. The
+                estimator is then unfitted, so that `fit()` fits again.
+            FittedModelNotFoundError: If the server does not have the fit,
+                which leaves the estimator unfitted too.
         """
-        # `load_model()` may be the first call of the process.
-        init()
-        logger.debug(f"Waiting for fit {model_id} to complete.")
-        response = InferenceClient.wait_for_fit(
-            model_id, client_options=self.client_options
-        )
+        if not self._fit_pending:
+            return
+        try:
+            response = InferenceClient.get_fit_status(
+                self.model_id_, client_options=self.client_options
+            )
+        except (FitFailedError, FittedModelNotFoundError):
+            self._forget_fit()
+            raise
+        if response.status != FitStatus.COMPLETED:
+            raise NotFittedError(
+                f"Fit {self.model_id_} has not completed yet. Call fit() with "
+                "its training data to wait for it."
+            )
         self.fit_timings_ = _timings_dict(response.timings)
+        self._complete_pending_fit()
+
+    def _wait_for_pending_fit(
+        self, *, n_train_rows: int, classes: np.ndarray | None
+    ) -> None:
+        """Wait for the pending fit `load_model()` restored, as `fit()` does instead of refitting.
+
+        The training data is not uploaded again, only checked against the fit,
+        so that `fit()` on other data does not take on a fit of the data the
+        model was saved with.
+
+        Raises:
+            ValueError: If the training data is not that of the pending fit.
+            FitFailedError: If the server reports that the fit failed. The
+                estimator is then unfitted, so that `fit()` fits again.
+            FittedModelNotFoundError: If the server does not have the fit,
+                which leaves the estimator unfitted too.
+        """
+        if n_train_rows != self._n_train_rows or (
+            classes is not None
+            and not np.array_equal(classes, getattr(self, "classes_", ()))
+        ):
+            raise ValueError(
+                f"This model holds fit {self.model_id_}, which load_model() "
+                "restored before it completed, so fit() waits for that fit "
+                "instead of fitting again. X and y are not its training data "
+                f"({self._n_train_rows} rows). To fit other data, fit a new "
+                "estimator, such as sklearn.base.clone(model)."
+            )
+        logger.debug(f"Waiting for fit {self.model_id_} to complete.")
+        try:
+            response = InferenceClient.wait_for_fit(
+                self.model_id_, client_options=self.client_options
+            )
+        except (FitFailedError, FittedModelNotFoundError):
+            self._forget_fit()
+            raise
+        self.fit_timings_ = _timings_dict(response.timings)
+        self._complete_pending_fit()
+        if self.save_model_to is not None:
+            self.save_model(self.save_model_to)
 
     def _set_fit(
         self,
@@ -503,8 +561,8 @@ class TabPFNClassifier(
             save_model_to:
                 A path that `fit()` saves the fitted model to, as `save_model()`
                 does. In ASYNC mode, whether set or chosen by AUTO, a pending
-                model is saved there first, before the fit completes;
-                `load_model()` waits for its fit to complete.
+                model is saved there first, before the fit completes; see
+                `load_model()` for picking it up.
         """
         self.model_path = model_path
         self.categorical_features_indices = categorical_features_indices
@@ -545,6 +603,9 @@ class TabPFNClassifier(
 
         Uploads the training data to the server, which fits the model on it.
 
+        On a model `load_model()` restored before its fit completed, waits for
+        that fit instead; `X` and `y` must then be its training data.
+
         Args:
             X: The input data.
             y: The target variable.
@@ -555,7 +616,8 @@ class TabPFNClassifier(
 
         Raises:
             ValueError: If the data or the estimator's parameters are invalid,
-                or the data exceeds the model limits.
+                the data exceeds the model limits, or it is not the training
+                data of the pending fit the model was loaded with.
             FitFailedError: If the server reports that the fit failed while
                 `fit()` polled for it, as in ASYNC mode.
         """
@@ -588,6 +650,10 @@ class TabPFNClassifier(
                 # The fit is saved as soon as the server returns its id, which
                 # is too late to find out that the file cannot be written.
                 Path(self.save_model_to).parent.mkdir(parents=True, exist_ok=True)
+
+            if self._fit_pending:
+                self._wait_for_pending_fit(n_train_rows=X.shape[0], classes=classes)
+                return self
 
             # NOTE(@trace_id)
             # Create a new sentry trace at every fit, provided that:
@@ -628,6 +694,11 @@ class TabPFNClassifier(
 
         Returns:
             The predicted class labels as a NumPy array.
+
+        Raises:
+            NotFittedError: If the model is not fitted, or `load_model()`
+                restored it before its fit completed and the server is still
+                running it.
         """
         return self._predict(X, output_type="preds")
 
@@ -640,6 +711,11 @@ class TabPFNClassifier(
         Returns:
             The predicted probabilities of the classes as a NumPy array.
             Shape (n_samples, n_classes).
+
+        Raises:
+            NotFittedError: If the model is not fitted, or `load_model()`
+                restored it before its fit completed and the server is still
+                running it.
         """
         return self._predict(X, output_type="probas")
 
@@ -659,6 +735,7 @@ class TabPFNClassifier(
         # short-circuits after the first successful call.
         init()
         check_is_fitted(self)
+        self._check_pending_fit()
 
         tabpfn_config = self._get_tabpfn_config()
         task_config = ClassifierConfig(
@@ -973,8 +1050,8 @@ class TabPFNRegressor(
             save_model_to:
                 A path that `fit()` saves the fitted model to, as `save_model()`
                 does. In ASYNC mode, whether set or chosen by AUTO, a pending
-                model is saved there first, before the fit completes;
-                `load_model()` waits for its fit to complete.
+                model is saved there first, before the fit completes; see
+                `load_model()` for picking it up.
         """
         self.model_path = model_path
         self.categorical_features_indices = categorical_features_indices
@@ -1014,6 +1091,9 @@ class TabPFNRegressor(
 
         Uploads the training data to the server, which fits the model on it.
 
+        On a model `load_model()` restored before its fit completed, waits for
+        that fit instead; `X` and `y` must then be its training data.
+
         Args:
             X: The input data.
             y: The target variable.
@@ -1024,7 +1104,8 @@ class TabPFNRegressor(
 
         Raises:
             ValueError: If the data or the estimator's parameters are invalid,
-                or the data exceeds the model limits.
+                the data exceeds the model limits, or it is not the training
+                data of the pending fit the model was loaded with.
             FitFailedError: If the server reports that the fit failed while
                 `fit()` polled for it, as in ASYNC mode.
         """
@@ -1056,6 +1137,10 @@ class TabPFNRegressor(
                 # The fit is saved as soon as the server returns its id, which
                 # is too late to find out that the file cannot be written.
                 Path(self.save_model_to).parent.mkdir(parents=True, exist_ok=True)
+
+            if self._fit_pending:
+                self._wait_for_pending_fit(n_train_rows=X.shape[0], classes=None)
+                return self
 
             if self._fit_count > 0 or "sentry-trace" not in self.client_options.headers:
                 self.client_options.headers["sentry-trace"] = uuid4().hex
@@ -1122,6 +1207,9 @@ class TabPFNRegressor(
             for `"main"` and `"full"`.
 
         Raises:
+            NotFittedError: If the model is not fitted, or `load_model()`
+                restored it before its fit completed and the server is still
+                running it.
             ValueError: If `X` exceeds the model limits or the group columns are
                 invalid.
             RuntimeError: If a `"full"` prediction split across several requests
@@ -1137,6 +1225,7 @@ class TabPFNRegressor(
         # short-circuits after the first successful call.
         init()
         check_is_fitted(self)
+        self._check_pending_fit()
 
         tabpfn_config = self._get_tabpfn_config()
         task_config = RegressorConfig(
