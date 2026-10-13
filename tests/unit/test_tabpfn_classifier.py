@@ -842,6 +842,13 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             tabpfn.fit(X, y_str)
         self.assertIn("exceeds the maximal number of", str(cm.exception))
 
+    def test_single_class_raises_error(self):
+        X = np.random.rand(10, 5)
+        for y in (np.zeros(10, dtype=int), np.array(["a"] * 10)):
+            with self.assertRaises(ValueError) as cm:
+                TabPFNClassifier().fit(X, y)
+            self.assertIn("only one class", str(cm.exception))
+
 
 class TestTabPFNModelSelection(unittest.TestCase):
     def setUp(self):

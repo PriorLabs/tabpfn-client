@@ -612,7 +612,8 @@ class TabPFNClassifier(
 
         Raises:
             ValueError: If `y` contains NaN, is not a valid classification
-                target, or has more classes than the server supports.
+                target, has fewer than 2 classes, or has more classes than the
+                server supports.
         """
         y_ = column_or_1d(y, warn=True)
         if sum(pd.isnull(y_)) > 0:
@@ -621,6 +622,10 @@ class TabPFNClassifier(
         # Get classes and encode before type conversion to guarantee correct class labels.
         # TODO: should pass this from the server
         classes = np.unique(y_)
+        if len(classes) < 2:
+            raise ValueError(
+                "y contains only one class; classification needs at least 2 classes."
+            )
 
         # TODO: these things should ideally be shared with the local package
         api_settings = ServiceClient.get_settings()
