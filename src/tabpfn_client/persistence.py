@@ -15,15 +15,22 @@ fitted state held on the client is therefore small and fully describable:
 derives fittedness from them, and turns them into a small JSON record with
 `save_model()` and back into a ready-to-predict estimator with `load_model()`.
 Nothing else needs to survive, which is also what keeps pickling cheap.
+
+The same record lets a fit outlive the process that started it. The server
+assigns the id when it accepts a fit, before it runs it, so a model that
+`submit_fit()` left pending can be saved too. Its record says the fit is
+pending, and `load_model()` restores it as such, without asking the server
+about it, for `wait_for_fit()` to wait for.
 """
 
 from __future__ import annotations
 
 import copy
 import json
+import os
 from pathlib import Path
-from typing import Any
-from uuid import UUID
+from typing import Any, Literal
+from uuid import UUID, uuid4
 
 import numpy as np
 from pydantic import BaseModel, ValidationError
@@ -31,7 +38,7 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.utils.validation import check_is_fitted
 from typing_extensions import Self
 
-from tabpfn_client.api_models import PredictionTask
+from tabpfn_client.api_models import FitStatus, PredictionTask
 
 # Constructor params that describe the connection rather than the model. They
 # are left out of the record, and a record that carries them is rejected:
@@ -57,6 +64,11 @@ class _ModelRecord(BaseModel):
     n_train_rows: int | None = None
     # Classification only; None for regressors.
     classes: list[Any] | None = None
+    # PENDING for a fit `submit_fit()` started that had not been waited for when
+    # the record was saved, so the server may still be running it. A failed fit
+    # is never saved. Records written before this field existed only held
+    # completed fits.
+    fit_status: Literal[FitStatus.PENDING, FitStatus.COMPLETED] = FitStatus.COMPLETED
 
 
 def _task_of(estimator_cls: type) -> PredictionTask:
@@ -91,6 +103,24 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_jsonable(v) for v in value]
     return value
+
+
+def _write_record(path: str | Path, record: dict[str, Any]) -> None:
+    """Write `record` to `path` as JSON, replacing the file in one step.
+
+    Written to a file of its own beside `path` and renamed over it, so that a
+    process stopped mid-write leaves the previous record whole instead of a
+    truncated one, and processes saving to one path at once each install a
+    whole record.
+    """
+    path = Path(path)
+    aside = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        aside.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+        os.replace(aside, path)
+    except BaseException:
+        aside.unlink(missing_ok=True)
+        raise
 
 
 def _read_record(source: str | Path | dict[str, Any]) -> _ModelRecord:
@@ -143,12 +173,18 @@ class ModelPersistenceMixin(BaseEstimator):
     # n_train_rows * n_test_rows, so this bounds the test rows per call.
     _n_train_rows: int | None = None
 
+    # Whether the server may still be running the fit `model_id_` refers to:
+    # set by `submit_fit()`, or by `load_model()` from a record of a pending
+    # fit, until `wait_for_fit()` sees the fit complete.
+    _fit_pending: bool = False
+
     # NOTE: Some "*_" attributes may be assigned before a fit succeeds (it used
     # to be the case for `classes_`), so we override sklearn's default of
     # inferring fittedness from any "*_" attribute and use `model_id_` as the
-    # single source of truth instead.
+    # single source of truth instead. A pending fit has its `model_id_`, but
+    # nothing to predict with until `wait_for_fit()` has seen it complete.
     def __sklearn_is_fitted__(self) -> bool:
-        return getattr(self, "model_id_", None) is not None
+        return getattr(self, "model_id_", None) is not None and not self._fit_pending
 
     def save_model(self, path: str | Path | None = None) -> dict[str, Any]:
         """Save the fitted model so it can be loaded later without re-fitting.
@@ -164,6 +200,9 @@ class ModelPersistenceMixin(BaseEstimator):
         with the same account, and they stay usable for as long as the training
         data remains on the server (see `UserDataClient` to delete it).
 
+        A model `submit_fit()` left pending is saved too, as a pending fit, so
+        that a later run can load it and `wait_for_fit()`.
+
         Args:
             path: Where to write the record as JSON. Nothing is written when
                 omitted.
@@ -172,8 +211,14 @@ class ModelPersistenceMixin(BaseEstimator):
             The record as a JSON-serialisable dict, whether or not `path` was
             given, so it can also be kept elsewhere (a database, an experiment
             tracker) and handed to `load_model()` directly.
+
+        Raises:
+            NotFittedError: If the model has no fit, completed or pending.
         """
-        check_is_fitted(self)
+        # A pending fit is not fitted yet, but saving it is what lets a later
+        # run wait for it.
+        if not self._fit_pending:
+            check_is_fitted(self)
         params = {
             k: _jsonable(v)
             for k, v in self.get_params(deep=False).items()
@@ -187,9 +232,10 @@ class ModelPersistenceMixin(BaseEstimator):
             params=params,
             n_train_rows=self._n_train_rows,
             classes=None if classes is None else np.asarray(classes).tolist(),
+            fit_status=FitStatus.PENDING if self._fit_pending else FitStatus.COMPLETED,
         ).model_dump(mode="json")
         if path is not None:
-            Path(path).write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+            _write_record(path, record)
         return record
 
     @classmethod
@@ -201,12 +247,17 @@ class ModelPersistenceMixin(BaseEstimator):
         here; the first `predict()` authenticates (like `fit()` would) and
         raises `FittedModelNotFoundError` if the server no longer has the model.
 
+        A record of a fit that was still pending when it was saved comes back
+        pending, as `submit_fit()` left it: call `wait_for_fit()` before
+        `predict()`.
+
         Args:
             source: The path of a file written by `save_model(path)`, or the
                 dict it returned.
 
         Returns:
-            A fitted estimator of this class.
+            A fitted estimator of this class, or a pending one if the record
+            holds a pending fit.
 
         Raises:
             ValueError: If `source` is not a record written by `save_model()`,
@@ -256,4 +307,5 @@ class ModelPersistenceMixin(BaseEstimator):
         estimator._n_train_rows = record.n_train_rows
         if record.classes is not None:
             setattr(estimator, "classes_", np.asarray(record.classes))
+        estimator._fit_pending = record.fit_status == FitStatus.PENDING
         return estimator

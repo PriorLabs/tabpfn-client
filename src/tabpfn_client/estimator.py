@@ -14,6 +14,7 @@ from typing_extensions import Self
 import numpy as np
 import pandas as pd
 from sklearn.base import ClassifierMixin, RegressorMixin
+from sklearn.exceptions import NotFittedError
 from sklearn.utils import column_or_1d
 from sklearn.utils.multiclass import check_classification_targets
 from sklearn.utils.validation import check_is_fitted
@@ -24,6 +25,7 @@ from tabpfn_client.client import (
 )
 from tabpfn_client.config import Config, init
 from tabpfn_client.constants import URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE
+from tabpfn_client.errors import FitFailedError, FittedModelNotFoundError
 from tabpfn_client.api_models import ModelVersion
 from tabpfn_client.utils import (
     model_limit_from_version,
@@ -46,6 +48,9 @@ from tabpfn_client.api_models import (
     ThinkingEffort,
     TabPFNSystem,
     TextHandling,
+    FitResponse,
+    FitStatus,
+    FitTimings,
 )
 from tabpfn_client.models import ApiMode, TabPFNConfig, FitModeLiteral
 from tabpfn_client.persistence import ModelPersistenceMixin
@@ -140,8 +145,9 @@ class _ServerTimingsMixin:
           A prediction sent in several requests reports their sum.
 
         Queue wait is time spent waiting for the server to start the work. An
-        entry is None before the first call, on a model restored with
-        `load_model()`, and when the server does not report timings.
+        entry is None before the first call, while a fit is pending, on a model
+        restored with `load_model()` from a completed fit, and when the server
+        does not report timings.
         """
         return {
             "fit": getattr(self, "fit_timings_", None),
@@ -163,8 +169,174 @@ def _combine_timings(
     return combined
 
 
+def _timings_dict(timings: FitTimings | None) -> dict[str, Any] | None:
+    """Return server-reported fit timings as the plain dict `fit_timings_` holds."""
+    return timings.model_dump(mode="json") if timings is not None else None
+
+
+class _AsyncMixin(ModelPersistenceMixin):
+    """Starts work on the TabPFN server without waiting for it, and waits for it.
+
+    `submit_fit()` returns as soon as the server has accepted the fit, leaving
+    the model pending until `wait_for_fit()` sees the fit complete. In between,
+    `save_model()` saves the pending fit, for a later run to load and wait for.
+    `submit_predict()` and `wait_for_predict()` are reserved for predictions.
+    """
+
+    # Set by the estimator's `__init__`.
+    client_options: ClientOptions
+
+    def submit_fit(
+        self,
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray,
+        description: str | None = None,
+    ) -> Self:
+        """Start fitting the model on the server, without waiting for the fit.
+
+        Checks and uploads the training data as `fit()` does, but returns as
+        soon as the server has accepted the fit, which it then runs as a
+        background job, whatever `api_mode` is. Until `wait_for_fit()` sees
+        the fit complete, the model is pending: `predict()` raises
+        `NotFittedError`, and `save_model()` saves it as a pending fit, which
+        a later run can `load_model()` and wait for. The id of the fit is in
+        `model_id_` as soon as `submit_fit()` returns, for logs or support
+        requests.
+
+        Args:
+            X: The input data.
+            y: The target variable.
+            description: Description of the dataset and task for the server.
+
+        Returns:
+            self
+
+        Raises:
+            ValueError: If the data or the estimator's parameters are invalid,
+                or the data exceeds the model limits.
+        """
+        return self._fit(X, y, description, submit=True)
+
+    def wait_for_fit(self) -> Self:
+        """Wait for the server to complete the fit `submit_fit()` started.
+
+        Polls the server until the fit has completed, after which the model
+        can predict. A model `load_model()` restored from a record of a pending
+        fit is waited for the same way. Returns at once, without a request, if
+        the fit has already completed.
+
+        Returns:
+            self
+
+        Raises:
+            NotFittedError: If the model has no fit to wait for.
+            FitFailedError: If the server reports that the fit failed. The
+                model is then unfitted.
+            FittedModelNotFoundError: If the server does not have the fit, for
+                instance because it was deleted. The model is then unfitted.
+            TimeoutError: If the fit has not completed within
+                `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds. The model is still
+                pending, so `wait_for_fit()` can be called again.
+        """
+        if not self._fit_pending:
+            check_is_fitted(
+                self,
+                msg="This %(name)s has no fit to wait for. Call submit_fit() first.",
+            )
+            return self
+        # A model restored by `load_model()` can get here without `fit()`, which
+        # is what otherwise authorizes the HTTP client.
+        init()
+        logger.debug(f"Waiting for fit {self.model_id_} to complete.")
+        try:
+            response = InferenceClient.wait_for_fit(
+                self.model_id_, client_options=self.client_options
+            )
+        except (FitFailedError, FittedModelNotFoundError):
+            self._forget_fit()
+            raise
+        self.fit_timings_ = _timings_dict(response.timings)
+        self._fit_pending = False
+        return self
+
+    def submit_predict(self, X: pd.DataFrame | np.ndarray) -> Self:
+        """Start predicting on the server, without waiting for the predictions.
+
+        Not implemented yet: reserved for the prediction counterpart of
+        `submit_fit()`. Use `predict()` in the meantime.
+
+        Args:
+            X: The input data for prediction.
+
+        Raises:
+            NotImplementedError: Always, for now.
+        """
+        raise NotImplementedError(
+            "submit_predict() is not implemented yet. Use predict()."
+        )
+
+    def wait_for_predict(self) -> Any:
+        """Wait for the predictions `submit_predict()` started.
+
+        Not implemented yet: reserved for the prediction counterpart of
+        `wait_for_fit()`. Use `predict()` in the meantime.
+
+        Raises:
+            NotImplementedError: Always, for now.
+        """
+        raise NotImplementedError(
+            "wait_for_predict() is not implemented yet. Use predict()."
+        )
+
+    def _fit(
+        self,
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray,
+        description: str | None,
+        *,
+        submit: bool,
+    ) -> Self:
+        """Fit as `fit()` does or, with `submit`, as `submit_fit()` does."""
+        raise NotImplementedError  # Each estimator fits its own task.
+
+    def _check_fitted(self) -> None:
+        """Raise `NotFittedError` unless the model has a completed fit.
+
+        Asks the server nothing: whether a pending fit has completed is for
+        `wait_for_fit()` to find out.
+        """
+        if self._fit_pending:
+            raise NotFittedError(
+                f"Fit {self.model_id_} may not have completed yet. Call "
+                "wait_for_fit() before predicting."
+            )
+        check_is_fitted(self)
+
+    def _set_fit(
+        self,
+        fit_result: FitResponse,
+        *,
+        n_train_rows: int,
+    ) -> None:
+        """Assign the fitted state both estimators keep, for one fit.
+
+        A fit the server is still running leaves the model pending.
+        """
+        self.model_id_ = fit_result.fitted_train_set_id
+        self.fit_timings_ = _timings_dict(fit_result.timings)
+        self._n_train_rows = n_train_rows
+        self._fit_pending = fit_result.status != FitStatus.COMPLETED
+
+    def _forget_fit(self) -> None:
+        """Drop the fit `model_id_` refers to, leaving the model unfitted."""
+        for name in ("model_id_", "classes_", "fit_timings_"):
+            vars(self).pop(name, None)
+        self._n_train_rows = None
+        self._fit_pending = False
+
+
 class TabPFNClassifier(
-    ClassifierMixin, ModelPersistenceMixin, TabPFNModelSelection, _ServerTimingsMixin
+    ClassifierMixin, _AsyncMixin, TabPFNModelSelection, _ServerTimingsMixin
 ):
     """Hosted TabPFN classifier with a scikit-learn-compatible interface.
 
@@ -378,13 +550,16 @@ class TabPFNClassifier(
                 DataFrame that holds the column.
 
             api_mode:
-                Controls how the client calls the server.
+                How the client calls the API.
 
-                - `SYNC`: the client waits for the server to complete the request
-                  before returning.
-                - `ASYNC`: the client returns immediately and the server completes the
-                  request in the background.
-                - `AUTO`: the client determines the best mode based on the request.
+                - `SYNC`: for small workloads, where latency matters. The client
+                  waits on one open request.
+                - `ASYNC`: for larger workloads. The server runs the work as a
+                  background job, and the client polls it until it is done.
+                - `AUTO`: `ASYNC` for large training sets, `SYNC` otherwise.
+
+                In every mode `fit()` and `predict()` return once the work is
+                done. `submit_fit()` always runs async, whatever this setting is.
 
             client_options:
                 Client specific options (e.g. timeout, headers).
@@ -430,7 +605,10 @@ class TabPFNClassifier(
     ):
         """Fit the model.
 
-        Uploads the training data to the server, which fits the model on it.
+        Uploads the training data to the server, which fits the model on it,
+        and returns once the fit has completed. Every call starts a new fit,
+        also on a model with a pending fit. To start a fit without waiting for
+        it, use `submit_fit()`.
 
         Args:
             X: The input data.
@@ -443,7 +621,20 @@ class TabPFNClassifier(
         Raises:
             ValueError: If the data or the estimator's parameters are invalid,
                 or the data exceeds the model limits.
+            FitFailedError: If the server reports that the fit failed while
+                `fit()` polled for it, as in ASYNC mode.
         """
+        return self._fit(X, y, description, submit=False)
+
+    def _fit(
+        self,
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray,
+        description: str | None,
+        *,
+        submit: bool,
+    ) -> Self:
+        """Fit as `fit()` does or, with `submit`, as `submit_fit()` does."""
         text_handling = validate_text_handling(self.text_handling)
         # assert init() is called
         init()
@@ -491,19 +682,16 @@ class TabPFNClassifier(
                 tabpfn_systems=tabpfn_systems,
                 text_handling=text_handling,
                 thinking_config=thinking_config,
-                api_mode=self.api_mode,
+                # Only an ASYNC fit is accepted before it runs, as submit needs.
+                api_mode=ApiMode.ASYNC if submit else self.api_mode,
                 client_options=self.client_options,
                 description=description,
+                wait=not submit,
             )
-            self.model_id_ = fit_result.fitted_train_set_id
-            self.fit_timings_ = fit_result.timings
-            # NOTE: Previously classes were assigned in-place before a fit succeeded,
-            # consider this failure mode:
-            #  1. first fit() -> succeeds, model_id_ and classes_ are assigned
-            #  2. second fit() -> fails, only classes_ assigned, new classes_ but old model_id_
-            # Now we make sure to assign classes_ only after a successful fit.
+            self._set_fit(fit_result, n_train_rows=X.shape[0])
+            # Set only after the server has accepted the fit, so a failed refit
+            # can't pair new classes with the old model_id_.
             self.classes_ = classes
-            self._n_train_rows = X.shape[0]
             self._fit_count += 1
         else:
             raise NotImplementedError(
@@ -519,6 +707,10 @@ class TabPFNClassifier(
 
         Returns:
             The predicted class labels as a NumPy array.
+
+        Raises:
+            NotFittedError: If the model has no fit, or its fit is pending:
+                call `wait_for_fit()` first.
         """
         return self._predict(X, output_type="preds")
 
@@ -531,6 +723,10 @@ class TabPFNClassifier(
         Returns:
             The predicted probabilities of the classes as a NumPy array.
             Shape (n_samples, n_classes).
+
+        Raises:
+            NotFittedError: If the model has no fit, or its fit is pending:
+                call `wait_for_fit()` first.
         """
         return self._predict(X, output_type="probas")
 
@@ -544,12 +740,15 @@ class TabPFNClassifier(
         # we capture the original user-provided values.
         predict_params = self._get_predict_params(locals())
 
+        # Before `init()`, so that a model with nothing to predict with fails
+        # without authenticating first.
+        self._check_fitted()
+
         # An estimator restored by `load_model()` (or whose `model_id_` was
         # assigned directly) can reach `predict` without ever calling `fit()`,
         # so `init()` (which authorizes the HTTP client) must run here too. It
         # short-circuits after the first successful call.
         init()
-        check_is_fitted(self)
 
         tabpfn_config = self._get_tabpfn_config()
         task_config = ClassifierConfig(
@@ -648,7 +847,7 @@ class TabPFNClassifier(
 
 
 class TabPFNRegressor(
-    RegressorMixin, ModelPersistenceMixin, TabPFNModelSelection, _ServerTimingsMixin
+    RegressorMixin, _AsyncMixin, TabPFNModelSelection, _ServerTimingsMixin
 ):
     """Hosted TabPFN regressor with a scikit-learn-compatible interface.
 
@@ -841,13 +1040,16 @@ class TabPFNRegressor(
                 DataFrame that holds the column.
 
             api_mode:
-                Controls how the client calls the server.
+                How the client calls the API.
 
-                - `SYNC`: the client waits for the server to complete the request
-                  before returning.
-                - `ASYNC`: the client returns immediately and the server completes the
-                  request in the background.
-                - `AUTO`: the client determines the best mode based on the request.
+                - `SYNC`: for small workloads, where latency matters. The client
+                  waits on one open request.
+                - `ASYNC`: for larger workloads. The server runs the work as a
+                  background job, and the client polls it until it is done.
+                - `AUTO`: `ASYNC` for large training sets, `SYNC` otherwise.
+
+                In every mode `fit()` and `predict()` return once the work is
+                done. `submit_fit()` always runs async, whatever this setting is.
 
             client_options:
                 Client specific options (e.g. timeout, headers).
@@ -892,7 +1094,10 @@ class TabPFNRegressor(
     ):
         """Fit the model.
 
-        Uploads the training data to the server, which fits the model on it.
+        Uploads the training data to the server, which fits the model on it,
+        and returns once the fit has completed. Every call starts a new fit,
+        also on a model with a pending fit. To start a fit without waiting for
+        it, use `submit_fit()`.
 
         Args:
             X: The input data.
@@ -905,7 +1110,20 @@ class TabPFNRegressor(
         Raises:
             ValueError: If the data or the estimator's parameters are invalid,
                 or the data exceeds the model limits.
+            FitFailedError: If the server reports that the fit failed while
+                `fit()` polled for it, as in ASYNC mode.
         """
+        return self._fit(X, y, description, submit=False)
+
+    def _fit(
+        self,
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray,
+        description: str | None,
+        *,
+        submit: bool,
+    ) -> Self:
+        """Fit as `fit()` does or, with `submit`, as `submit_fit()` does."""
         text_handling = validate_text_handling(self.text_handling)
         # assert init() is called
         init()
@@ -942,13 +1160,13 @@ class TabPFNRegressor(
                 tabpfn_systems=tabpfn_systems,
                 text_handling=text_handling,
                 thinking_config=thinking_config,
-                api_mode=self.api_mode,
+                # Only an ASYNC fit is accepted before it runs, as submit needs.
+                api_mode=ApiMode.ASYNC if submit else self.api_mode,
                 client_options=self.client_options,
                 description=description,
+                wait=not submit,
             )
-            self.model_id_ = fit_result.fitted_train_set_id
-            self.fit_timings_ = fit_result.timings
-            self._n_train_rows = X.shape[0]
+            self._set_fit(fit_result, n_train_rows=X.shape[0])
             self._fit_count += 1
         else:
             raise NotImplementedError(
@@ -994,6 +1212,8 @@ class TabPFNRegressor(
             for `"main"` and `"full"`.
 
         Raises:
+            NotFittedError: If the model has no fit, or its fit is pending:
+                call `wait_for_fit()` first.
             ValueError: If `X` exceeds the model limits or the group columns are
                 invalid.
             RuntimeError: If a `"full"` prediction split across several requests
@@ -1003,12 +1223,15 @@ class TabPFNRegressor(
         # we capture the original user-provided values.
         predict_params = self._get_predict_params(locals())
 
+        # Before `init()`, so that a model with nothing to predict with fails
+        # without authenticating first.
+        self._check_fitted()
+
         # An estimator restored by `load_model()` (or whose `model_id_` was
         # assigned directly) can reach `predict` without ever calling `fit()`,
         # so `init()` (which authorizes the HTTP client) must run here too. It
         # short-circuits after the first successful call.
         init()
-        check_is_fitted(self)
 
         tabpfn_config = self._get_tabpfn_config()
         task_config = RegressorConfig(

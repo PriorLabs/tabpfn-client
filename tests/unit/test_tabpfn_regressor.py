@@ -25,10 +25,14 @@ from tabpfn_client.client import (
     PredictionResult,
     ServiceClient,
 )
-from tabpfn_client.api_models import ModelVersion, RegressorTabPFNConfig
-from tabpfn_client.models import FitResult
+from tabpfn_client.api_models import (
+    FitResponse,
+    FitStatus,
+    ModelVersion,
+    RegressorTabPFNConfig,
+)
 
-_DUMMY_FIT = FitResult(fitted_train_set_id=UUID(int=0))
+_DUMMY_FIT = FitResponse(fitted_train_set_id=UUID(int=0), status=FitStatus.COMPLETED)
 
 
 def _api_settings_payload(

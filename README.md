@@ -176,6 +176,37 @@ except (FileNotFoundError, FittedModelNotFoundError):
     predictions = model.predict(X_test)
 ```
 
+### Submitting a fit and waiting for it later
+
+A fit can run for a long time, in thinking mode especially, and the process waiting for it can stop: a closed notebook, a crash, a job timeout. `submit_fit()` starts the fit and returns as soon as the server has accepted it. Save the model then, and a later run can load it and wait for the same fit instead of fitting again:
+
+```python
+from pathlib import Path
+
+from tabpfn_client import TabPFNClassifier
+
+path = Path("model.json")
+if path.exists():
+    model = TabPFNClassifier.load_model(path)
+else:
+    model = TabPFNClassifier(thinking_mode=True)
+    model.submit_fit(X_train, y_train)  # returns without waiting for the fit
+    model.save_model(path)
+model.wait_for_fit()
+predictions = model.predict(X_test)
+```
+
+Until `wait_for_fit()` has seen the fit complete, the model is pending, and `predict()` raises `NotFittedError` without asking the server. `wait_for_fit()` polls the server until the fit has completed, and returns at once if it already has.
+
+Notes:
+
+- `submit_fit()` checks and uploads the data as `fit()` does. The server always runs a submitted fit as a background job, whatever `api_mode` is.
+- The id of the fit is in `model_id_` as soon as `submit_fit()` returns, for logs or support requests.
+- `save_model()` records a pending model with `fit_status: "pending"`, and `load_model()` restores it as pending, without a request. Nothing updates the file when the fit completes; save the model again after `wait_for_fit()` to record it as completed.
+- If the server reports that the fit failed, or no longer has it, `wait_for_fit()` raises `FitFailedError` or `FittedModelNotFoundError` and leaves the model unfitted.
+- `fit()` always starts a new fit, also on a pending model.
+- `submit_fit()` and `wait_for_fit()` are not part of the scikit-learn API: pipelines and other meta-estimators call `fit()`, which fits and waits as usual.
+
 ## Timings
 
 After `fit()` and `predict()`, an estimator reports how many seconds the server spent on each stage:

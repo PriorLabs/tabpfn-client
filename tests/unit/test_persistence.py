@@ -12,6 +12,7 @@ first `predict()`.
 from __future__ import annotations
 
 import json
+import os
 import pickle
 import shutil
 from contextlib import contextmanager
@@ -26,12 +27,11 @@ from sklearn.exceptions import NotFittedError
 from sklearn.utils.validation import check_is_fitted
 
 from tabpfn_client import FittedModelNotFoundError, __version__, init, reset
-from tabpfn_client.api_models import GetSettingsResponse
+from tabpfn_client.api_models import FitResponse, FitStatus, GetSettingsResponse
 from tabpfn_client.client import PredictionResult, ServiceClient
 from tabpfn_client.config import Config
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
-from tabpfn_client.models import FitResult
 from tabpfn_client.service_wrapper import InferenceClient, UserAuthenticationClient
 from tests.mock_tabpfn_server import with_mock_server
 
@@ -99,7 +99,9 @@ def _offline_server(prediction: PredictionResult | None = None):
             patch.object(
                 InferenceClient,
                 "fit_with_result",
-                return_value=FitResult(fitted_train_set_id=MODEL_ID),
+                return_value=FitResponse(
+                    fitted_train_set_id=MODEL_ID, status=FitStatus.COMPLETED
+                ),
             ) as fit,
             patch.object(
                 InferenceClient, "predict", return_value=prediction
@@ -128,15 +130,27 @@ class TestRecord:
             "params",
             "n_train_rows",
             "classes",
+            "fit_status",
         }
         assert record["tabpfn_client_version"] == __version__
         assert record["task"] == "regression"
         assert record["model_id"] == str(MODEL_ID)
         assert record["n_train_rows"] == N_TRAIN_ROWS
         assert record["classes"] is None
+        assert record["fit_status"] == "completed"
         assert record["params"] == _model_params(reg)
         assert "client_options" not in record["params"]
         json.dumps(record)  # JSON-serialisable as returned
+
+    def test_a_record_from_before_fit_status_holds_a_completed_fit(self):
+        # Records written before `fit_status` existed only held completed fits.
+        record = _fitted_regressor().save_model()
+        del record["fit_status"]
+
+        loaded = TabPFNRegressor.load_model(record)
+
+        check_is_fitted(loaded)
+        assert loaded.save_model()["fit_status"] == "completed"
 
     def test_none_valued_params_survive(self):
         # `random_state=None` asks for a fresh seed each run and differs from
@@ -179,6 +193,41 @@ class TestRecord:
             assert loaded._n_train_rows == N_TRAIN_ROWS
             np.testing.assert_array_equal(loaded.classes_, np.array(["café", "dog"]))
             assert _model_params(loaded) == _model_params(clf)
+
+    def test_each_write_goes_through_a_file_of_its_own(self, tmp_path):
+        # Processes saving to one path at once must not share the file a record
+        # is written to before it is renamed into place, or one could install
+        # the other's half-written record.
+        path = tmp_path / "model.json"
+        reg = _fitted_regressor()
+
+        with patch("tabpfn_client.persistence.os.replace", wraps=os.replace) as replace:
+            reg.save_model(path)
+            reg.save_model(path)
+
+        (first, _), (second, _) = (c.args for c in replace.call_args_list)
+        assert first != second
+        assert [p.name for p in tmp_path.iterdir()] == ["model.json"]
+
+    def test_a_failed_write_keeps_the_previous_file_and_leaves_nothing_behind(
+        self, tmp_path
+    ):
+        path = tmp_path / "model.json"
+        reg = _fitted_regressor()
+        reg.save_model(path)
+        before = path.read_text()
+
+        with (
+            patch(
+                "tabpfn_client.persistence.os.replace",
+                side_effect=OSError("disk full"),
+            ),
+            pytest.raises(OSError, match="disk full"),
+        ):
+            reg.save_model(path)
+
+        assert path.read_text() == before
+        assert [p.name for p in tmp_path.iterdir()] == ["model.json"]
 
     def test_directly_assigned_id_saves_without_classes_or_row_count(self):
         # Reusing a fit by assigning `model_id_` leaves no classes or row count
@@ -319,7 +368,9 @@ class TestLoadedEstimator:
         y = np.array([0, 1, 2] * 3)
 
         with _offline_server() as (fit, _):
-            fit.return_value = FitResult(fitted_train_set_id=new_id)
+            fit.return_value = FitResponse(
+                fitted_train_set_id=new_id, status=FitStatus.COMPLETED
+            )
             loaded.fit(X, y)
 
         assert loaded.model_id_ == new_id

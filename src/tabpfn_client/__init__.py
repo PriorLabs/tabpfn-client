@@ -14,7 +14,7 @@ from tabpfn_client.config import (
 )
 from tabpfn_client.cost import estimate_cost
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
-from tabpfn_client.errors import FittedModelNotFoundError
+from tabpfn_client.errors import FitFailedError, FittedModelNotFoundError
 from tabpfn_client.interactive_auth import InteractiveLoginError, interactive_login
 from tabpfn_client.service_wrapper import UserDataClient
 
@@ -29,6 +29,7 @@ __all__ = [
     "reset",
     "TabPFNClassifier",
     "TabPFNRegressor",
+    "FitFailedError",
     "FittedModelNotFoundError",
     "UserDataClient",
     "get_access_token",

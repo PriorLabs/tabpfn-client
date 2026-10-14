@@ -20,13 +20,15 @@ from tabpfn_common_utils.utils import Singleton
 from tabpfn_client.api_models import (
     FitTaskConfig,
     ClassifierConfig,
+    FitResponse,
+    GetFitStatusResponse,
     RegressorConfig,
     ThinkingConfig,
     TabPFNSystem,
     TextHandling,
 )
 from tabpfn_client.options import get_opts
-from tabpfn_client.models import ApiMode, FitResult
+from tabpfn_client.models import ApiMode
 
 logger = logging.getLogger(__name__)
 
@@ -371,7 +373,8 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         client_options: ClientOptions | None,
         description: str | None,
         text_handling: TextHandling = "advanced",
-    ) -> FitResult:
+        wait: bool = True,
+    ) -> FitResponse:
         """Upload a train set to the server and fit it.
 
         See `ServiceClient.fit_with_result`.
@@ -386,6 +389,22 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             api_mode=api_mode,
             client_options=client_options,
             description=description,
+            wait=wait,
+        )
+
+    @classmethod
+    def wait_for_fit(
+        cls,
+        fitted_train_set_id: UUID,
+        client_options: ClientOptions | None = None,
+    ) -> GetFitStatusResponse:
+        """Wait until the server completes a fit.
+
+        See `ServiceClient._wait_for_fit`.
+        """
+        return ServiceClient._wait_for_fit(
+            fitted_train_set_id,
+            headers=client_options.headers if client_options else None,
         )
 
     @classmethod
