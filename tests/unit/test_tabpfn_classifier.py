@@ -866,6 +866,34 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             TabPFNClassifier().fit(X, np.zeros(10, dtype=int))
         fit.assert_called_once()
 
+    def test_a_failed_refit_keeps_the_previous_fit_and_its_classes(self):
+        # classes_ is set only once the server has accepted a fit, so a refit
+        # the server fails can't pair the new classes with the old model_id_.
+        for refit in ("fit", "submit_fit"):
+            with self.subTest(refit=refit):
+                tabpfn = TabPFNClassifier()
+                with patch.object(
+                    InferenceClient, "fit_with_result", return_value=_DUMMY_FIT
+                ):
+                    tabpfn.fit(np.random.rand(10, 5), np.array([0, 1] * 5))
+
+                with (
+                    patch.object(
+                        InferenceClient,
+                        "fit_with_result",
+                        side_effect=RuntimeError("the server failed the fit"),
+                    ),
+                    self.assertRaises(RuntimeError),
+                ):
+                    getattr(tabpfn, refit)(
+                        np.random.rand(12, 5), np.array([0, 1, 2] * 4)
+                    )
+
+                self.assertEqual(tabpfn.model_id_, _DUMMY_FIT.fitted_train_set_id)
+                np.testing.assert_array_equal(tabpfn.classes_, [0, 1])
+                self.assertEqual(tabpfn._n_train_rows, 10)
+                self.assertFalse(tabpfn._fit_pending)
+
 
 class TestTabPFNModelSelection(unittest.TestCase):
     def setUp(self):
