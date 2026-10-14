@@ -214,17 +214,20 @@ class _SagemakerBase(BaseEstimator):
                 f"X and y must have the same number of samples; "
                 f"got X={X_arr.shape}, y={y_arr.shape}"
             )
+        classes = np.unique(y_arr) if self._TASK == "classification" else None
+        # Only thinking needs 2 classes; refused here rather than after the first
+        # predict call has sent the training data. Checked before any state is set,
+        # so a rejected fit leaves the estimator as it was.
+        if classes is not None and self._thinking_active and len(classes) < 2:
+            raise ValueError(
+                "y contains only one class; thinking mode needs at least 2 classes."
+            )
+
         self.X_train_ = X_arr
         self.y_train_ = y_arr
         self._cached_model_id: Optional[str] = None
-        if self._TASK == "classification":
-            self.classes_ = np.unique(y_arr)
-            # Only thinking needs 2 classes; refused here rather than after the
-            # first predict call has sent the training data.
-            if self._thinking_active and len(self.classes_) < 2:
-                raise ValueError(
-                    "y contains only one class; thinking mode needs at least 2 classes."
-                )
+        if classes is not None:
+            self.classes_ = classes
         return self
 
     def _invoke(
