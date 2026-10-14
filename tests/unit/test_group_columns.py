@@ -11,11 +11,11 @@ import pytest
 from tabpfn_client import config
 from tabpfn_client.client import GetSettingsResponse, ServiceClient
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
-from tabpfn_client.models import FitResult
+from tabpfn_client.api_models import FitResponse, FitStatus
 from tabpfn_client.service_wrapper import InferenceClient
 from tests.unit.test_tabpfn_classifier import _api_settings_payload
 
-_FIT_RESULT = FitResult(fitted_train_set_id=UUID(int=0))
+_FIT_RESULT = FitResponse(fitted_train_set_id=UUID(int=0), status=FitStatus.COMPLETED)
 
 
 @pytest.fixture(autouse=True)

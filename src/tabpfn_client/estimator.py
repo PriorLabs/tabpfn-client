@@ -48,9 +48,11 @@ from tabpfn_client.api_models import (
     ThinkingEffort,
     TabPFNSystem,
     TextHandling,
+    FitResponse,
+    FitStatus,
     FitTimings,
 )
-from tabpfn_client.models import ApiMode, FitResult, TabPFNConfig, FitModeLiteral
+from tabpfn_client.models import ApiMode, TabPFNConfig, FitModeLiteral
 from tabpfn_client.persistence import ModelPersistenceMixin
 
 try:
@@ -310,7 +312,7 @@ class _AsyncMixin(ModelPersistenceMixin):
 
     def _set_fit(
         self,
-        fit_result: FitResult,
+        fit_result: FitResponse,
         *,
         n_train_rows: int,
         classes: np.ndarray | None,
@@ -320,9 +322,9 @@ class _AsyncMixin(ModelPersistenceMixin):
         A fit the server is still running leaves the model pending.
         """
         self.model_id_ = fit_result.fitted_train_set_id
-        self.fit_timings_ = fit_result.timings
+        self.fit_timings_ = _timings_dict(fit_result.timings)
         self._n_train_rows = n_train_rows
-        self._fit_pending = fit_result.pending
+        self._fit_pending = fit_result.status != FitStatus.COMPLETED
         # NOTE: Previously classes were assigned in-place before a fit
         # succeeded, consider this failure mode:
         #  1. first fit() -> succeeds, model_id_ and classes_ are assigned

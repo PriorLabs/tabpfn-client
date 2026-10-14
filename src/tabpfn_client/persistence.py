@@ -38,7 +38,7 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.utils.validation import check_is_fitted
 from typing_extensions import Self
 
-from tabpfn_client.api_models import PredictionTask
+from tabpfn_client.api_models import FitStatus, PredictionTask
 
 # Constructor params that describe the connection rather than the model. They
 # are left out of the record, and a record that carries them is rejected:
@@ -64,10 +64,11 @@ class _ModelRecord(BaseModel):
     n_train_rows: int | None = None
     # Classification only; None for regressors.
     classes: list[Any] | None = None
-    # "pending" for a fit `submit_fit()` started that had not been waited for
-    # when the record was saved, so the server may still be running it. Records
-    # written before this field existed only held completed fits.
-    fit_status: Literal["pending", "completed"] = "completed"
+    # PENDING for a fit `submit_fit()` started that had not been waited for when
+    # the record was saved, so the server may still be running it. A failed fit
+    # is never saved. Records written before this field existed only held
+    # completed fits.
+    fit_status: Literal[FitStatus.PENDING, FitStatus.COMPLETED] = FitStatus.COMPLETED
 
 
 def _task_of(estimator_cls: type) -> PredictionTask:
@@ -231,7 +232,7 @@ class ModelPersistenceMixin(BaseEstimator):
             params=params,
             n_train_rows=self._n_train_rows,
             classes=None if classes is None else np.asarray(classes).tolist(),
-            fit_status="pending" if self._fit_pending else "completed",
+            fit_status=FitStatus.PENDING if self._fit_pending else FitStatus.COMPLETED,
         ).model_dump(mode="json")
         if path is not None:
             _write_record(path, record)
@@ -306,5 +307,5 @@ class ModelPersistenceMixin(BaseEstimator):
         estimator._n_train_rows = record.n_train_rows
         if record.classes is not None:
             setattr(estimator, "classes_", np.asarray(record.classes))
-        estimator._fit_pending = record.fit_status == "pending"
+        estimator._fit_pending = record.fit_status == FitStatus.PENDING
         return estimator

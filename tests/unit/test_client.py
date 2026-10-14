@@ -656,7 +656,7 @@ class TestServiceClient(unittest.TestCase):
             )
 
         self.assertEqual(result.fitted_train_set_id, UUID(fitted_train_set_id))
-        self.assertTrue(result.pending)
+        self.assertEqual(result.status, FitStatus.PENDING)
         self.assertIsNone(result.timings)
 
     @with_mock_server()
@@ -693,7 +693,7 @@ class TestServiceClient(unittest.TestCase):
             )
 
         self.assertEqual(result.fitted_train_set_id, UUID(fitted_train_set_id))
-        self.assertTrue(result.pending)
+        self.assertEqual(result.status, FitStatus.PENDING)
 
     @with_mock_server()
     def test_waiting_for_an_unknown_fit_stops_at_once(self, mock_server):

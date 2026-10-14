@@ -27,12 +27,17 @@ from sklearn.exceptions import NotFittedError
 from sklearn.utils.validation import check_is_fitted
 
 from tabpfn_client import FitFailedError, FittedModelNotFoundError, init, reset
-from tabpfn_client.api_models import GetFitStatusResponse
+from tabpfn_client.api_models import (
+    FitResponse,
+    FitStatus,
+    FitTimings,
+    GetFitStatusResponse,
+)
 from tabpfn_client.client import PredictionResult, ServiceClient
 from tabpfn_client.config import Config
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
-from tabpfn_client.models import ApiMode, FitResult
+from tabpfn_client.models import ApiMode
 from tabpfn_client.service_wrapper import InferenceClient, UserAuthenticationClient
 from tests.mock_tabpfn_server import with_mock_server
 
@@ -88,10 +93,14 @@ def _offline_server() -> Generator[SimpleNamespace]:
     use_server_before = Config.use_server
     Config.use_server = True
 
-    def fit_with_result(*args: Any, wait: bool, **kwargs: Any) -> FitResult:
+    def fit_with_result(*args: Any, wait: bool, **kwargs: Any) -> FitResponse:
         if wait:
-            return FitResult(fitted_train_set_id=FIT_ID, timings=TIMINGS)
-        return FitResult(fitted_train_set_id=FIT_ID, pending=True)
+            return FitResponse(
+                fitted_train_set_id=FIT_ID,
+                status=FitStatus.COMPLETED,
+                timings=FitTimings.model_validate(TIMINGS),
+            )
+        return FitResponse(fitted_train_set_id=FIT_ID, status=FitStatus.PENDING)
 
     try:
         with (
@@ -263,8 +272,10 @@ class TestFit:
             model = estimator_cls.load_model(model.save_model())
 
         with _offline_server() as server:
-            server.fit.side_effect = lambda *args, **kwargs: FitResult(
-                fitted_train_set_id=NEW_FIT_ID, timings=TIMINGS
+            server.fit.side_effect = lambda *args, **kwargs: FitResponse(
+                fitted_train_set_id=NEW_FIT_ID,
+                status=FitStatus.COMPLETED,
+                timings=FitTimings.model_validate(TIMINGS),
             )
             assert model.fit(X_TRAIN, y) is model
             model.predict(X_TEST)

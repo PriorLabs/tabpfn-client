@@ -1,4 +1,4 @@
-"""Server-reported timings reach `FitResult`, `PredictionResult` and the estimators."""
+"""Server-reported timings reach `fit_with_result()`, `PredictionResult` and the estimators."""
 
 from __future__ import annotations
 
@@ -16,12 +16,15 @@ import pytest
 from tabpfn_client.api_models import (
     ClassifierConfig,
     ClassifierFitTaskConfig,
+    FitResponse,
+    FitStatus,
+    FitTimings,
     GetSettingsResponse,
 )
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.config import Config
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor, _combine_timings
-from tabpfn_client.models import FitResult, PredictionResult
+from tabpfn_client.models import PredictionResult
 from tabpfn_client.service_wrapper import InferenceClient
 from tests.mock_tabpfn_server import with_mock_server
 from tests.unit.test_client import _api_settings_payload, _fast_poll_settings
@@ -108,7 +111,12 @@ class TestClientTimings(unittest.TestCase):
         result = self._call(ServiceClient.fit_with_result)
 
         self.assertEqual(
-            result, FitResult(fitted_train_set_id=UUID(FIT_ID), timings=FIT_TIMINGS)
+            result,
+            FitResponse(
+                fitted_train_set_id=UUID(FIT_ID),
+                status=FitStatus.COMPLETED,
+                timings=FitTimings.model_validate(FIT_TIMINGS),
+            ),
         )
 
     @with_mock_server()
@@ -133,7 +141,7 @@ class TestClientTimings(unittest.TestCase):
 
         result = self._call(ServiceClient.fit_with_result)
 
-        self.assertEqual(result.timings, FIT_TIMINGS)
+        self.assertEqual(result.timings, FitTimings.model_validate(FIT_TIMINGS))
 
     @with_mock_server()
     def test_fit_against_a_server_without_timings(self, mock_server):
@@ -184,7 +192,7 @@ class TestClientTimings(unittest.TestCase):
 
 
 @contextmanager
-def _offline(fit_result: FitResult, prediction: PredictionResult):
+def _offline(fit_result: FitResponse, prediction: PredictionResult):
     use_server_before = Config.use_server
     Config.use_server = True
     try:
@@ -208,7 +216,11 @@ def test_estimator_exposes_fit_and_predict_timings(Est):
     assert estimator.get_timings() == {"fit": None, "predict": None}
 
     with _offline(
-        FitResult(fitted_train_set_id=UUID(FIT_ID), timings=FIT_TIMINGS),
+        FitResponse(
+            fitted_train_set_id=UUID(FIT_ID),
+            status=FitStatus.COMPLETED,
+            timings=FitTimings.model_validate(FIT_TIMINGS),
+        ),
         PredictionResult(y_pred=y_pred, timings=PREDICT_TIMINGS),
     ):
         estimator.fit(X, y if Est is TabPFNRegressor else y.astype(int))

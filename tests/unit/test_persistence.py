@@ -27,12 +27,11 @@ from sklearn.exceptions import NotFittedError
 from sklearn.utils.validation import check_is_fitted
 
 from tabpfn_client import FittedModelNotFoundError, __version__, init, reset
-from tabpfn_client.api_models import GetSettingsResponse
+from tabpfn_client.api_models import FitResponse, FitStatus, GetSettingsResponse
 from tabpfn_client.client import PredictionResult, ServiceClient
 from tabpfn_client.config import Config
 from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
-from tabpfn_client.models import FitResult
 from tabpfn_client.service_wrapper import InferenceClient, UserAuthenticationClient
 from tests.mock_tabpfn_server import with_mock_server
 
@@ -100,7 +99,9 @@ def _offline_server(prediction: PredictionResult | None = None):
             patch.object(
                 InferenceClient,
                 "fit_with_result",
-                return_value=FitResult(fitted_train_set_id=MODEL_ID),
+                return_value=FitResponse(
+                    fitted_train_set_id=MODEL_ID, status=FitStatus.COMPLETED
+                ),
             ) as fit,
             patch.object(
                 InferenceClient, "predict", return_value=prediction
@@ -367,7 +368,9 @@ class TestLoadedEstimator:
         y = np.array([0, 1, 2] * 3)
 
         with _offline_server() as (fit, _):
-            fit.return_value = FitResult(fitted_train_set_id=new_id)
+            fit.return_value = FitResponse(
+                fitted_train_set_id=new_id, status=FitStatus.COMPLETED
+            )
             loaded.fit(X, y)
 
         assert loaded.model_id_ == new_id

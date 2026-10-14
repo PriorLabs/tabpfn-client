@@ -4,7 +4,6 @@ from enum import Enum
 from dataclasses import dataclass, field
 import numpy as np
 from typing import Any, Literal
-from uuid import UUID
 from tabpfn_client.options import get_opts
 
 from tabpfn_client.api_models import (
@@ -25,24 +24,6 @@ class ApiMode(str, Enum):
     AUTO = "auto"
     SYNC = "sync"
     ASYNC = "async"
-
-
-@dataclass(frozen=True)
-class FitResult:
-    """Outcome of a fit request.
-
-    Attributes:
-        fitted_train_set_id: Server-side id of the fitted train set.
-        timings: Seconds per stage as reported by the server, or None when it
-            reports none.
-        pending: Whether the server was still running the fit when the result
-            was returned, which only happens when the caller did not wait.
-    """
-
-    fitted_train_set_id: UUID
-    # Seconds per stage as reported by the server; None when it reports none.
-    timings: dict[str, Any] | None = None
-    pending: bool = False
 
 
 @dataclass(frozen=True)

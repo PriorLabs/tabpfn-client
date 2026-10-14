@@ -27,7 +27,6 @@ from typing_extensions import (
 )
 from tabpfn_client.models import (
     ClientOptions,
-    FitResult,
     PredictionResult,
     ApiMode,
 )
@@ -353,7 +352,7 @@ class ServiceClient(Singleton):
         description: str | None = None,
         text_handling: TextHandling = "advanced",
         wait: bool = True,
-    ) -> FitResult:
+    ) -> FitResponse:
         """Upload a train set to server and fit it.
 
         Args:
@@ -369,13 +368,14 @@ class ServiceClient(Singleton):
             wait: Whether to poll the server until the fit completes. When
                 False, return as soon as the server answers the fit request,
                 which in ASYNC mode is right after it accepted the job; the
-                result's ``pending`` then says whether the fit is still
-                running, and ``_wait_for_fit`` waits for it.
+                result's ``status`` then says whether the fit is still running,
+                and ``_wait_for_fit`` waits for it.
 
         Returns:
-            The unique ID of the fitted train set in the server, the
-            server-reported timings of the fit (None if the server reports none),
-            and whether the fit is still pending.
+            The fit as the server reports it: the unique ID of the fitted train
+            set, its status, COMPLETED once waited for, and its timings (None
+            if the server reports none). An ASYNC fit not waited for is
+            PENDING, without timings.
 
         Raises:
             ValueError: If ``text_handling`` is invalid or the in-memory size of
@@ -475,7 +475,7 @@ class ServiceClient(Singleton):
                     raise
 
         if use_async:
-            fit_resp = cls._submit_fit_job(
+            submit_resp = cls._submit_fit_job(
                 req=SubmitFitJobRequest(
                     train_set_upload_id=prepare_resp.train_set_upload_id,
                     task_config=task_config,
@@ -488,8 +488,12 @@ class ServiceClient(Singleton):
                 timeout=client_options.timeout,
                 headers=client_options.headers,
             )
-            timings = None
-            pending = True
+            # The server answers a submitted job with its id alone: it has
+            # accepted the fit, not run it.
+            fit_resp = FitResponse(
+                fitted_train_set_id=submit_resp.fitted_train_set_id,
+                status=FitStatus.PENDING,
+            )
         else:
             fit_resp = cls._fit(
                 req=FitRequest(
@@ -504,26 +508,23 @@ class ServiceClient(Singleton):
                 timeout=client_options.timeout,
                 headers=client_options.headers,
             )
-            timings = fit_resp.timings
-            # NOTE: The server currently only returns COMPLETED or PENDING
-            # (failed requests raise), but `status` is forward-compatible
-            # (`FitStatus | UnknownEnum`), so treat anything that is not
-            # COMPLETED as still in progress instead of silently skipping
-            # the wait when a newer server adds a status.
-            pending = fit_resp.status != FitStatus.COMPLETED
 
-        if pending and wait:
-            timings = cls._wait_for_fit(
+        # NOTE: The server currently only returns COMPLETED or PENDING
+        # (failed requests raise), but `status` is forward-compatible
+        # (`FitStatus | UnknownEnum`), so treat anything that is not
+        # COMPLETED as still in progress instead of silently skipping
+        # the wait when a newer server adds a status.
+        if wait and fit_resp.status != FitStatus.COMPLETED:
+            status_resp = cls._wait_for_fit(
                 fit_resp.fitted_train_set_id,
                 headers=client_options.headers,
-            ).timings
-            pending = False
-
-        return FitResult(
-            fitted_train_set_id=fit_resp.fitted_train_set_id,
-            timings=timings.model_dump(mode="json") if timings is not None else None,
-            pending=pending,
-        )
+            )
+            fit_resp = FitResponse(
+                fitted_train_set_id=fit_resp.fitted_train_set_id,
+                status=status_resp.status,
+                timings=status_resp.timings,
+            )
+        return fit_resp
 
     @classmethod
     def _wait_for_fit(

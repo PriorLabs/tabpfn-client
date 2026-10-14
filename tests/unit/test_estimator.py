@@ -29,9 +29,11 @@ from tabpfn_client.api_models import (
     RegressorTabPFNConfig,
     ClassifierPredictParams,
     RegressorPredictParams,
+    FitResponse,
+    FitStatus,
     UnknownEnum,
 )
-from tabpfn_client.models import FitResult, TabPFNConfig
+from tabpfn_client.models import TabPFNConfig
 
 
 def _normalize_type(tp: object) -> object:
@@ -177,9 +179,11 @@ class _FakeInferenceServer:
     def __init__(self):
         self.classes_ = np.array([0])
 
-    def fit_with_result(self, X, y, *args, **kwargs) -> FitResult:
+    def fit_with_result(self, X, y, *args, **kwargs) -> FitResponse:
         self.classes_ = np.unique(np.asarray(y))
-        return FitResult(fitted_train_set_id=self._DUMMY_ID)
+        return FitResponse(
+            fitted_train_set_id=self._DUMMY_ID, status=FitStatus.COMPLETED
+        )
 
     def predict(self, X, *, task_config, **kwargs) -> PredictionResult:
         n_rows = np.asarray(X).shape[0]
