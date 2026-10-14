@@ -200,7 +200,7 @@ Until `wait_for_fit()` has seen the fit complete, the model is pending, and `pre
 
 Notes:
 
-- `submit_fit()` checks and uploads the data as `fit()` does. The server always runs a submitted fit as a background job; `api_mode` only applies to `fit()`.
+- `submit_fit()` checks and uploads the data as `fit()` does. The server always runs a submitted fit as a background job, whatever `api_mode` is.
 - `save_model()` records a pending model with `fit_status: "pending"`, and `load_model()` restores it as pending, without a request. Nothing updates the file when the fit completes; save the model again after `wait_for_fit()` to record it as completed.
 - If the server reports that the fit failed, or no longer has it, `wait_for_fit()` raises `FitFailedError` or `FittedModelNotFoundError` and leaves the model unfitted.
 - `fit()` always starts a new fit, also on a pending model.

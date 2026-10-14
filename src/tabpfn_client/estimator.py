@@ -559,16 +559,16 @@ class TabPFNClassifier(
                 DataFrame that holds the column.
 
             api_mode:
-                Controls how the client calls the server to fit.
+                How the client calls the API.
 
-                - `SYNC`: the server holds the fit request open while it fits.
-                - `ASYNC`: the server runs the fit as a background job, and the
-                  client polls it until it completes.
+                - `SYNC`: for small workloads, where latency matters. The client
+                  waits on one open request.
+                - `ASYNC`: for larger workloads. The server runs the work as a
+                  background job, and the client polls it until it is done.
                 - `AUTO`: `ASYNC` for large training sets, `SYNC` otherwise.
 
-                In every mode `fit()` returns once the fit has completed. To
-                start a fit without waiting for it, use `submit_fit()`, which
-                this setting does not affect.
+                In every mode `fit()` and `predict()` return once the work is
+                done. `submit_fit()` always runs async, whatever this setting is.
 
             client_options:
                 Client specific options (e.g. timeout, headers).
@@ -1040,16 +1040,16 @@ class TabPFNRegressor(
                 DataFrame that holds the column.
 
             api_mode:
-                Controls how the client calls the server to fit.
+                How the client calls the API.
 
-                - `SYNC`: the server holds the fit request open while it fits.
-                - `ASYNC`: the server runs the fit as a background job, and the
-                  client polls it until it completes.
+                - `SYNC`: for small workloads, where latency matters. The client
+                  waits on one open request.
+                - `ASYNC`: for larger workloads. The server runs the work as a
+                  background job, and the client polls it until it is done.
                 - `AUTO`: `ASYNC` for large training sets, `SYNC` otherwise.
 
-                In every mode `fit()` returns once the fit has completed. To
-                start a fit without waiting for it, use `submit_fit()`, which
-                this setting does not affect.
+                In every mode `fit()` and `predict()` return once the work is
+                done. `submit_fit()` always runs async, whatever this setting is.
 
             client_options:
                 Client specific options (e.g. timeout, headers).
