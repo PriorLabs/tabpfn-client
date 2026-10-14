@@ -199,7 +199,9 @@ class _AsyncMixin(ModelPersistenceMixin):
         background job, whatever `api_mode` is. Until `wait_for_fit()` sees
         the fit complete, the model is pending: `predict()` raises
         `NotFittedError`, and `save_model()` saves it as a pending fit, which
-        a later run can `load_model()` and wait for.
+        a later run can `load_model()` and wait for. The id of the fit is in
+        `model_id_` as soon as `submit_fit()` returns, for logs or support
+        requests.
 
         Args:
             X: The input data.
