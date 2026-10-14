@@ -455,6 +455,12 @@ class TabPFNClassifier(
 
         # NOTE: Always resolve, do not re-assign to self.thinking_mode, user could change effort.
         thinking_mode = _resolve_thinking_mode(self.thinking_mode, self.thinking_effort)
+        # Only thinking needs 2 classes; a standard fit accepts one, like the local
+        # package. Checked here so the caller doesn't wait for the upload to find out.
+        if thinking_mode and len(classes) < 2:
+            raise ValueError(
+                "y contains only one class; thinking mode needs at least 2 classes."
+            )
         task_config = _build_fit_task_config(tabpfn_config)
         tabpfn_systems = _build_tabpfn_systems(self.paper_version, thinking_mode)
         thinking_config = _build_thinking_config(

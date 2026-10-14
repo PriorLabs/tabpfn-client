@@ -368,7 +368,8 @@ class _FoundryBase(BaseEstimator):
             The estimator itself.
 
         Raises:
-            ValueError: If `X` and `y` have different numbers of samples.
+            ValueError: If `X` and `y` have different numbers of samples, or
+                thinking mode is on and `y` has only one class.
         """
         X_arr = X if isinstance(X, pd.DataFrame) else np.asarray(X)
         y_arr = y if isinstance(y, (pd.DataFrame, pd.Series)) else np.asarray(y)
@@ -378,11 +379,20 @@ class _FoundryBase(BaseEstimator):
                 f"got X={X_arr.shape}, y={y_arr.shape}"
             )
 
+        classes = np.unique(y_arr) if self._task == "classification" else None
+        # Only thinking needs 2 classes; refused here rather than after the first
+        # predict call has sent the training data. Checked before any state is set,
+        # so a rejected fit leaves the estimator as it was.
+        if classes is not None and self._thinking_active and len(classes) < 2:
+            raise ValueError(
+                "y contains only one class; thinking mode needs at least 2 classes."
+            )
+
         self.X_train_ = X_arr
         self.y_train_ = y_arr
         self._cached_model_id: Optional[str] = None
-        if self._task == "classification":
-            self.classes_ = np.unique(y_arr)
+        if classes is not None:
+            self.classes_ = classes
         return self
 
     def _invoke(
