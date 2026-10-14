@@ -317,9 +317,8 @@ class _AsyncMixin(ModelPersistenceMixin):
         fit_result: FitResponse,
         *,
         n_train_rows: int,
-        classes: np.ndarray | None,
     ) -> None:
-        """Assign the fitted state of one fit, all slots together.
+        """Assign the fitted state both estimators keep, for one fit.
 
         A fit the server is still running leaves the model pending.
         """
@@ -327,13 +326,6 @@ class _AsyncMixin(ModelPersistenceMixin):
         self.fit_timings_ = _timings_dict(fit_result.timings)
         self._n_train_rows = n_train_rows
         self._fit_pending = fit_result.status != FitStatus.COMPLETED
-        # NOTE: Previously classes were assigned in-place before a fit
-        # succeeded, consider this failure mode:
-        #  1. first fit() -> succeeds, model_id_ and classes_ are assigned
-        #  2. second fit() -> fails, only classes_ assigned, new classes_ but old model_id_
-        # Now classes_ is only ever assigned together with the id of its fit.
-        if classes is not None:
-            setattr(self, "classes_", classes)
 
     def _forget_fit(self) -> None:
         """Drop the fit `model_id_` refers to, leaving the model unfitted."""
@@ -358,11 +350,6 @@ class TabPFNClassifier(
           automatically; no manual integer/one-hot encoding, imputation, scaling,
           or outlier removal is needed.
     """
-
-    # The class labels of the fit `model_id_` refers to. Assigned only together
-    # with it, by `fit()` or `load_model()`, so annotation only: an unfitted
-    # instance has no `classes_`, as sklearn expects.
-    classes_: np.ndarray
 
     _AVAILABLE_MODELS = [
         # Downstream packages (e.g. tabpfn-time-series) read this list in order
@@ -701,7 +688,10 @@ class TabPFNClassifier(
                 description=description,
                 wait=not submit,
             )
-            self._set_fit(fit_result, n_train_rows=X.shape[0], classes=classes)
+            self._set_fit(fit_result, n_train_rows=X.shape[0])
+            # Set only after the server has accepted the fit, so a failed refit
+            # can't pair new classes with the old model_id_.
+            self.classes_ = classes
             self._fit_count += 1
         else:
             raise NotImplementedError(
@@ -1176,7 +1166,7 @@ class TabPFNRegressor(
                 description=description,
                 wait=not submit,
             )
-            self._set_fit(fit_result, n_train_rows=X.shape[0], classes=None)
+            self._set_fit(fit_result, n_train_rows=X.shape[0])
             self._fit_count += 1
         else:
             raise NotImplementedError(
