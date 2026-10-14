@@ -172,14 +172,13 @@ def _timings_dict(timings: FitTimings | None) -> dict[str, Any] | None:
     return timings.model_dump(mode="json") if timings is not None else None
 
 
-class _ServerFitMixin(ModelPersistenceMixin):
-    """Fits the estimator on the TabPFN server, waiting for the fit or not.
+class _AsyncMixin(ModelPersistenceMixin):
+    """Starts work on the TabPFN server without waiting for it, and waits for it.
 
-    `fit()` uploads the training data and returns once the server has completed
-    the fit. `submit_fit()` returns as soon as the server has accepted it,
-    leaving the model pending until `wait_for_fit()` sees the fit complete. In
-    between, `save_model()` saves the pending fit, for a later run to load and
-    wait for.
+    `submit_fit()` returns as soon as the server has accepted the fit, leaving
+    the model pending until `wait_for_fit()` sees the fit complete. In between,
+    `save_model()` saves the pending fit, for a later run to load and wait for.
+    `submit_predict()` and `wait_for_predict()` are reserved for predictions.
     """
 
     # Set by the estimator's `__init__`.
@@ -341,7 +340,7 @@ class _ServerFitMixin(ModelPersistenceMixin):
 
 
 class TabPFNClassifier(
-    ClassifierMixin, _ServerFitMixin, TabPFNModelSelection, _ServerTimingsMixin
+    ClassifierMixin, _AsyncMixin, TabPFNModelSelection, _ServerTimingsMixin
 ):
     """Hosted TabPFN classifier with a scikit-learn-compatible interface.
 
@@ -848,7 +847,7 @@ class TabPFNClassifier(
 
 
 class TabPFNRegressor(
-    RegressorMixin, _ServerFitMixin, TabPFNModelSelection, _ServerTimingsMixin
+    RegressorMixin, _AsyncMixin, TabPFNModelSelection, _ServerTimingsMixin
 ):
     """Hosted TabPFN regressor with a scikit-learn-compatible interface.
 
