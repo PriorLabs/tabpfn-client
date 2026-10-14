@@ -9,6 +9,8 @@ from io import BytesIO
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+from sklearn.exceptions import NotFittedError
+from sklearn.utils.validation import check_is_fitted
 
 from tabpfn_client.sagemaker import TabPFNClassifier
 
@@ -52,6 +54,30 @@ class TestSagemakerInvocationTimeout(unittest.TestCase):
     def test_timeout_omitted_by_default(self):
         kwargs = self._invoke_async_kwargs(None)
         self.assertNotIn("InvocationTimeoutSeconds", kwargs)
+
+
+class TestSagemakerSingleClass(unittest.TestCase):
+    def test_thinking_rejects_a_single_class(self):
+        clf = TabPFNClassifier(endpoint_name="ep", thinking_mode=True)
+        with self.assertRaisesRegex(ValueError, "only one class"):
+            clf.fit(np.zeros((3, 2)), np.zeros(3))
+        with self.assertRaises(NotFittedError):
+            check_is_fitted(clf)
+
+    def test_rejected_refit_keeps_the_previous_fit(self):
+        clf = TabPFNClassifier(endpoint_name="ep", thinking_mode=True)
+        y = np.array([0, 1, 0])
+        clf.fit(np.zeros((3, 2)), y)
+        clf._cached_model_id = "model-id"
+        with self.assertRaisesRegex(ValueError, "only one class"):
+            clf.fit(np.ones((4, 2)), np.zeros(4))
+        np.testing.assert_array_equal(clf.y_train_, y)
+        self.assertEqual(list(clf.classes_), [0, 1])
+        self.assertEqual(clf._cached_model_id, "model-id")
+
+    def test_a_single_class_is_accepted_without_thinking(self):
+        clf = TabPFNClassifier(endpoint_name="ep").fit(np.zeros((3, 2)), np.zeros(3))
+        self.assertEqual(list(clf.classes_), [0])
 
 
 if __name__ == "__main__":

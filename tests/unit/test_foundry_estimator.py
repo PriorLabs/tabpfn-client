@@ -11,6 +11,8 @@ a server-side failure reportable (`error_code` / `trace_id`).
 import httpx
 import numpy as np
 import pytest
+from sklearn.exceptions import NotFittedError
+from sklearn.utils.validation import check_is_fitted
 
 from tabpfn_client.foundry import (
     FoundryEndpointError,
@@ -196,3 +198,29 @@ class TestFit:
         clf._cached_model_id = "stale-id"
         clf.fit(np.zeros((3, 2)), np.array([0, 1, 0]))
         assert clf._cached_model_id is None
+
+    def test_thinking_rejects_a_single_class(self):
+        with pytest.raises(ValueError, match="only one class"):
+            _clf(thinking_mode=True).fit(np.zeros((3, 2)), np.zeros(3))
+
+    def test_rejected_fit_leaves_estimator_unfitted(self):
+        clf = _clf(thinking_mode=True)
+        with pytest.raises(ValueError, match="only one class"):
+            clf.fit(np.zeros((3, 2)), np.zeros(3))
+        with pytest.raises(NotFittedError):
+            check_is_fitted(clf)
+
+    def test_rejected_refit_keeps_the_previous_fit(self):
+        clf = _clf(thinking_mode=True)
+        y = np.array([0, 1, 0])
+        clf.fit(np.zeros((3, 2)), y)
+        clf._cached_model_id = "model-id"
+        with pytest.raises(ValueError, match="only one class"):
+            clf.fit(np.ones((4, 2)), np.zeros(4))
+        np.testing.assert_array_equal(clf.y_train_, y)
+        assert list(clf.classes_) == [0, 1]
+        assert clf._cached_model_id == "model-id"
+
+    def test_a_single_class_is_accepted_without_thinking(self):
+        clf = _clf().fit(np.zeros((3, 2)), np.zeros(3))
+        assert list(clf.classes_) == [0]
