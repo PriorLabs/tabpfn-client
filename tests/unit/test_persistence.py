@@ -56,11 +56,11 @@ def _fitted_classifier(classes: list[Any], **params: Any) -> TabPFNClassifier:
 
 
 def _model_params(estimator: TabPFNClassifier | TabPFNRegressor) -> dict[str, Any]:
-    """Constructor params minus the session-only `client_options` and `save_model_to`."""
+    """Constructor params minus the transport-only `client_options`."""
     return {
         k: v
         for k, v in estimator.get_params(deep=False).items()
-        if k not in ("client_options", "save_model_to")
+        if k != "client_options"
     }
 
 
@@ -139,8 +139,17 @@ class TestRecord:
         assert record["fit_status"] == "completed"
         assert record["params"] == _model_params(reg)
         assert "client_options" not in record["params"]
-        assert "save_model_to" not in record["params"]
         json.dumps(record)  # JSON-serialisable as returned
+
+    def test_a_record_from_before_fit_status_holds_a_completed_fit(self):
+        # Records written before `fit_status` existed only held completed fits.
+        record = _fitted_regressor().save_model()
+        del record["fit_status"]
+
+        loaded = TabPFNRegressor.load_model(record)
+
+        check_is_fitted(loaded)
+        assert loaded.save_model()["fit_status"] == "completed"
 
     def test_none_valued_params_survive(self):
         # `random_state=None` asks for a fresh seed each run and differs from
@@ -185,10 +194,9 @@ class TestRecord:
             assert _model_params(loaded) == _model_params(clf)
 
     def test_each_write_goes_through_a_file_of_its_own(self, tmp_path):
-        # Writers racing for one path (clones sharing `save_model_to` in a
-        # parallel cross-validation) must not share the file a record is written
-        # to before it is renamed into place, or one could install the other's
-        # half-written record.
+        # Processes saving to one path at once must not share the file a record
+        # is written to before it is renamed into place, or one could install
+        # the other's half-written record.
         path = tmp_path / "model.json"
         reg = _fitted_regressor()
 
@@ -283,17 +291,13 @@ class TestLoadRejects:
         assert "99.0.0" in str(excinfo.value)
         assert "upgrade" in str(excinfo.value).lower()
 
-    @pytest.mark.parametrize(
-        ("param", "value"),
-        [("client_options", {"timeout": 5}), ("save_model_to", "model.json")],
-    )
-    def test_transport_params(self, param, value):
-        # `client_options` and `save_model_to` belong to a process, not to the model,
-        # and are never saved. A record carrying one (hand-made from get_params(),
-        # say) must not smuggle it into the loaded estimator.
+    def test_transport_params(self):
+        # `client_options` is per-process and never saved. A record carrying it
+        # (hand-made from get_params(), say) must not smuggle a plain dict into
+        # the estimator, where the first predict() would trip over it.
         record = _fitted_regressor().save_model()
-        record["params"][param] = value
-        with pytest.raises(ValueError, match=param):
+        record["params"]["client_options"] = {"timeout": 5}
+        with pytest.raises(ValueError, match="client_options"):
             TabPFNRegressor.load_model(record)
 
     def test_unknown_top_level_fields_are_ignored(self):

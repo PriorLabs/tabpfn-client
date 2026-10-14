@@ -176,34 +176,35 @@ except (FileNotFoundError, FittedModelNotFoundError):
     predictions = model.predict(X_test)
 ```
 
-### Resuming a pending fit
+### Submitting a fit and waiting for it later
 
-A fit can run for a long time and the process waiting for it can stop: a closed notebook, a crash, a timeout.
-Give the estimator a `save_model_to` path, and `fit()` saves the model there as soon as the server has accepted the fit, before it completes:
+A fit can run for a long time, in thinking mode especially, and the process waiting for it can stop: a closed notebook, a crash, a job timeout. `submit_fit()` starts the fit and returns as soon as the server has accepted it. Save the model then, and a later run can load it and wait for the same fit instead of fitting again:
 
 ```python
-model = TabPFNClassifier(thinking_mode=True, api_mode="async", save_model_to="model.json")
-model.fit(X_train, y_train)
+from pathlib import Path
 
-# In a later run, whether or not the first one waited until the end:
-from sklearn.exceptions import NotFittedError
+from tabpfn_client import TabPFNClassifier
 
-model = TabPFNClassifier.load_model("model.json")
-try:
-    predictions = model.predict(X_test)
-except NotFittedError:  # the fit is still running
-    model.fit(X_train, y_train)  # waits for it instead of fitting again
-    predictions = model.predict(X_test)
+path = Path("model.json")
+if path.exists():
+    model = TabPFNClassifier.load_model(path)
+else:
+    model = TabPFNClassifier(thinking_mode=True)
+    model.submit_fit(X_train, y_train)  # returns without waiting for the fit
+    model.save_model(path)
+model.wait_for_fit()
+predictions = model.predict(X_test)
 ```
 
-`load_model()` makes no request. On a model loaded from a fit that was saved before it completed, the first `predict()` asks the server once whether the fit has completed. If it has, `predict()` predicts and saves the file again as a completed fit, so the next model loaded from it asks nothing; if not, it raises `NotFittedError`. `fit()` on such a model waits for that fit instead of fitting again.
+Until `wait_for_fit()` has seen the fit complete, the model is pending, and `predict()` raises `NotFittedError` without asking the server. `wait_for_fit()` polls the server until the fit has completed, and returns at once if it already has.
 
 Notes:
 
-- The file is saved as soon as the server returns the id of the fit: with `api_mode="async"` when it accepts the fit, and saved again once the fit completes; with `api_mode="sync"` only once the fit has completed. The default, `"auto"`, is async for large training sets only.
-- The file is a `save_model()` record whose `fit_status` is `"pending"` or `"completed"`. If the server reports that the fit failed, a `fit()` still waiting for it removes the file and raises `FitFailedError`. A model loaded from the file raises it from `predict()` or `fit()` and is then unfitted, so the next `fit()` fits again.
-- `fit()` on a model loaded before its fit completed does not upload the data again. It checks that `X` and `y` have the fit's number of rows and classes, and raises `ValueError` otherwise; to fit other data, use a new estimator.
-- Every fit overwrites the file. In cross-validation or grid search, where clones of the estimator share it, it holds the last fit saved.
+- `submit_fit()` checks and uploads the data as `fit()` does. The server always runs a submitted fit as a background job; `api_mode` only applies to `fit()`.
+- `save_model()` records a pending model with `fit_status: "pending"`, and `load_model()` restores it as pending, without a request. Nothing updates the file when the fit completes; save the model again after `wait_for_fit()` to record it as completed.
+- If the server reports that the fit failed, or no longer has it, `wait_for_fit()` raises `FitFailedError` or `FittedModelNotFoundError` and leaves the model unfitted.
+- `fit()` always starts a new fit, also on a pending model.
+- `submit_fit()` and `wait_for_fit()` are not part of the scikit-learn API: pipelines and other meta-estimators call `fit()`, which fits and waits as usual.
 
 ## Timings
 

@@ -39,8 +39,9 @@ class FittedModelNotFoundError(RuntimeError):
 class FitFailedError(RuntimeError):
     """The server reports that a fit it accepted has failed.
 
-    Raised by ``fit()`` when it polls the server for the outcome of the fit, as
-    in ASYNC mode. The message holds the server's reason.
+    Raised by ``fit()`` and ``wait_for_fit()`` when they poll the server for the
+    outcome of a fit, as ``fit()`` does in ASYNC mode. The message holds the
+    server's reason.
     """
 
     pass

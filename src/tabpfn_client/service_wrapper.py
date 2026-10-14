@@ -407,21 +407,6 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         )
 
     @classmethod
-    def get_fit_status(
-        cls,
-        fitted_train_set_id: UUID,
-        client_options: ClientOptions | None = None,
-    ) -> GetFitStatusResponse:
-        """Ask the server once for the status of a fit, without waiting for it.
-
-        See `ServiceClient.get_fit_status`.
-        """
-        return ServiceClient.get_fit_status(
-            fitted_train_set_id,
-            headers=client_options.headers if client_options else None,
-        )
-
-    @classmethod
     def predict(
         cls,
         X,

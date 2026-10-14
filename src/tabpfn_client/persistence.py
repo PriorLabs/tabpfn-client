@@ -16,19 +16,17 @@ derives fittedness from them, and turns them into a small JSON record with
 `save_model()` and back into a ready-to-predict estimator with `load_model()`.
 Nothing else needs to survive, which is also what keeps pickling cheap.
 
-The same record lets a fit outlive the process waiting for it. The server
-assigns the id when it accepts an ASYNC fit, before it runs it, so an estimator
-with `save_model_to` writes the record there as a pending fit right away, and
-again once the fit completes. `load_model()` restores a pending fit without
-asking the server about it: `predict()` asks once whether it has completed, and
-`fit()` on its training data waits for it.
+The same record lets a fit outlive the process that started it. The server
+assigns the id when it accepts a fit, before it runs it, so a model that
+`submit_fit()` left pending can be saved too. Its record says the fit is
+pending, and `load_model()` restores it as such, without asking the server
+about it, for `wait_for_fit()` to wait for.
 """
 
 from __future__ import annotations
 
 import copy
 import json
-import logging
 import os
 from pathlib import Path
 from typing import Any, Literal
@@ -42,14 +40,12 @@ from typing_extensions import Self
 
 from tabpfn_client.api_models import PredictionTask
 
-logger = logging.getLogger(__name__)
-
-# Constructor params that describe the session rather than the model. They are
-# left out of the record, and a record that carries them is rejected:
-# `client_options` holds per-session headers and timeouts (and is not JSON),
-# `save_model_to` is a local path, and a loaded estimator should run with the
-# defaults of the process it is loaded into.
-_TRANSPORT_PARAMS = frozenset({"client_options", "save_model_to"})
+# Constructor params that describe the connection rather than the model. They
+# are left out of the record, and a record that carries them is rejected:
+# `client_options` holds per-session headers and timeouts (and is not JSON), and
+# a loaded estimator should run with the defaults of the process it is loaded
+# into.
+_TRANSPORT_PARAMS = frozenset({"client_options"})
 
 
 class _ModelRecord(BaseModel):
@@ -68,9 +64,9 @@ class _ModelRecord(BaseModel):
     n_train_rows: int | None = None
     # Classification only; None for regressors.
     classes: list[Any] | None = None
-    # "pending" while the server may still be running the fit: what `fit()`
-    # saves to `save_model_to` as soon as the server accepts an ASYNC fit.
-    # Records written before this field existed only held completed fits.
+    # "pending" for a fit `submit_fit()` started that had not been waited for
+    # when the record was saved, so the server may still be running it. Records
+    # written before this field existed only held completed fits.
     fit_status: Literal["pending", "completed"] = "completed"
 
 
@@ -113,8 +109,8 @@ def _write_record(path: str | Path, record: dict[str, Any]) -> None:
 
     Written to a file of its own beside `path` and renamed over it, so that a
     process stopped mid-write leaves the previous record whole instead of a
-    truncated one, and writers racing for one path (clones sharing
-    `save_model_to` in a parallel cross-validation) each install a whole record.
+    truncated one, and processes saving to one path at once each install a
+    whole record.
     """
     path = Path(path)
     aside = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
@@ -176,20 +172,18 @@ class ModelPersistenceMixin(BaseEstimator):
     # n_train_rows * n_test_rows, so this bounds the test rows per call.
     _n_train_rows: int | None = None
 
-    # Whether `load_model()` restored the fit as pending and the server has not
-    # been seen to complete it since. `predict()` asks the server once, `fit()`
-    # waits for it.
+    # Whether the server may still be running the fit `model_id_` refers to:
+    # set by `submit_fit()`, or by `load_model()` from a record of a pending
+    # fit, until `wait_for_fit()` sees the fit complete.
     _fit_pending: bool = False
-    # The file a pending fit was loaded from, saved again once the fit is seen
-    # to complete. None when it was loaded from a dict.
-    _pending_fit_path: Path | None = None
 
     # NOTE: Some "*_" attributes may be assigned before a fit succeeds (it used
     # to be the case for `classes_`), so we override sklearn's default of
     # inferring fittedness from any "*_" attribute and use `model_id_` as the
-    # single source of truth instead.
+    # single source of truth instead. A pending fit has its `model_id_`, but
+    # nothing to predict with until `wait_for_fit()` has seen it complete.
     def __sklearn_is_fitted__(self) -> bool:
-        return getattr(self, "model_id_", None) is not None
+        return getattr(self, "model_id_", None) is not None and not self._fit_pending
 
     def save_model(self, path: str | Path | None = None) -> dict[str, Any]:
         """Save the fitted model so it can be loaded later without re-fitting.
@@ -205,8 +199,8 @@ class ModelPersistenceMixin(BaseEstimator):
         with the same account, and they stay usable for as long as the training
         data remains on the server (see `UserDataClient` to delete it).
 
-        A model `load_model()` restored before its fit completed is saved as
-        pending until `predict()` or `fit()` sees the fit complete.
+        A model `submit_fit()` left pending is saved too, as a pending fit, so
+        that a later run can load it and `wait_for_fit()`.
 
         Args:
             path: Where to write the record as JSON. Nothing is written when
@@ -216,14 +210,29 @@ class ModelPersistenceMixin(BaseEstimator):
             The record as a JSON-serialisable dict, whether or not `path` was
             given, so it can also be kept elsewhere (a database, an experiment
             tracker) and handed to `load_model()` directly.
+
+        Raises:
+            NotFittedError: If the model has no fit, completed or pending.
         """
-        check_is_fitted(self)
-        record = self._model_record(
-            self.model_id_,
+        # A pending fit is not fitted yet, but saving it is what lets a later
+        # run wait for it.
+        if not self._fit_pending:
+            check_is_fitted(self)
+        params = {
+            k: _jsonable(v)
+            for k, v in self.get_params(deep=False).items()
+            if k not in _TRANSPORT_PARAMS
+        }
+        classes = getattr(self, "classes_", None)
+        record = _ModelRecord(
+            tabpfn_client_version=_installed_version(),
+            task=_task_of(type(self)),
+            model_id=self.model_id_,
+            params=params,
             n_train_rows=self._n_train_rows,
-            classes=getattr(self, "classes_", None),
+            classes=None if classes is None else np.asarray(classes).tolist(),
             fit_status="pending" if self._fit_pending else "completed",
-        )
+        ).model_dump(mode="json")
         if path is not None:
             _write_record(path, record)
         return record
@@ -233,22 +242,21 @@ class ModelPersistenceMixin(BaseEstimator):
         """Re-create a fitted estimator from a record written by `save_model()`.
 
         The estimator comes back with the saved hyperparameters and fitted
-        state, ready to `predict()` without calling `fit()`. No request is made;
-        the first `predict()` authenticates (like `fit()` would) and raises
-        `FittedModelNotFoundError` if the server no longer has the model.
+        state, ready to `predict()` without calling `fit()`. No request is made
+        here; the first `predict()` authenticates (like `fit()` would) and
+        raises `FittedModelNotFoundError` if the server no longer has the model.
 
-        A record that `fit()` saved to `save_model_to` before the fit completed
-        holds a pending fit. The first `predict()` then asks the server once
-        whether the fit has completed: if it has, it predicts and saves the file
-        again as a completed fit; if not, it raises `NotFittedError`. `fit()`
-        on the training data of that fit waits for it rather than fitting again.
+        A record of a fit that was still pending when it was saved comes back
+        pending, as `submit_fit()` left it: call `wait_for_fit()` before
+        `predict()`.
 
         Args:
             source: The path of a file written by `save_model(path)`, or the
                 dict it returned.
 
         Returns:
-            A fitted estimator of this class.
+            A fitted estimator of this class, or a pending one if the record
+            holds a pending fit.
 
         Raises:
             ValueError: If `source` is not a record written by `save_model()`,
@@ -266,7 +274,7 @@ class ModelPersistenceMixin(BaseEstimator):
         if transport:
             raise ValueError(
                 f"Cannot load this model into {cls.__name__}: {sorted(transport)} "
-                "describe the session rather than the model and do not belong "
+                "describe the connection rather than the model and do not belong "
                 "in a model record. Drop them, and set them on the loaded "
                 "estimator instead."
             )
@@ -298,94 +306,5 @@ class ModelPersistenceMixin(BaseEstimator):
         estimator._n_train_rows = record.n_train_rows
         if record.classes is not None:
             setattr(estimator, "classes_", np.asarray(record.classes))
-        if record.fit_status == "pending":
-            estimator._fit_pending = True
-            if not isinstance(source, dict):
-                estimator._pending_fit_path = Path(source)
+        estimator._fit_pending = record.fit_status == "pending"
         return estimator
-
-    def _complete_pending_fit(self) -> None:
-        """Take note that the server completed the pending fit `load_model()` restored.
-
-        The file it was loaded from is saved again as a completed fit, so that
-        a model loaded from it next asks the server nothing.
-        """
-        self._fit_pending = False
-        path, self._pending_fit_path = self._pending_fit_path, None
-        if path is None:
-            return
-        try:
-            self.save_model(path)
-        except OSError as exc:
-            logger.warning(
-                f"Fit {self.model_id_} has completed, but {path} could not be "
-                f"updated, so a model loaded from it asks the server again: {exc}"
-            )
-
-    def _forget_fit(self) -> None:
-        """Drop the fit `model_id_` refers to, leaving the estimator unfitted."""
-        for name in ("model_id_", "classes_"):
-            vars(self).pop(name, None)
-        self._n_train_rows = None
-        self._fit_pending = False
-        self._pending_fit_path = None
-
-    def _record_params(self) -> dict[str, Any]:
-        """Return the hyperparameters a record holds, as JSON types."""
-        return {
-            k: _jsonable(v)
-            for k, v in self.get_params(deep=False).items()
-            if k not in _TRANSPORT_PARAMS
-        }
-
-    def _model_record(
-        self,
-        model_id: UUID,
-        *,
-        n_train_rows: int | None,
-        classes: Any,
-        fit_status: Literal["pending", "completed"],
-    ) -> dict[str, Any]:
-        """Return the record of a fit of this estimator, as `save_model()` writes it."""
-        return _ModelRecord(
-            tabpfn_client_version=_installed_version(),
-            task=_task_of(type(self)),
-            model_id=model_id,
-            params=self._record_params(),
-            n_train_rows=n_train_rows,
-            classes=None if classes is None else np.asarray(classes).tolist(),
-            fit_status=fit_status,
-        ).model_dump(mode="json")
-
-    def _save_pending_fit(
-        self,
-        path: str | Path,
-        model_id: UUID,
-        *,
-        n_train_rows: int,
-        classes: Any,
-    ) -> None:
-        """Save at `path` a fit that the server accepted but has not completed."""
-        _write_record(
-            path,
-            self._model_record(
-                model_id,
-                n_train_rows=n_train_rows,
-                classes=classes,
-                fit_status="pending",
-            ),
-        )
-
-    def _remove_saved_fit(self, path: str | Path, model_id: UUID) -> None:
-        """Remove the record at `path` if it still holds the fit `model_id`.
-
-        Clones share their `save_model_to` path, so another one may have saved
-        its own fit there since; that record, or any file that is not a record,
-        is left in place.
-        """
-        try:
-            record = _read_record(path)
-        except (OSError, ValueError):
-            return
-        if record.model_id == model_id:
-            Path(path).unlink(missing_ok=True)
