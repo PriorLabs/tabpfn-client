@@ -196,3 +196,11 @@ class TestFit:
         clf._cached_model_id = "stale-id"
         clf.fit(np.zeros((3, 2)), np.array([0, 1, 0]))
         assert clf._cached_model_id is None
+
+    def test_thinking_rejects_a_single_class(self):
+        with pytest.raises(ValueError, match="only one class"):
+            _clf(thinking_mode=True).fit(np.zeros((3, 2)), np.zeros(3))
+
+    def test_a_single_class_is_accepted_without_thinking(self):
+        clf = _clf().fit(np.zeros((3, 2)), np.zeros(3))
+        assert list(clf.classes_) == [0]

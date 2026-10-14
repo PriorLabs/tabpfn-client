@@ -842,12 +842,25 @@ class TestTabPFNClassifierInference(unittest.TestCase):
             tabpfn.fit(X, y_str)
         self.assertIn("exceeds the maximal number of", str(cm.exception))
 
-    def test_single_class_raises_error(self):
+    def test_single_class_raises_error_in_thinking_mode(self):
         X = np.random.rand(10, 5)
         for y in (np.zeros(10, dtype=int), np.array(["a"] * 10)):
-            with self.assertRaises(ValueError) as cm:
-                TabPFNClassifier().fit(X, y)
-            self.assertIn("only one class", str(cm.exception))
+            for tabpfn in (
+                TabPFNClassifier(thinking_mode=True),
+                TabPFNClassifier(thinking_effort="high"),
+            ):
+                with patch.object(InferenceClient, "fit_with_result") as fit:
+                    with self.assertRaises(ValueError) as cm:
+                        tabpfn.fit(X, y)
+                self.assertIn("only one class", str(cm.exception))
+                fit.assert_not_called()
+
+    def test_single_class_reaches_the_server_without_thinking(self):
+        # Parity with the local package, which fits a single class.
+        X = np.random.rand(10, 5)
+        with patch.object(InferenceClient, "fit_with_result") as fit:
+            TabPFNClassifier().fit(X, np.zeros(10, dtype=int))
+        fit.assert_called_once()
 
 
 class TestTabPFNModelSelection(unittest.TestCase):

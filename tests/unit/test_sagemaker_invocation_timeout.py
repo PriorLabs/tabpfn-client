@@ -54,5 +54,16 @@ class TestSagemakerInvocationTimeout(unittest.TestCase):
         self.assertNotIn("InvocationTimeoutSeconds", kwargs)
 
 
+class TestSagemakerSingleClass(unittest.TestCase):
+    def test_thinking_rejects_a_single_class(self):
+        clf = TabPFNClassifier(endpoint_name="ep", thinking_mode=True)
+        with self.assertRaisesRegex(ValueError, "only one class"):
+            clf.fit(np.zeros((3, 2)), np.zeros(3))
+
+    def test_a_single_class_is_accepted_without_thinking(self):
+        clf = TabPFNClassifier(endpoint_name="ep").fit(np.zeros((3, 2)), np.zeros(3))
+        self.assertEqual(list(clf.classes_), [0])
+
+
 if __name__ == "__main__":
     unittest.main()

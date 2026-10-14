@@ -204,7 +204,8 @@ class _SagemakerBase(BaseEstimator):
             The estimator itself.
 
         Raises:
-            ValueError: If `X` and `y` have different numbers of samples.
+            ValueError: If `X` and `y` have different numbers of samples, or
+                thinking mode is on and `y` has only one class.
         """
         X_arr = X if isinstance(X, pd.DataFrame) else np.asarray(X)
         y_arr = y if isinstance(y, (pd.DataFrame, pd.Series)) else np.asarray(y)
@@ -218,6 +219,12 @@ class _SagemakerBase(BaseEstimator):
         self._cached_model_id: Optional[str] = None
         if self._TASK == "classification":
             self.classes_ = np.unique(y_arr)
+            # Only thinking needs 2 classes; refused here rather than after the
+            # first predict call has sent the training data.
+            if self._thinking_active and len(self.classes_) < 2:
+                raise ValueError(
+                    "y contains only one class; thinking mode needs at least 2 classes."
+                )
         return self
 
     def _invoke(
