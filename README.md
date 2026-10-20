@@ -62,7 +62,9 @@ from sklearn.model_selection import train_test_split
 # Load an example dataset
 
 X, y = load_breast_cancer(return_X_y=True)
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.5, random_state=42)
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.5, random_state=42
+)
 
 # Use it like any sklearn model
 model = TabPFNClassifier()
@@ -126,7 +128,7 @@ from tabpfn_client import TabPFNRegressor
 model = TabPFNRegressor(fit_mode="fit_with_cache")
 model.fit(X_train, y_train)
 
-model.predict(X_test)     # served from the cache built during fit()
+model.predict(X_test)  # served from the cache built during fit()
 model.predict(X_other)
 ```
 
@@ -264,6 +266,7 @@ Or in code, before the first fit or predict:
 
 ```python
 import tabpfn_client
+
 tabpfn_client.set_access_token("<your-token>")
 ```
 
@@ -277,6 +280,7 @@ If you would rather not copy a token by hand, call `interactive_login()` explici
 
 ```python
 from tabpfn_client import interactive_login
+
 interactive_login()
 ```
 
@@ -306,6 +310,7 @@ To read back the token in use, for example to pass it to another machine:
 
 ```python
 import tabpfn_client
+
 token = tabpfn_client.get_access_token()
 ```
 
@@ -327,7 +332,9 @@ from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
 
 X, y = load_breast_cancer(return_X_y=True)
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.5, random_state=42)
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.5, random_state=42
+)
 
 clf = TabPFNClassifier(
     endpoint_name="your-sagemaker-endpoint-name",
@@ -370,7 +377,9 @@ from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
 
 X, y = load_breast_cancer(return_X_y=True)
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.5, random_state=42)
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.5, random_state=42
+)
 
 clf = TabPFNClassifier(
     endpoint_url="https://<your-endpoint>.<region>.inference.ml.azure.com/predict",
@@ -395,8 +404,8 @@ clf = TabPFNClassifier(
     use_kv_cache=True,
 )
 clf.fit(X_train, y_train)
-clf.predict(X_test_a)          # first call: fit + predict on the endpoint
-clf.predict_proba(X_test_b)    # cache hit: predict only — much faster
+clf.predict(X_test_a)  # first call: fit + predict on the endpoint
+clf.predict_proba(X_test_b)  # cache hit: predict only — much faster
 ```
 
 Leave `use_kv_cache=False` (the default) when each call uses a different training set; otherwise the cache is dead weight on the endpoint.

@@ -18,7 +18,9 @@ results = []
 for result in json.load(sys.stdin)["generalDiagnostics"]:
     try:
         parse = {
-            "level": result["severity"] if result["severity"] != "information" else "note",
+            "level": result["severity"]
+            if result["severity"] != "information"
+            else "note",
             "locations": [
                 {
                     "physicalLocation": {
