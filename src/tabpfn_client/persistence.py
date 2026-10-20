@@ -201,7 +201,9 @@ class ModelPersistenceMixin(BaseEstimator):
         data remains on the server (see `UserDataClient` to delete it).
 
         A model `submit_fit()` left pending is saved too, as a pending fit, so
-        that a later run can load it and `wait_for_fit()`.
+        that a later run can load it and `wait_for_fit()`. A prediction
+        `submit_predict()` left pending is not saved: the loaded model has no
+        prediction to wait for.
 
         Args:
             path: Where to write the record as JSON. Nothing is written when

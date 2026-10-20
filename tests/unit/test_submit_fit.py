@@ -1,11 +1,12 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 #  Licensed under the Apache License, Version 2.0
 """`submit_fit()` / `wait_for_fit()`: a fit started without waiting for it, the
-pending model it leaves, and how a later run saves, loads and waits for it.
+pending model it leaves, and how a later run saves, loads and waits for it; and
+the thinking fits that always run as background jobs.
 
 Hermetic by default: `init` and the `InferenceClient` boundary are patched. The
-mock-server test at the end runs the real HTTP layer for a fit submitted in one
-run and waited for in a later one.
+mock-server tests at the end run the real HTTP layer for a fit submitted in one
+run and waited for in a later one, and for thinking fits.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 from uuid import UUID
 
@@ -175,7 +176,10 @@ class TestPredict:
     @ESTIMATORS
     def test_raises_on_a_pending_fit_without_a_request(self, estimator_cls, y):
         model = _submitted(estimator_cls, y)
-        methods = [getattr(model, m, None) for m in ("predict", "predict_proba")]
+        methods = [
+            getattr(model, m, None)
+            for m in ("predict", "predict_proba", "submit_predict")
+        ]
 
         with _offline_server() as server:
             for predict in (m for m in methods if m is not None):
@@ -288,6 +292,48 @@ class TestFit:
         assert server.predict.call_args.kwargs["fitted_train_set_id"] == NEW_FIT_ID
         assert model.save_model()["fit_status"] == "completed"
 
+    @ESTIMATORS
+    @pytest.mark.parametrize("api_mode", list(ApiMode))
+    @pytest.mark.parametrize(
+        "thinking",
+        [{"thinking_mode": True}, {"thinking_effort": "high"}],
+        ids=["thinking_mode", "thinking_effort"],
+    )
+    def test_a_thinking_fit_runs_as_a_background_job_whatever_the_api_mode(
+        self, estimator_cls, y, api_mode, thinking
+    ):
+        with _offline_server() as server:
+            model = estimator_cls(api_mode=api_mode, **thinking).fit(X_TRAIN, y)
+
+        assert server.fit.call_args.kwargs["api_mode"] == ApiMode.ASYNC
+        assert server.fit.call_args.kwargs["wait"] is True
+        check_is_fitted(model)
+
+    @ESTIMATORS
+    @pytest.mark.parametrize("api_mode", list(ApiMode))
+    def test_other_fits_run_in_the_api_mode(self, estimator_cls, y, api_mode):
+        with _offline_server() as server:
+            estimator_cls(api_mode=api_mode).fit(X_TRAIN, y)
+
+        assert server.fit.call_args.kwargs["api_mode"] == api_mode
+
+    @ESTIMATORS
+    @pytest.mark.parametrize(
+        ("fit", "params"),
+        [("fit", {"thinking_mode": True}), ("submit_fit", {})],
+        ids=["thinking_fit", "submit_fit"],
+    )
+    def test_an_invalid_api_mode_fails_before_the_upload(
+        self, estimator_cls, y, fit, params
+    ):
+        model = estimator_cls(api_mode=cast(Any, "ASYNC"), **params)
+
+        with _offline_server() as server:
+            with pytest.raises(ValueError, match="is not a valid ApiMode"):
+                getattr(model, fit)(X_TRAIN, y)
+
+        server.fit.assert_not_called()
+
 
 class TestSaveAndLoad:
     def test_saves_a_pending_fit(self, tmp_path):
@@ -337,16 +383,6 @@ class TestSaveAndLoad:
         # Nothing rewrites the file; saving again records the completed fit.
         assert path.read_text() == before
         assert loaded.save_model(path)["fit_status"] == "completed"
-
-
-@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
-def test_async_prediction_is_not_implemented_yet(estimator_cls):
-    model = estimator_cls()
-
-    with pytest.raises(NotImplementedError, match=r"predict\(\)"):
-        model.submit_predict(X_TEST)
-    with pytest.raises(NotImplementedError, match=r"predict\(\)"):
-        model.wait_for_predict()
 
 
 class TestWithServer:
@@ -471,3 +507,44 @@ class TestWithServer:
         predict_request = json.loads(predict_route.calls.last.request.content)
         assert predict_request["fitted_train_set_id"] == fit_id
         assert clf.get_timings()["fit"] == TIMINGS
+
+    @with_mock_server()
+    def test_a_thinking_fit_holds_no_request_open_whatever_the_api_mode(
+        self, mock_server
+    ):
+        fit_id = "00000000-0000-0000-0000-000000000002"
+        # Signed in already, so `init()` asks nothing; teardown signs out.
+        Config.is_initialized = True
+        mock_server.router.post("/tabpfn/prepare_train_set_upload").respond(
+            409,
+            json={
+                "message": "duplicate",
+                "error_code": "DUPLICATE_TRAIN_SET_UPLOAD",
+                "train_set_upload_id": "00000000-0000-0000-0000-000000000001",
+            },
+        )
+        # No sync /tabpfn/fit route: fitting through it fails the test.
+        submit_route = mock_server.router.post("/tabpfn/submit_fit_job")
+        submit_route.respond(200, json={"fitted_train_set_id": fit_id})
+        status_route = mock_server.router.post("/tabpfn/get_fit_status")
+        status_route.respond(
+            200,
+            json={
+                "fitted_train_set_id": fit_id,
+                "status": "completed",
+                "timings": TIMINGS,
+            },
+        )
+
+        with patch.object(ServiceClient, "get_settings", return_value=None):
+            fitted = [
+                TabPFNClassifier(thinking_mode=True, api_mode=api_mode).fit(
+                    X_TRAIN, Y_TRAIN
+                )
+                for api_mode in ApiMode
+            ]
+
+        assert submit_route.call_count == status_route.call_count == len(ApiMode)
+        for clf in fitted:
+            check_is_fitted(clf)
+            assert clf.get_timings()["fit"] == TIMINGS

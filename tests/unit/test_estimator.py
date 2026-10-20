@@ -111,7 +111,9 @@ _ALLOWED_NON_NULL_DEFAULT_PREDICT_PARAMS = [
     "predict_fn, predict_params_model",
     [
         (TabPFNClassifier._predict, ClassifierPredictParams),
+        (TabPFNClassifier.submit_predict, ClassifierPredictParams),
         (TabPFNRegressor.predict, RegressorPredictParams),
+        (TabPFNRegressor.submit_predict, RegressorPredictParams),
     ],
 )
 def test_client_predict_params_include_server_predict_params(

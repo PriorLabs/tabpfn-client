@@ -414,6 +414,10 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         fitted_train_set_id: UUID,
         task_config: ClassifierConfig | RegressorConfig,
         client_options: ClientOptions | None = None,
+        *,
+        api_mode: ApiMode = ApiMode.SYNC,
+        n_train_rows: int | None = None,
+        thinking: bool = False,
     ) -> PredictionResult:
         """Predict on a test set with a fitted train set.
 
@@ -424,4 +428,59 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             fitted_train_set_id=fitted_train_set_id,
             task_config=task_config,
             client_options=client_options,
+            api_mode=api_mode,
+            n_train_rows=n_train_rows,
+            thinking=thinking,
+        )
+
+    @classmethod
+    def submit_predict(
+        cls,
+        X,
+        fitted_train_set_id: UUID,
+        task_config: ClassifierConfig | RegressorConfig,
+        client_options: ClientOptions | None = None,
+    ) -> UUID:
+        """Start predicting on a test set, without waiting for the prediction.
+
+        See `ServiceClient.submit_predict`.
+        """
+        return ServiceClient.submit_predict(
+            x_test=X,
+            fitted_train_set_id=fitted_train_set_id,
+            task_config=task_config,
+            client_options=client_options,
+        )
+
+    @classmethod
+    def wait_for_predict(
+        cls,
+        fitted_test_set_id: UUID | str,
+        client_options: ClientOptions | None = None,
+    ) -> PredictionResult:
+        """Wait for a prediction the server accepted, and return it.
+
+        Also returns, for about a day, the result of a prediction whose wait
+        broke off, given the id it logged. See `ServiceClient.wait_for_predict`.
+
+        Args:
+            fitted_test_set_id: The id of the prediction, as a UUID or a string.
+            client_options: Client specific options (e.g. timeout, headers).
+
+        Returns:
+            The prediction, as `predict` returns it.
+
+        Raises:
+            ValueError: If `fitted_test_set_id` is not a valid id.
+            PredictFailedError: If the server reports that the prediction failed.
+            RefitRequiredError: If the fitted model can no longer predict and
+                must be fitted again.
+            TimeoutError: If the prediction has not completed within
+                `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds.
+            RuntimeError: If the server does not have the prediction, for
+                instance because its result is no longer stored, or polling
+                for it fails.
+        """
+        return ServiceClient.wait_for_predict(
+            fitted_test_set_id, client_options=client_options
         )

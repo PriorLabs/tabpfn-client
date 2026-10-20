@@ -1,0 +1,1 @@
+A thinking-mode fit now always runs as a background job that the client polls, whatever `api_mode` is, instead of keeping one request open for up to an hour. `fit()` still returns once the fit has completed, and in every mode waits for it for at most `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds: by default the server's 2 hours, which outlasts the server's own deadline for a fit.

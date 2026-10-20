@@ -53,9 +53,17 @@ TextHandling = Literal["advanced", "simple"]
 ThinkingEffort = Literal["medium", "high"]
 
 
+class PredictAsyncThresholds(BaseModel):
+    train_rows: int
+    test_rows: int
+
+
 class AsyncSettings(BaseModel):
     use_above_trainset_size_bytes: int
     poll_timeout_secs: float
+    # Optional, unlike the server SDK: older servers omit them, and get_settings() drops settings that fail validation, which would disable every limit check.
+    predict_use_above: PredictAsyncThresholds | None = None
+    thinking_predict_use_above: PredictAsyncThresholds | None = None
 
 
 class ClassifierOutputType(str, Enum):
@@ -202,19 +210,25 @@ class ModelLimit(BaseModel):
     test_set_max_cells: int
 
 
+class PredictStatus(str, Enum):
+    """Status of a predict job."""
+
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class PredictTimings(BaseModel):
     """Where a predict's time went, per stage. Queue wait covers everything
-    outside worker processing: waiting for a free worker and transport. A refit
-    the server triggers counts towards the stage it happened in.
+    outside worker processing: waiting for a free worker and transport.
     """
 
     test_set_transform_queue_wait_s: float | None = Field(
-        default=None,
-        description="Seconds the test set transform waited for a worker. Null when an earlier request already transformed this test set.",
+        default=None, description="Seconds the test set transform waited for a worker."
     )
     test_set_transform_s: float | None = Field(
         default=None,
-        description="Seconds a worker spent loading, validating and preprocessing the test set. Null when an earlier request already transformed this test set.",
+        description="Seconds a worker spent loading, validating and preprocessing the test set.",
     )
     predict_queue_wait_s: float | None = Field(
         default=None, description="Seconds the prediction waited for a worker."
@@ -350,6 +364,21 @@ class GetFitStatusResponse(BaseModel):
     timings: FitTimings | None = None
 
 
+class GetPredictResultRequest(BaseModel):
+    fitted_test_set_id: UUID
+
+
+class GetPredictResultResponse(BaseModel):
+    fitted_test_set_id: UUID
+    status: Annotated[PredictStatus | UnknownEnum, Field(union_mode="left_to_right")]
+    retry_in_secs: float | None = None
+    error: str | None = None
+    error_code: str | None = None
+    prediction: Prediction | None = None
+    metadata: Metadata | None = None
+    timings: PredictTimings | None = None
+
+
 class GetSettingsResponse(BaseModel):
     default_model_version: Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")]
     max_model_limit: ModelLimit
@@ -366,6 +395,14 @@ class NotFoundErrorResponse(BaseModel):
     trace_id: UUID | None = None
 
 
+class PredictPendingResponse(BaseModel):
+    """A predict still running when the wait for it ended."""
+
+    fitted_test_set_id: UUID
+    status: Annotated[PredictStatus | UnknownEnum, Field(union_mode="left_to_right")] | None = None
+    retry_in_secs: float
+
+
 class PredictRequest(BaseModel):
     test_set_upload_id: UUID
     fitted_train_set_id: UUID
@@ -376,6 +413,9 @@ class PredictResponse(BaseModel):
     prediction: Prediction
     metadata: Metadata
     timings: PredictTimings | None = None
+    fitted_test_set_id: UUID | None = Field(
+        default=None, description="Id of the prediction, to get it again with get_predict_result."
+    )
 
 
 class PrepareTestSetUploadRequest(BaseModel):
@@ -418,6 +458,16 @@ class SubmitFitJobRequest(BaseModel):
 
 class SubmitFitJobResponse(BaseModel):
     fitted_train_set_id: UUID
+
+
+class SubmitPredictJobRequest(BaseModel):
+    test_set_upload_id: UUID
+    fitted_train_set_id: UUID
+    task_config: TaskConfig
+
+
+class SubmitPredictJobResponse(BaseModel):
+    fitted_test_set_id: UUID
 
 
 class QuotaOperation(str, Enum):

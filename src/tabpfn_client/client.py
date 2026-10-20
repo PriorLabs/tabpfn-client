@@ -36,6 +36,10 @@ from tabpfn_client.errors import (
     EmptyResponseError,
     FitFailedError,
     FittedModelNotFoundError,
+    PredictFailedError,
+    PredictionGoneError,
+    RefitRequiredError,
+    StreamedServerError,
 )
 
 import google_crc32c
@@ -64,16 +68,23 @@ from tabpfn_client.api_models import (
     FitRequest,
     FitResponse,
     SubmitFitJobRequest,
+    FitMode,
     FitStatus,
     GetFitStatusRequest,
     GetFitStatusResponse,
     PredictRequest,
     Metadata,
     PredictResponse,
+    PredictPendingResponse,
+    PredictStatus,
     PredictTimings,
     ClassifierConfig,
     RegressorConfig,
     SubmitFitJobResponse,
+    SubmitPredictJobRequest,
+    SubmitPredictJobResponse,
+    GetPredictResultRequest,
+    GetPredictResultResponse,
     ThinkingConfig,
     AsyncSettings,
     FitTaskConfig,
@@ -98,7 +109,9 @@ class PredictResponseWithDownloadURI(BaseModel):
     timings: PredictTimings | None = None
 
 
-PredictResponseUnion: TypeAlias = PredictResponse | PredictResponseWithDownloadURI
+PredictResponseUnion: TypeAlias = (
+    PredictResponse | PredictResponseWithDownloadURI | PredictPendingResponse
+)
 
 _PredictResponseUnion: TypeAdapter[PredictResponseUnion] = TypeAdapter(
     PredictResponseUnion
@@ -178,6 +191,69 @@ def _fitted_model_not_found(
     return FittedModelNotFoundError(message)
 
 
+_NO_PREDICT_JOBS = (
+    "This TabPFN server does not run predictions as background jobs; "
+    "use predict() instead."
+)
+
+# The server books a stale or missing KV cache as a USER_ERROR, without a code
+# of its own, so its message is the only sign that the model must be fitted
+# again. Drop this text match once the server gives these failures their own
+# error code.
+_REFIT_TEXT = "call fit() again"
+
+
+def _requires_refit(
+    message: str | None,
+    *,
+    error_code: str | None = None,
+    status_code: int | None = None,
+) -> bool:
+    """Whether a failed prediction means the model must be fitted again.
+
+    ``status_code`` is the HTTP status of a failed ``/tabpfn/predict``, every
+    409 of which asks for a new fit.
+    """
+    return (
+        error_code == "NEEDS_REFITTING"
+        or status_code == 409
+        or (message is not None and _REFIT_TEXT in message)
+    )
+
+
+def _prediction_failed(
+    fitted_test_set_id: UUID, error: str | None, error_code: str | None
+) -> PredictFailedError:
+    """Build the error for a prediction the server reports as failed."""
+    message = (
+        f"Prediction {fitted_test_set_id} failed: "
+        f"{error or 'no error message provided'}"
+    )
+    if error_code:
+        message += f" (error code {error_code})"
+    if _requires_refit(error, error_code=error_code):
+        return RefitRequiredError(message)
+    return PredictFailedError(message)
+
+
+def _prediction_gone(
+    fitted_test_set_id: UUID, error: RuntimeError
+) -> PredictionGoneError:
+    """Build the error for a prediction the server does not have."""
+    return PredictionGoneError(
+        f"The server does not have prediction {fitted_test_set_id}: {error}"
+    )
+
+
+def _resume_hint(fitted_test_set_id: UUID) -> str:
+    """Say how any process gets the result of a prediction, for a log message."""
+    return (
+        "its result stays on the server for about a day: call "
+        "tabpfn_client.init(), then tabpfn_client.service_wrapper."
+        f'InferenceClient.wait_for_predict("{fitted_test_set_id}")'
+    )
+
+
 def _serialize_to_parquet(df: pd.DataFrame) -> tuple[bytes, str]:
     """Serialize ``df`` to zstd-compressed parquet.
 
@@ -197,6 +273,13 @@ ErrorT = TypeVar("ErrorT", bound=BaseModel, default=Never)
 # Floor for the server's `retry_in_secs` polling hint — defensive: a zero or
 # negative value must neither busy-poll the endpoint nor crash `time.sleep`.
 _MIN_RETRY_INTERVAL_SECS = 0.3
+
+# Cap on the HTTP timeout of a prediction poll. httpx applies it to each read,
+# not to the whole response, and the server sends a byte at least every 5 s
+# while it works on a poll, then streams a stored result in chunks. So 2 minutes
+# of silence means a lost response, which the next poll gets again; the default
+# timeout of 15 minutes would stall the wait instead.
+_MAX_POLL_TIMEOUT_SECS = 120.0
 
 
 class ServiceClient(Singleton):
@@ -266,11 +349,13 @@ class ServiceClient(Singleton):
 
     @classmethod
     def _resolve_async_settings(cls) -> AsyncSettings:
-        """Resolve async-fit settings: environment > server default > client default.
+        """Resolve async settings: environment > server default > client default.
 
         An option explicitly set via the environment wins; otherwise the
         server-sent value applies; the client default is the fallback when the
-        server is unreachable.
+        server is unreachable. The predict thresholds come from the server
+        alone: None means it runs no predictions as background jobs, or its
+        settings are unavailable.
         """
         opts = get_opts()
         api_settings = cls.get_settings()
@@ -292,7 +377,65 @@ class ServiceClient(Singleton):
                 "TABPFN_CLIENT_ASYNC_POLL_TIMEOUT",
                 server.poll_timeout_secs if server else None,
             ),
+            predict_use_above=server.predict_use_above if server else None,
+            thinking_predict_use_above=(
+                server.thinking_predict_use_above if server else None
+            ),
         )
+
+    @classmethod
+    def _resolve_predict_mode(
+        cls,
+        api_mode: ApiMode,
+        *,
+        n_train_rows: int | None,
+        n_test_rows: int,
+        thinking: bool,
+        fit_with_cache: bool,
+    ) -> ApiMode:
+        """Decide whether a prediction runs as one request or as a polled job.
+
+        A server that advertises no predict thresholds runs no predictions as
+        background jobs, so every mode predicts with one request there, ASYNC
+        included. Otherwise SYNC and ASYNC are kept, and AUTO runs the
+        prediction as a job once the fit's train rows or the test rows reach the
+        server's thresholds: the thinking ones for a thinking fit, when the
+        server sends them. A fit with a KV cache predicts fast whatever its
+        size, so AUTO predicts it with one request.
+
+        Args:
+            api_mode: The requested mode; a plain string works too, as
+                `load_model()` restores the estimator's `api_mode` as one.
+            n_train_rows: The fit's train rows, or None if unknown, in which
+                case the test rows decide alone.
+            n_test_rows: The number of rows to predict.
+            thinking: Whether the fit runs in thinking mode.
+            fit_with_cache: Whether the fit keeps a KV cache.
+
+        Returns:
+            `ApiMode.SYNC` for one request, `ApiMode.ASYNC` for a polled job.
+        """
+        api_mode = ApiMode(api_mode)
+        async_settings = cls._resolve_async_settings()
+        thresholds = async_settings.predict_use_above
+        if thresholds is None:
+            logger.debug(
+                "The server runs no predictions as background jobs; predicting "
+                "with one request."
+            )
+            return ApiMode.SYNC
+        if api_mode != ApiMode.AUTO:
+            return api_mode
+        if fit_with_cache:
+            return ApiMode.SYNC
+        if thinking and async_settings.thinking_predict_use_above is not None:
+            thresholds = async_settings.thinking_predict_use_above
+        # `>=`: the server runs a prediction as a job once it reaches either
+        # count. The fit rule compares bytes with `>` instead.
+        reaches_thresholds = (
+            n_train_rows is not None and n_train_rows >= thresholds.train_rows
+        ) or n_test_rows >= thresholds.test_rows
+        return ApiMode.ASYNC if reaches_thresholds else ApiMode.SYNC
 
     @classmethod
     def authorize(cls, access_token: str):
@@ -748,8 +891,138 @@ class ServiceClient(Singleton):
         x_test: pd.DataFrame | np.ndarray,
         task_config: ClassifierConfig | RegressorConfig,
         client_options: ClientOptions | None = None,
+        *,
+        api_mode: ApiMode = ApiMode.SYNC,
+        n_train_rows: int | None = None,
+        thinking: bool = False,
     ) -> PredictionResult:
         """Upload a test set and predict it with a fitted train set.
+
+        SYNC predicts with one request. When the server stops waiting for the
+        prediction before it completes, it answers that the prediction is still
+        running, and the client polls for the result. ASYNC runs the prediction
+        as a background job the client polls from the start. AUTO picks ASYNC
+        once the fit's train rows or the test rows reach the server's
+        thresholds. A server that advertises no thresholds runs no predictions
+        as background jobs, so every mode predicts with one request there.
+
+        Args:
+            fitted_train_set_id: The unique ID of the fitted train set in the server.
+            x_test: The test input, of shape (n_samples, n_features).
+            task_config: The classification or regression task configuration.
+            client_options: Client specific options (e.g. timeout, headers).
+            api_mode: The API mode to use for the prediction: SYNC, ASYNC, or AUTO.
+            n_train_rows: The fit's train rows, for AUTO; None if unknown.
+            thinking: Whether the fit runs in thinking mode, for AUTO.
+
+        Returns:
+            The result from the predict API call containing the prediction,
+            metadata, server-reported timings and the prediction's id.
+
+        Raises:
+            ValueError: If the in-memory size of ``x_test`` exceeds the server
+                limit, or ``api_mode`` is not a valid mode.
+            FittedModelNotFoundError: If the fitted train set is not found.
+            PredictFailedError: If the client polls for the prediction and the
+                server reports that it failed. A failure the server reports in
+                answer to the prediction request itself raises RuntimeError.
+            RefitRequiredError: If the fitted model can no longer predict and
+                must be fitted again.
+            TimeoutError: If a prediction the client polls for has not completed
+                within the poll timeout.
+        """
+        api_mode = ApiMode(api_mode)
+        client_options = client_options or ClientOptions()
+        test_set_upload_id = cls._upload_test_set(
+            fitted_train_set_id, x_test, client_options
+        )
+        tabpfn_config = task_config.tabpfn_config
+        predict_mode = cls._resolve_predict_mode(
+            api_mode,
+            n_train_rows=n_train_rows,
+            n_test_rows=len(x_test),
+            thinking=thinking,
+            fit_with_cache=tabpfn_config is not None
+            and tabpfn_config.fit_mode == FitMode.FIT_WITH_CACHE,
+        )
+
+        if predict_mode == ApiMode.ASYNC:
+            submit_resp = cls._submit_predict_job(
+                req=SubmitPredictJobRequest(
+                    test_set_upload_id=test_set_upload_id,
+                    fitted_train_set_id=fitted_train_set_id,
+                    task_config=task_config,
+                ),
+                timeout=client_options.timeout,
+                headers=client_options.headers,
+            )
+            if submit_resp is not None:
+                return cls._await_prediction(
+                    submit_resp.fitted_test_set_id, client_options
+                )
+            # The cached settings promised background jobs that this server
+            # (rolled back, say) does not run. It created no job, so one request
+            # with the same upload predicts, and bills, once.
+            logger.warning(
+                "This TabPFN server does not run predictions as background jobs; "
+                "predicting with one request."
+            )
+            # Expire the cached settings. -inf, not 0.0: `time.monotonic()`
+            # counts from boot, so 0.0 would leave them fresh during the
+            # machine's first hour of uptime.
+            cls._api_settings_ts = float("-inf")
+
+        predict_resp = cls._predict(
+            req=PredictRequest(
+                test_set_upload_id=test_set_upload_id,
+                fitted_train_set_id=fitted_train_set_id,
+                task_config=task_config,
+            ),
+            timeout=client_options.timeout,
+            headers=client_options.headers,
+        )
+
+        match predict_resp:
+            case PredictResponse():
+                return cls._prediction_result(
+                    predict_resp.prediction,
+                    predict_resp.metadata,
+                    predict_resp.timings,
+                    predict_resp.fitted_test_set_id,
+                )
+            case PredictResponseWithDownloadURI():
+                prediction = cls._download_prediction(
+                    predict_resp.prediction_uri,
+                    timeout=client_options.timeout,
+                )
+                return cls._prediction_result(
+                    prediction, predict_resp.metadata, predict_resp.timings, None
+                )
+            case PredictPendingResponse():
+                logger.info(
+                    f"Prediction {predict_resp.fitted_test_set_id} is still "
+                    "running on the server; polling for its result."
+                )
+                return cls._await_prediction(
+                    predict_resp.fitted_test_set_id,
+                    client_options,
+                    first_poll_delay_secs=predict_resp.retry_in_secs,
+                )
+            case _:
+                assert_never(predict_resp)
+
+    @classmethod
+    def submit_predict(
+        cls,
+        fitted_train_set_id: UUID,
+        x_test: pd.DataFrame | np.ndarray,
+        task_config: ClassifierConfig | RegressorConfig,
+        client_options: ClientOptions | None = None,
+    ) -> UUID:
+        """Upload a test set and start predicting it, without waiting for it.
+
+        The server runs the prediction as a background job; `wait_for_predict`
+        waits for it and returns it.
 
         Args:
             fitted_train_set_id: The unique ID of the fitted train set in the server.
@@ -758,15 +1031,106 @@ class ServiceClient(Singleton):
             client_options: Client specific options (e.g. timeout, headers).
 
         Returns:
-            The result from the predict API call containing the prediction,
-            metadata, and server-reported timings.
+            The id of the prediction, which `wait_for_predict` takes.
+
+        Raises:
+            RuntimeError: If the server does not run predictions as background
+                jobs.
+            ValueError: If the in-memory size of ``x_test`` exceeds the server limit.
+            FittedModelNotFoundError: If the fitted train set is not found.
+        """
+        client_options = client_options or ClientOptions()
+        # The settings already tell whether the upload would be for nothing.
+        api_settings = cls.get_settings()
+        if (
+            api_settings is not None
+            and api_settings.async_settings.predict_use_above is None
+        ):
+            # Settings cached before the server started to run predictions as
+            # background jobs would refuse them for up to an hour, so a refusal
+            # asks the server again first.
+            cls._api_settings_ts = float("-inf")
+            api_settings = cls.get_settings()
+            if (
+                api_settings is not None
+                and api_settings.async_settings.predict_use_above is None
+            ):
+                raise RuntimeError(_NO_PREDICT_JOBS)
+        test_set_upload_id = cls._upload_test_set(
+            fitted_train_set_id, x_test, client_options
+        )
+        submit_resp = cls._submit_predict_job(
+            req=SubmitPredictJobRequest(
+                test_set_upload_id=test_set_upload_id,
+                fitted_train_set_id=fitted_train_set_id,
+                task_config=task_config,
+            ),
+            timeout=client_options.timeout,
+            headers=client_options.headers,
+        )
+        if submit_resp is None:
+            # The cached settings promised background jobs that this server
+            # does not run. Expired, they make the next call ask the server
+            # again before it uploads.
+            cls._api_settings_ts = float("-inf")
+            raise RuntimeError(_NO_PREDICT_JOBS)
+        logger.debug(f"Submitted prediction {submit_resp.fitted_test_set_id}.")
+        return submit_resp.fitted_test_set_id
+
+    @classmethod
+    def wait_for_predict(
+        cls,
+        fitted_test_set_id: UUID | str,
+        client_options: ClientOptions | None = None,
+    ) -> PredictionResult:
+        """Wait for a prediction the server accepted, and return it.
+
+        Polls the server until the prediction has completed. The server keeps a
+        prediction for about a day, so this also returns the result of a
+        prediction whose wait broke off, given its id.
+
+        Args:
+            fitted_test_set_id: The id of the prediction, as a UUID or a string.
+            client_options: Client specific options (e.g. timeout, headers).
+
+        Returns:
+            The prediction, as `predict` returns it.
+
+        Raises:
+            ValueError: If `fitted_test_set_id` is not a valid id.
+            PredictFailedError: If the server reports that the prediction failed.
+            RefitRequiredError: If the fitted model can no longer predict and
+                must be fitted again.
+            TimeoutError: If the prediction has not completed within
+                `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds.
+            RuntimeError: If the server does not have the prediction, for
+                instance because its result is no longer stored, or polling
+                for it fails.
+        """
+        # Before any request, so that a malformed id fails at once, and the
+        # result carries a UUID whatever the caller passed.
+        fitted_test_set_id = UUID(str(fitted_test_set_id))
+        return cls._await_prediction(
+            fitted_test_set_id, client_options or ClientOptions()
+        )
+
+    @classmethod
+    def _upload_test_set(
+        cls,
+        fitted_train_set_id: UUID,
+        x_test: pd.DataFrame | np.ndarray,
+        client_options: ClientOptions,
+    ) -> UUID:
+        """Upload a test set to predict with a fitted train set.
+
+        Returns:
+            The id of the uploaded test set, or of the same test set the server
+            already holds.
 
         Raises:
             ValueError: If the in-memory size of ``x_test`` exceeds the server limit.
             FittedModelNotFoundError: If the fitted train set is not found.
         """
-        client_options = client_options or ClientOptions()
-
         df_x_test = x_test if isinstance(x_test, pd.DataFrame) else pd.DataFrame(x_test)
 
         api_settings = cls.get_settings()
@@ -821,28 +1185,16 @@ class ServiceClient(Singleton):
                 x_test_bytes,
                 prepare_resp.x_test_info,
             )
+        return prepare_resp.test_set_upload_id
 
-        predict_resp = cls._predict(
-            req=PredictRequest(
-                test_set_upload_id=prepare_resp.test_set_upload_id,
-                fitted_train_set_id=fitted_train_set_id,
-                task_config=task_config,
-            ),
-            timeout=client_options.timeout,
-            headers=client_options.headers,
-        )
-
-        match predict_resp:
-            case PredictResponse():
-                prediction = predict_resp.prediction
-            case PredictResponseWithDownloadURI():
-                prediction = cls._download_prediction(
-                    predict_resp.prediction_uri,
-                    timeout=client_options.timeout,
-                )
-            case _:
-                assert_never(predict_resp)
-
+    @staticmethod
+    def _prediction_result(
+        prediction: Prediction,
+        metadata: Metadata,
+        timings: PredictTimings | None,
+        fitted_test_set_id: UUID | None,
+    ) -> PredictionResult:
+        """Convert a prediction as the server sends it into a `PredictionResult`."""
         if isinstance(prediction, dict):
             result = {}
             for k, v in prediction.items():
@@ -858,10 +1210,316 @@ class ServiceClient(Singleton):
 
         return PredictionResult(
             y_pred=result,
-            metadata=predict_resp.metadata.model_dump(mode="json", exclude_none=True),
-            timings=predict_resp.timings.model_dump(mode="json")
-            if predict_resp.timings is not None
-            else None,
+            metadata=metadata.model_dump(mode="json", exclude_none=True),
+            timings=timings.model_dump(mode="json") if timings is not None else None,
+            fitted_test_set_id=fitted_test_set_id,
+        )
+
+    @classmethod
+    def _await_prediction(
+        cls,
+        fitted_test_set_id: UUID,
+        client_options: ClientOptions,
+        *,
+        first_poll_delay_secs: float = 0.0,
+    ) -> PredictionResult:
+        """Wait for a prediction the server accepted, and return it.
+
+        A wait that breaks off for any other reason than a prediction that
+        failed or that the server does not have (a timeout, an interrupt, an
+        error) logs the prediction's id first: the prediction may run on, and
+        `wait_for_predict` can still return it.
+
+        Raises:
+            PredictFailedError: If the server reports that the prediction failed.
+            PredictionGoneError: If the server does not have the prediction.
+            TimeoutError: If the prediction has not completed within the poll
+                timeout.
+            RuntimeError: If the server reports the prediction as completed but
+                sends no prediction.
+        """
+        # A None timeout would leave a poll on a dead connection hanging
+        # forever, past any deadline.
+        timeout = cast("float | None", client_options.timeout)
+        if timeout is None:
+            timeout = get_opts().TABPFN_CLIENT_TIMEOUT
+        try:
+            result_resp = cls._wait_for_predict(
+                fitted_test_set_id,
+                timeout=min(timeout, _MAX_POLL_TIMEOUT_SECS),
+                headers=client_options.headers,
+                first_poll_delay_secs=first_poll_delay_secs,
+            )
+        except (PredictFailedError, PredictionGoneError):
+            # The prediction has ended, or the server no longer has it: there is
+            # nothing to come back for.
+            raise
+        except BaseException:
+            # The id is the only way back to a prediction that may run on, and
+            # be billed, after the wait breaks off; Python shows only WARNING
+            # and above by default.
+            logger.warning(
+                f"Stopped waiting for prediction {fitted_test_set_id}. If it is "
+                "still running, the server completes it and bills it even if "
+                f"nobody waits for it; {_resume_hint(fitted_test_set_id)}"
+            )
+            raise
+        if result_resp.prediction is None or result_resp.metadata is None:
+            raise RuntimeError(
+                f"The server reported prediction {fitted_test_set_id} as "
+                "completed, but sent no prediction."
+            )
+        return cls._prediction_result(
+            result_resp.prediction,
+            result_resp.metadata,
+            result_resp.timings,
+            fitted_test_set_id,
+        )
+
+    @classmethod
+    def _wait_for_predict(
+        cls,
+        fitted_test_set_id: UUID,
+        *,
+        timeout: float,
+        headers: dict[str, str] | None = None,
+        first_poll_delay_secs: float = 0.0,
+    ) -> GetPredictResultResponse:
+        """Poll ``/tabpfn/get_predict_result`` until the prediction reaches a terminal state.
+
+        The first poll happens after ``first_poll_delay_secs``, at once by
+        default, and no later than the deadline; between polls we sleep for
+        the server's per-response ``retry_in_secs`` hint (5s until the first
+        hint arrives, and at least 5s after a failed poll), clamped to the
+        ``_MIN_RETRY_INTERVAL_SECS`` floor so a zero/negative hint can neither
+        busy-poll the endpoint nor crash ``time.sleep``. Each poll also runs
+        the job's upkeep on the server, such as failing it past its deadline;
+        nothing else does that.
+
+        Returns once the prediction is COMPLETED, with the whole prediction:
+        every completed poll streams it again, so the loop stops at the first
+        one. Raises ``PredictFailedError`` (``RefitRequiredError`` if the model
+        must be fitted again) if the prediction FAILED, or ``TimeoutError``
+        when no terminal state is reached within the resolved poll timeout,
+        counted from the start of this call. The timeout is a hard bound: the
+        loop gives up as soon as the next poll could no longer start before
+        the deadline, instead of sleeping up to the deadline and polling once
+        more past it. A single poll can still run past the deadline: by up to
+        ``timeout`` when its response stalls, as httpx applies ``timeout`` to
+        each read rather than to the whole response, and for as long as the
+        server keeps sending bytes. A failed prediction is reported by the
+        server as HTTP 200 with ``status=failed``, so the status field — not
+        the HTTP code — is what we inspect here.
+
+        Poll errors are classified by their HTTP status, or by the status a
+        streamed error envelope reports. 408, 502, 503, 504 and network errors
+        are transient, logged and retried until the deadline; 429, 500, an
+        empty body and a cut-off response are retried up to 3 times in a row,
+        and the 4th in a row raises a ``RuntimeError`` that chains it;
+        anything else, such as an unknown (404) or expired (410) prediction,
+        raises at once. When the deadline expires while polls are failing, the
+        ``TimeoutError`` chains the most recent poll error so the cause is not
+        lost.
+        """
+        async_settings = cls._resolve_async_settings()
+        total_timeout = async_settings.poll_timeout_secs
+        deadline = time.monotonic() + total_timeout
+        fallback_retry_in_secs = 5.0
+        retry_in_secs = fallback_retry_in_secs  # until the server sends a hint
+        # Most recent transient poll error; reset on every successful poll so
+        # the TimeoutError only chains it if polls were failing at the end.
+        last_error: Exception | None = None
+        max_consecutive_capped_errors = 3
+        consecutive_capped_errors = 0
+
+        if first_poll_delay_secs > 0:
+            # Clamped to the deadline, and the poll still goes out after it: a
+            # poll timeout shorter than the hint still gets one answer.
+            time.sleep(
+                min(first_poll_delay_secs, max(0.0, deadline - time.monotonic()))
+            )
+
+        while True:
+            try:
+                result_resp = cls._get_predict_result(
+                    req=GetPredictResultRequest(fitted_test_set_id=fitted_test_set_id),
+                    timeout=timeout,
+                    headers=headers,
+                )
+            except (
+                httpx.NetworkError,
+                httpx.TimeoutException,
+                RetryableServerError,
+            ) as exc:
+                last_error = exc
+                consecutive_capped_errors = 0
+                logger.warning(
+                    f"Transient error while polling status of prediction "
+                    f"{fitted_test_set_id}, retrying until the poll deadline: {exc}"
+                )
+            # A response cut off mid-body is capped rather than transient: the
+            # server cuts it when it fails after starting it, as on a late 404.
+            except (CappedRetryableServerError, httpx.RemoteProtocolError) as exc:
+                consecutive_capped_errors += 1
+                if consecutive_capped_errors > max_consecutive_capped_errors:
+                    # As a RuntimeError, like every other error that ends a
+                    # poll, so that `except RuntimeError` catches it.
+                    raise RuntimeError(
+                        f"Polling prediction {fitted_test_set_id} failed "
+                        f"{consecutive_capped_errors} times in a row: {exc}"
+                    ) from exc
+                last_error = exc
+                logger.warning(
+                    f"Unexpected error while polling status of prediction "
+                    f"{fitted_test_set_id}, retrying up to {max_consecutive_capped_errors} consecutive errors: {exc}"
+                )
+            else:
+                last_error = None
+                consecutive_capped_errors = 0
+                if result_resp.status == PredictStatus.COMPLETED:
+                    return result_resp
+                if result_resp.status == PredictStatus.FAILED:
+                    raise _prediction_failed(
+                        fitted_test_set_id, result_resp.error, result_resp.error_code
+                    )
+                # Anything else, a status this client does not know included,
+                # counts as still running.
+                if result_resp.retry_in_secs is not None:
+                    retry_in_secs = max(
+                        result_resp.retry_in_secs, _MIN_RETRY_INTERVAL_SECS
+                    )
+
+            # After a failed poll, wait at least the fallback: the short hint of
+            # a young prediction would otherwise poll, and warn, twice a second
+            # through an outage. The hint applies again after the next success.
+            sleep_secs = (
+                retry_in_secs
+                if last_error is None
+                else max(retry_in_secs, fallback_retry_in_secs)
+            )
+            # Still PENDING (or a poll error): sleep, then poll again — unless
+            # the next poll could only start at/after the deadline. The poll
+            # timeout is a hard bound, so give up now rather than sleep up to
+            # the deadline and issue one more poll past it.
+            remaining = deadline - time.monotonic()
+            if remaining <= sleep_secs:
+                message = (
+                    f"Prediction {fitted_test_set_id} did not reach a terminal "
+                    f"state within the poll timeout of {total_timeout} seconds."
+                )
+                if last_error is not None:
+                    message += f" The last status poll failed: {last_error}"
+                raise TimeoutError(message) from last_error
+            time.sleep(sleep_secs)
+
+    # NOTE: no backoff decorator here on purpose — the `_wait_for_predict`
+    # polling loop already retries transient errors until its deadline, and a
+    # nested retry layer would skew the poll interval accounting.
+    @classmethod
+    def _get_predict_result(
+        cls,
+        req: GetPredictResultRequest,
+        timeout: float,
+        headers: dict[str, str] | None = None,
+    ) -> GetPredictResultResponse:
+        """Fetch the status of a prediction once, with the prediction once completed.
+
+        Raises:
+            PredictionGoneError: On HTTP 404 with the server's ``NOT_FOUND``
+                code for an unknown prediction, or 410 for one whose result is
+                no longer stored.
+            RuntimeError: If the server has no such endpoint, as it runs no
+                predictions as background jobs, or on another status no retry
+                can clear.
+            CappedRetryableServerError: On HTTP 429 or 500, or an empty
+                success body (treated as a 500).
+            RetryableServerError: On HTTP 408, 502, 503, or 504.
+        """
+        res = cls.httpx_client.post(
+            url="/tabpfn/get_predict_result",
+            json=req.model_dump(mode="json", exclude_none=True),
+            timeout=timeout,
+            headers=headers,
+        )
+        # As for fit statuses, these errors are decoupled from the prediction
+        # itself, so the poll loop allows a few in a row.
+        if res.status_code in (429, 500):
+            raise CappedRetryableServerError(
+                f"Fail to call get_predict_result: [HTTP {res.status_code}] {res.text}."
+            )
+        if cls._is_route_missing(res):
+            raise RuntimeError(
+                f"Cannot wait for prediction {req.fitted_test_set_id}: this TabPFN "
+                "server does not run predictions as background jobs."
+            )
+        try:
+            return cls._validate_response(
+                res, "get_predict_result", success_model=GetPredictResultResponse
+            )
+        except EmptyResponseError as exc:
+            raise CappedRetryableServerError(str(exc)) from exc
+        except StreamedServerError as exc:
+            # An error the server hit after its keepalive pings started is
+            # classified by its status, exactly as a fast one.
+            if exc.status_code in (429, 500):
+                raise CappedRetryableServerError(str(exc)) from exc
+            if exc.status_code in (408, 502, 503, 504):
+                raise RetryableServerError(str(exc)) from exc
+            if exc.status_code in (404, 410):
+                raise _prediction_gone(req.fitted_test_set_id, exc) from exc
+            raise
+        except RuntimeError as exc:
+            # Wrapped rather than checked up front, so that `_validate_response`
+            # still checks the client version. A 404 counts only with the
+            # server's own code: one from a proxy says nothing about the
+            # prediction.
+            if res.status_code == 410 or (
+                res.status_code == 404
+                and cls._read_json_body(res)[0].get("error_code") == "NOT_FOUND"
+            ):
+                raise _prediction_gone(req.fitted_test_set_id, exc) from exc
+            raise
+
+    @classmethod
+    # Every submit creates a new predict job, no dedup logic exists on the
+    # server. We want to be careful with retries here, we then just retry on
+    # errors that we can be confident prevented a job to be enqueued.
+    @backoff.on_exception(
+        backoff.constant,
+        (
+            httpx.ConnectError,
+            httpx.ConnectTimeout,
+        ),
+        max_tries=2,
+        interval=0,
+        logger=logger,
+        on_backoff=_on_backoff,
+        on_giveup=_on_giveup,
+    )
+    def _submit_predict_job(
+        cls,
+        req: SubmitPredictJobRequest,
+        timeout: float,
+        headers: dict[str, str] | None = None,
+    ) -> SubmitPredictJobResponse | None:
+        """Submit a predict job for an uploaded test set.
+
+        Returns:
+            The id of the job, or None if the server has no such endpoint: it
+            runs no predictions as background jobs, and created no job.
+        """
+        res = cls.httpx_client.post(
+            url="/tabpfn/submit_predict_job",
+            json=req.model_dump(mode="json", exclude_none=True),
+            timeout=timeout,
+            headers=headers,
+        )
+        if cls._is_route_missing(res):
+            return None
+        return cls._validate_response(
+            res,
+            "submit_predict_job",
+            success_model=SubmitPredictJobResponse,
         )
 
     @classmethod
@@ -887,18 +1545,47 @@ class ServiceClient(Singleton):
         timeout: float,
         headers: dict[str, str] | None = None,
     ) -> PredictResponseUnion:
-        """Request a prediction for an uploaded test set."""
+        """Request a prediction for an uploaded test set.
+
+        Raises:
+            RefitRequiredError: If the fitted model can no longer predict and
+                must be fitted again.
+        """
         res = cls.httpx_client.post(
             url="/tabpfn/predict",
             json=req.model_dump(mode="json", exclude_none=True),
             timeout=timeout,
             headers=headers,
         )
-        # The body, not the request, decides which model applies, so a response
-        # carrying a download URL is followed too.
-        return cls._validate_response(
-            res, "predict", success_model=_PredictResponseUnion
-        )
+        # Every 409 asks for a new fit. So does a 400 with the refit text: a
+        # stale KV cache, as the server reports it from the failure it booked
+        # rather than from the worker's reply.
+        if res.status_code in (400, 409):
+            body, message = cls._read_json_body(res)
+            if _requires_refit(
+                message,
+                error_code=body.get("error_code"),
+                status_code=res.status_code,
+            ):
+                # This response skips `_validate_response`, which checks the
+                # client version of every other one.
+                cls._check_version(res)
+                if trace_id := body.get("trace_id"):
+                    message += f" Report trace ID: {trace_id}."
+                raise RefitRequiredError(message)
+        try:
+            # The body, not the request, decides which model applies: a
+            # prediction, a download URL to follow, or a prediction the server
+            # is still running.
+            return cls._validate_response(
+                res, "predict", success_model=_PredictResponseUnion
+            )
+        except StreamedServerError as exc:
+            if exc.status_code in (400, 409) and _requires_refit(
+                exc.detail, status_code=exc.status_code
+            ):
+                raise RefitRequiredError(exc.detail) from exc
+            raise
 
     @classmethod
     @backoff.on_exception(
@@ -1114,6 +1801,21 @@ class ServiceClient(Singleton):
         ServiceClient._raise_http_error(response, method_name, body, message)
 
     @staticmethod
+    def _is_route_missing(response: httpx.Response) -> bool:
+        """Return whether the server has no endpoint at the requested path.
+
+        This is how a server that predates predictions as background jobs (or
+        was rolled back to such a version) answers their endpoints. The
+        endpoints' own 404s carry the ``NOT_FOUND`` error code instead.
+        """
+        if response.status_code != 404:
+            return False
+        body, _ = ServiceClient._read_json_body(response)
+        return (
+            body.get("message") == "Not Found" and body.get("error_code") != "NOT_FOUND"
+        )
+
+    @staticmethod
     def _validate_response(
         response: httpx.Response,
         method_name: str,
@@ -1132,8 +1834,8 @@ class ServiceClient(Singleton):
             The validated success model, or the matching error model instance.
 
         Raises:
-            RuntimeError: On a streamed error, or an error status without a
-                matching error model.
+            StreamedServerError: On a streamed error.
+            RuntimeError: On an error status without a matching error model.
             RetryableServerError: On HTTP 408, 502, 503, or 504 without a
                 matching error model.
             EmptyResponseError: On a success status whose body is empty
@@ -1150,8 +1852,13 @@ class ServiceClient(Singleton):
 
         # Streaming errors, should come before the success check.
         if body.get("_streamed_error"):
-            raise RuntimeError(
-                f"Fail to call {method_name} with error: streamed, {message}"
+            streamed_status = body.get("status_code")
+            raise StreamedServerError(
+                f"Fail to call {method_name} with error: streamed, {message}",
+                status_code=streamed_status
+                if isinstance(streamed_status, int)
+                else None,
+                detail=message,
             )
 
         # Success with expected schema.
