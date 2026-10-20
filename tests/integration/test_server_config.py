@@ -1,5 +1,6 @@
 import unittest
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -13,7 +14,7 @@ class TestServerConfig(unittest.TestCase):
         config_path = package_dir / "server_config.yaml"
 
         with open(config_path, "r") as f:
-            self.config = yaml.safe_load(f)
+            self.config: dict[str, Any] = yaml.safe_load(f)
 
     def test_host_configuration(self):
         expected_host = "api.priorlabs.ai"
