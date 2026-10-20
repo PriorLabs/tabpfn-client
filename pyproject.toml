@@ -60,6 +60,9 @@ exclude = ["tabpfn_client/.tabpfn", "models_diff"]
 [tool.hatch.build.targets.sdist]
 exclude = ["tabpfn_client/.tabpfn", "models_diff"]
 
+[tool.uv]
+exclude-newer = "7 days"
+
 [tool.ruff]
 exclude = [
     "experiments_*"
