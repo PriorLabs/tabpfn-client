@@ -2162,7 +2162,6 @@ name = "shap"
 version = "0.51.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version == '3.11.*' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
     "(python_full_version == '3.11.*' and platform_machine != 'x86_64') or (python_full_version == '3.11.*' and sys_platform != 'darwin')",
 ]
 dependencies = [
@@ -2336,9 +2335,9 @@ dev = [
     { name = "pytest" },
     { name = "respx" },
     { name = "ruff" },
-    { name = "shap", version = "0.49.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "shap", version = "0.51.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
-    { name = "shap", version = "0.53.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "shap", version = "0.49.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and platform_machine != 'x86_64') or (python_full_version < '3.11' and sys_platform != 'darwin')" },
+    { name = "shap", version = "0.51.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and platform_machine != 'x86_64') or (python_full_version == '3.11.*' and sys_platform != 'darwin')" },
+    { name = "shap", version = "0.53.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and platform_machine != 'x86_64') or (python_full_version >= '3.12' and sys_platform != 'darwin')" },
 ]
 
 [package.metadata]
@@ -2372,7 +2371,7 @@ dev = [
     { name = "pytest", specifier = "==9.1.1" },
     { name = "respx", specifier = "==0.23.1" },
     { name = "ruff", specifier = "==0.17.0" },
-    { name = "shap", specifier = ">=0.46" },
+    { name = "shap", marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'", specifier = ">=0.46" },
 ]
 
 [[package]]

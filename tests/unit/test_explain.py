@@ -193,7 +193,7 @@ def test_wrong_prediction_count_raises() -> None:
 
 
 def test_to_shap_keeps_values() -> None:
-    import shap
+    shap = pytest.importorskip("shap")
 
     rng = np.random.default_rng(5)
     X, background = rng.normal(size=(2, 3)), rng.normal(size=(4, 3))
