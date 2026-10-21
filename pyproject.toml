@@ -27,7 +27,7 @@ classifiers = [
 license = { file = "LICENSE" }
 dependencies = [
     "httpx>=0.25.0,<=0.28.1",
-    "omegaconf>=2.1.2,<=2.3.0",
+    "omegaconf>=2.1.2,<=2.4.0",
     "pandas>=2.1.2,<=2.3.3",
     "password-strength>=0.0.3.post2,<=0.0.3.post2",
     "pydantic>=2.11.7,<=2.14.1",
@@ -35,10 +35,10 @@ dependencies = [
     "sseclient-py>=1.8.0,<=1.9.0",
     "tqdm>=4.63.0,<=4.70.1",
     "typing_extensions>=4.12.2,<=4.16.0",
-    "xxhash>=1.1.0,<=3.8.1",
+    "xxhash>=1.1.0,<=4.0.1",
     "backoff>=2.2.0,<=2.2.1",
     "rich>=13.7.0,<=15.0.0",
-    "tabpfn-common-utils>=0.2.10,<=0.2.19",
+    "tabpfn-common-utils>=0.2.10,<=0.2.23",
     "google-crc32c>=1.5.0,<=1.9.0",
     "pyarrow>=14.0.0,<=25.0.1",
     "pydantic-settings>=2.14.2,<=2.15.0",
@@ -60,6 +60,9 @@ exclude = ["tabpfn_client/.tabpfn", "models_diff"]
 [tool.hatch.build.targets.sdist]
 exclude = ["tabpfn_client/.tabpfn", "models_diff"]
 
+[tool.uv]
+exclude-newer = "7 days"
+
 [tool.ruff]
 exclude = [
     "experiments_*"
@@ -74,10 +77,10 @@ norecursedirs = [
 dev = [
     "matplotlib>=3.7.0,<=3.11.1",
     "respx==0.23.1",
-    "pytest==9.0.3",
-    "ruff==0.15.21",
+    "pytest==9.1.1",
+    "ruff==0.17.0",
     "licensecheck==2025.1.0",
-    "basedpyright~=1.39.9",
+    "basedpyright>=1.39.9,<1.41.0",
 ]
 
 [tool.changelog-bot.towncrier_changelog]
