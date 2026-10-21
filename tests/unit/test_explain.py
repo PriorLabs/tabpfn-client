@@ -103,8 +103,7 @@ def test_batch_size_splits_calls_without_changing_values() -> None:
         return _interactions(rows)
 
     whole = permutation_shap(f, X, background, n_permutations=2, random_state=0)
-    n_masked = 3 * 5 * (2 + 2 * 2 * 3)
-    assert call_sizes == [n_masked]
+    (n_masked,) = call_sizes
 
     call_sizes.clear()
     split = permutation_shap(
@@ -112,6 +111,25 @@ def test_batch_size_splits_calls_without_changing_values() -> None:
     )
     assert call_sizes == [100] * (n_masked // 100) + [n_masked % 100]
     np.testing.assert_allclose(split.values, whole.values)
+
+
+def test_each_set_of_shown_features_is_predicted_once() -> None:
+    # Two features give each row three sets ({0}, {1}, both) however many
+    # orderings are sampled, plus all hidden, which every row shares.
+    rng = np.random.default_rng(6)
+    X, background = rng.normal(size=(4, 2)), rng.normal(size=(5, 2))
+    call_sizes: list[int] = []
+
+    def f(rows) -> np.ndarray:
+        call_sizes.append(len(rows))
+        x = np.asarray(rows)
+        return x[:, 0] * x[:, 1]
+
+    result = permutation_shap(f, X, background, n_permutations=20)
+
+    assert call_sizes == [5 * (1 + 3 * 4)]
+    for i in range(len(X)):
+        np.testing.assert_allclose(result.values[i], _exact_shap(f, X[i], background))
 
 
 def test_dataframe_columns_and_dtypes_reach_predict_fn() -> None:

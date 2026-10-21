@@ -70,8 +70,10 @@ def permutation_shap(
     for every row. This function predicts the masked rows of many explained
     rows in each call of `predict_fn`.
 
-    The number of masked rows is
-    `len(X) * len(background) * (2 + 2 * n_permutations * (n_features - 1))`.
+    Each set of shown features is predicted once per explained row, and the
+    all-hidden set once in total. So the number of masked rows is at most
+    `len(background) * (1 + len(X) * (1 + 2 * n_permutations * (n_features - 1)))`,
+    and fewer when orderings share sets, which is common with few features.
 
     Args:
         predict_fn: Maps a DataFrame with the columns of `X` to predictions of
@@ -143,18 +145,38 @@ def permutation_shap(
         axis=1,
     )
     n_masks = masks.shape[1]
-    flat_masks = masks.reshape(-1, n_features)
 
-    masks_per_call = (batch_size or len(flat_masks) * n_background) // n_background
+    # Predict each (explained row, mask) pair once. All hidden gives the
+    # background rows for every explained row, so it is a single pair.
+    shown_masks = masks[:, 1:].reshape(-1, n_features)
+    shown_rows = np.repeat(np.arange(n_rows), n_masks - 1)
+    keys = np.concatenate(
+        [
+            shown_rows[:, None].astype(">i8").view(np.uint8),
+            np.packbits(shown_masks, axis=1),
+        ],
+        axis=1,
+    )
+    _, first, inverse = np.unique(keys, axis=0, return_index=True, return_inverse=True)
+    pair_rows = np.concatenate([[0], shown_rows[first]])
+    pair_masks = np.concatenate(
+        [np.zeros((1, n_features), dtype=bool), shown_masks[first]]
+    )
+    pair_of_mask = np.concatenate(
+        [
+            np.zeros((n_rows, 1), dtype=int),
+            1 + inverse.reshape(n_rows, n_masks - 1),
+        ],
+        axis=1,
+    )
+
+    pairs_per_call = (batch_size or len(pair_masks) * n_background) // n_background
     means = []
     single_output = False
-    for start in range(0, len(flat_masks), masks_per_call):
-        stop = min(start + masks_per_call, len(flat_masks))
+    for start in range(0, len(pair_masks), pairs_per_call):
+        stop = min(start + pairs_per_call, len(pair_masks))
         rows = _masked_rows(
-            X_df,
-            background_df,
-            flat_masks[start:stop],
-            np.arange(start, stop) // n_masks,
+            X_df, background_df, pair_masks[start:stop], pair_rows[start:stop]
         )
         predictions = np.asarray(predict_fn(rows))
         if len(predictions) != len(rows):
@@ -164,7 +186,7 @@ def permutation_shap(
             )
         single_output = predictions.ndim == 1
         means.append(predictions.reshape(stop - start, n_background, -1).mean(axis=1))
-    mean = np.concatenate(means).reshape(n_rows, n_masks, -1)
+    mean = np.concatenate(means)[pair_of_mask]
 
     hidden, shown = mean[:, 0], mean[:, 1]
     ends = (n_rows, n_orderings, 1, mean.shape[-1])
