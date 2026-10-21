@@ -62,6 +62,8 @@ exclude = ["tabpfn_client/.tabpfn", "models_diff"]
 
 [tool.uv]
 exclude-newer = "7 days"
+# eMudhra CA incident (2026-10-20): let the fixed releases through the cooldown.
+exclude-newer-package = { certifi = "0 days", uv = "0 days" }
 
 [tool.ruff]
 exclude = [
