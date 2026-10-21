@@ -33,8 +33,10 @@ def _exact_shap(f, x: np.ndarray, background: np.ndarray) -> np.ndarray:
 
 
 def _interactions(rows) -> np.ndarray:
+    # The three-way term matters: with only pairwise terms, one ordering
+    # evaluated both ways is already exact, so sampling would go untested.
     x = np.asarray(rows, dtype=float)
-    return x[:, 0] * x[:, 1] + np.sin(x[:, 2]) * x[:, 3] + x[:, 1] ** 2
+    return x[:, 0] * x[:, 1] * x[:, 2] + np.sin(x[:, 2]) * x[:, 3] + x[:, 1] ** 2
 
 
 def test_linear_model_values_are_exact() -> None:
@@ -137,9 +139,33 @@ def test_dataframe_columns_and_dtypes_reach_predict_fn() -> None:
 
     assert (seen[0].dtypes == X.dtypes).all()
     assert set(seen[0]["label"]) == {"a", "b", "c"}
-    assert result.feature_names == ["size", "colour", "label"]
     np.testing.assert_allclose(result.values[:, 2], 0)
     np.testing.assert_allclose(result.values[:, 0], X["size"] - 1.0)
+
+
+@pytest.mark.parametrize(
+    ("x_column", "background_column"),
+    [
+        (
+            pd.Categorical(["red"], categories=["red", "blue"]),
+            pd.Categorical(["blue", "green"], categories=["blue", "green"]),
+        ),
+        ([1], [0.5, 1.5]),
+    ],
+    ids=["other-categories", "float-for-int"],
+)
+def test_background_dtype_mismatch_raises(x_column, background_column) -> None:
+    X = pd.DataFrame({"a": x_column})
+    background = pd.DataFrame({"a": background_column})
+
+    with pytest.raises(ValueError, match="dtypes"):
+        permutation_shap(lambda rows: np.zeros(len(rows)), X, background)
+
+
+def test_batch_size_below_background_rows_raises() -> None:
+    X = np.zeros((2, 3))
+    with pytest.raises(ValueError, match="batch_size"):
+        permutation_shap(lambda rows: np.zeros(len(rows)), X, X, batch_size=1)
 
 
 def test_wrong_prediction_count_raises() -> None:
@@ -149,7 +175,8 @@ def test_wrong_prediction_count_raises() -> None:
 
 
 def test_to_shap_keeps_values() -> None:
-    shap = pytest.importorskip("shap")
+    import shap
+
     rng = np.random.default_rng(5)
     X, background = rng.normal(size=(2, 3)), rng.normal(size=(4, 3))
 

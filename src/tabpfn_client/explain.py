@@ -23,13 +23,11 @@ class ShapExplanation:
             or (n_rows, n_outputs). For each row,
             `base_values + values.sum(axis=1)` equals the model's prediction.
         data: The explained rows.
-        feature_names: The column names of the explained rows.
     """
 
     values: np.ndarray
     base_values: np.ndarray
     data: pd.DataFrame
-    feature_names: list[str]
 
     def to_shap(self) -> Any:
         """Convert to a `shap.Explanation`, for use with the plots of `shap`.
@@ -50,7 +48,7 @@ class ShapExplanation:
             values=self.values,
             base_values=self.base_values,
             data=self.data.to_numpy(),
-            feature_names=self.feature_names,
+            feature_names=[str(c) for c in self.data.columns],
         )
 
 
@@ -69,8 +67,8 @@ def permutation_shap(
     masker: a hidden feature takes its values from each background row, and
     the prediction is averaged over the background rows. `shap` calls the
     model once per explained row, so a remote model pays the request overhead
-    for every row. This function builds every masked row first and predicts
-    them all with `ceil(n_masked_rows / batch_size)` calls of `predict_fn`.
+    for every row. This function predicts the masked rows of many explained
+    rows in each call of `predict_fn`.
 
     The number of masked rows is
     `len(X) * len(background) * (2 + 2 * n_permutations * (n_features - 1))`.
@@ -79,12 +77,16 @@ def permutation_shap(
         predict_fn: Maps a DataFrame with the columns of `X` to predictions of
             shape (n,) or (n, n_outputs), for example `model.predict_proba`.
         X: The rows to explain.
-        background: Rows that supply the values of hidden features. 20 to 100
-            rows sampled from the training set is usual.
+        background: Rows that supply the values of hidden features, with the
+            same columns and dtypes as `X`. 20 to 100 rows sampled from the
+            training set is usual.
         n_permutations: Feature orderings sampled per explained row. Each one
-            is evaluated forwards and backwards.
-        batch_size: Most masked rows per call of `predict_fn`. None sends all
-            masked rows in one call.
+            is also evaluated in reverse.
+        batch_size: Most masked rows per call of `predict_fn`, and at least
+            `len(background)`. A call holds only its own masked rows in
+            memory. A remote model limits the rows per request, so large
+            inputs need a batch size under that limit. None sends all masked
+            rows in one call.
         random_state: Seed for the sampled feature orderings.
 
     Returns:
@@ -102,100 +104,104 @@ def permutation_shap(
     )
     if list(background_df.columns) != list(X_df.columns):
         raise ValueError("background must have the same columns as X.")
+    # Masked columns are cast to the dtype of X, which would silently turn
+    # unknown categories into NaN and truncate floats into integer columns.
+    mismatched = [
+        column
+        for column in X_df.columns
+        if background_df[column].dtype != X_df[column].dtype
+    ]
+    if mismatched:
+        raise ValueError(
+            f"background must have the same dtypes as X; columns {mismatched} differ."
+        )
     if len(X_df) == 0 or len(background_df) == 0:
         raise ValueError("X and background must each have at least one row.")
     if n_permutations < 1:
         raise ValueError("n_permutations must be at least 1.")
-    if batch_size is not None and batch_size < 1:
-        raise ValueError("batch_size must be at least 1.")
+    n_background = len(background_df)
+    if batch_size is not None and batch_size < n_background:
+        raise ValueError("batch_size must be at least len(background).")
 
     n_rows, n_features = X_df.shape
     rng = np.random.default_rng(random_state)
-    orders = np.stack(
-        [
-            [rng.permutation(n_features) for _ in range(n_permutations)]
-            for _ in range(n_rows)
-        ]
-    )
-    # rank[i, p, j]: position of feature j in ordering p of row i.
-    rank = np.argsort(orders, axis=-1)
-    sizes = np.arange(1, n_features)[:, None]
-    # Shown features after adding the first k features of an ordering, and
-    # after removing them, for k in 1..n_features-1. All shown and all hidden
-    # are shared by every ordering, so they are evaluated once per row.
-    added = rank[:, :, None, :] < sizes
-    removed = rank[:, :, None, :] >= sizes
+    # rank[i, p, j]: position of feature j in ordering p of row i. Removing
+    # features in one order passes the same coalitions as adding them in the
+    # reverse order, so the reversed orderings are the antithetic half.
+    rank = rng.random((n_rows, n_permutations, n_features)).argsort(axis=-1)
+    rank = np.concatenate([rank, n_features - 1 - rank], axis=1)
+    n_orderings = 2 * n_permutations
+    # All hidden and all shown are shared by every ordering, so they are
+    # evaluated once per row, then the n_features - 1 steps of each ordering.
+    steps = rank[:, :, None, :] < np.arange(1, n_features)[:, None]
     masks = np.concatenate(
         [
             np.zeros((n_rows, 1, n_features), dtype=bool),
             np.ones((n_rows, 1, n_features), dtype=bool),
-            np.concatenate([added, removed], axis=2).reshape(n_rows, -1, n_features),
+            steps.reshape(n_rows, -1, n_features),
         ],
         axis=1,
     )
     n_masks = masks.shape[1]
-    n_background = len(background_df)
+    flat_masks = masks.reshape(-1, n_features)
 
-    # Masked rows are ordered (explained row, mask, background row).
-    masked = pd.DataFrame(
-        {
-            column: pd.Series(
-                np.where(
-                    np.repeat(masks[:, :, j].ravel(), n_background),
-                    np.repeat(X_df[column].to_numpy(), n_masks * n_background),
-                    np.tile(background_df[column].to_numpy(), n_rows * n_masks),
-                )
-            ).astype(X_df[column].dtype)
-            for j, column in enumerate(X_df.columns)
-        }
-    )
-
-    step = batch_size or len(masked)
-    predictions = np.concatenate(
-        [
-            np.asarray(predict_fn(masked.iloc[start : start + step]))
-            for start in range(0, len(masked), step)
-        ]
-    )
-    if len(predictions) != len(masked):
-        raise ValueError(
-            f"predict_fn returned {len(predictions)} predictions for "
-            f"{len(masked)} rows."
+    masks_per_call = (batch_size or len(flat_masks) * n_background) // n_background
+    means = []
+    single_output = False
+    for start in range(0, len(flat_masks), masks_per_call):
+        stop = min(start + masks_per_call, len(flat_masks))
+        rows = _masked_rows(
+            X_df,
+            background_df,
+            flat_masks[start:stop],
+            np.arange(start, stop) // n_masks,
         )
-    single_output = predictions.ndim == 1
-    predictions = predictions.reshape(len(masked), -1)
-    n_outputs = predictions.shape[1]
+        predictions = np.asarray(predict_fn(rows))
+        if len(predictions) != len(rows):
+            raise ValueError(
+                f"predict_fn returned {len(predictions)} predictions for "
+                f"{len(rows)} rows."
+            )
+        single_output = predictions.ndim == 1
+        means.append(predictions.reshape(stop - start, n_background, -1).mean(axis=1))
+    mean = np.concatenate(means).reshape(n_rows, n_masks, -1)
 
-    mean = predictions.reshape(n_rows, n_masks, n_background, n_outputs).mean(axis=2)
     hidden, shown = mean[:, 0], mean[:, 1]
-    steps = mean[:, 2:].reshape(n_rows, n_permutations, 2, n_features - 1, n_outputs)
-    per_ordering = (n_rows, n_permutations, 1, n_outputs)
-    adding = np.concatenate(
+    ends = (n_rows, n_orderings, 1, mean.shape[-1])
+    path = np.concatenate(
         [
-            np.broadcast_to(hidden[:, None, None], per_ordering),
-            steps[:, :, 0],
-            np.broadcast_to(shown[:, None, None], per_ordering),
+            np.broadcast_to(hidden[:, None, None], ends),
+            mean[:, 2:].reshape(n_rows, n_orderings, n_features - 1, -1),
+            np.broadcast_to(shown[:, None, None], ends),
         ],
         axis=2,
     )
-    removing = np.concatenate(
-        [
-            np.broadcast_to(shown[:, None, None], per_ordering),
-            steps[:, :, 1],
-            np.broadcast_to(hidden[:, None, None], per_ordering),
-        ],
-        axis=2,
+    # Entry k of the diff is the gain from the k-th feature of the ordering.
+    values = np.take_along_axis(np.diff(path, axis=2), rank[..., None], axis=2).mean(
+        axis=1
     )
-    # Entry k is the change from the k-th feature of the ordering, both ways.
-    gains = np.diff(adding, axis=2) - np.diff(removing, axis=2)
-    by_feature = np.take_along_axis(gains, rank[..., None], axis=2)
-    values = by_feature.sum(axis=1) / (2 * n_permutations)
 
     if single_output:
         values, hidden = values[..., 0], hidden[..., 0]
-    return ShapExplanation(
-        values=values,
-        base_values=hidden,
-        data=X_df,
-        feature_names=[str(c) for c in X_df.columns],
+    return ShapExplanation(values=values, base_values=hidden, data=X_df)
+
+
+def _masked_rows(
+    X: pd.DataFrame, background: pd.DataFrame, masks: np.ndarray, row_index: np.ndarray
+) -> pd.DataFrame:
+    """Rows ordered (mask, background row): shown features from X, others from background."""
+    n_background = len(background)
+    shown = np.repeat(masks, n_background, axis=0)
+    source = np.repeat(row_index, n_background)
+    return pd.DataFrame(
+        {
+            column: pd.Series(
+                np.where(
+                    shown[:, j],
+                    X[column].to_numpy()[source],
+                    np.tile(background[column].to_numpy(), len(masks)),
+                )
+            ).astype(X[column].dtype)
+            for j, column in enumerate(X.columns)
+        }
     )
