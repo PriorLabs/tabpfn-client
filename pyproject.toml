@@ -81,6 +81,7 @@ dev = [
     "ruff==0.17.0",
     "licensecheck==2025.1.0",
     "basedpyright>=1.39.9,<1.41.0",
+    "shap>=0.46",
 ]
 
 [tool.changelog-bot.towncrier_changelog]
