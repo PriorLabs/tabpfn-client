@@ -9,7 +9,7 @@ import logging
 import warnings
 from dataclasses import dataclass
 from uuid import UUID, uuid4
-from typing import Any, Literal, cast, overload
+from typing import Any, Literal, cast, get_args, overload
 from typing_extensions import Self
 
 import numpy as np
@@ -87,6 +87,11 @@ _DEFAULT_MODEL_NAMES = tuple(f"{v.value}_default" for v in reversed(ModelVersion
 # The server sends its budget via get_settings (`predict_row_pairs_budget`);
 # this is only the fallback for servers that predate that field.
 FALLBACK_PREDICT_ROW_PAIRS_BUDGET = 250_000 * 1_000_000
+
+# The outputs each estimator predicts. The server accepts more, and would bill a
+# background prediction whose output the estimator cannot return.
+ClassifierOutputLiteral = Literal["preds", "probas"]
+RegressorOutputLiteral = Literal["mean", "median", "mode", "quantiles", "full", "main"]
 
 
 class TabPFNModelSelection:
@@ -821,7 +826,7 @@ class TabPFNClassifier(
     def submit_predict(
         self,
         X: pd.DataFrame | np.ndarray,
-        output_type: Literal["preds", "probas"] = "preds",
+        output_type: ClassifierOutputLiteral = "preds",
     ) -> Self:
         """Start predicting on the server, without waiting for the predictions.
 
@@ -843,8 +848,8 @@ class TabPFNClassifier(
         Raises:
             NotFittedError: If the model has no fit, or its fit is pending:
                 call `wait_for_fit()` first.
-            ValueError: If `X` exceeds the model limits or the group columns are
-                invalid.
+            ValueError: If `output_type` is not `"preds"` or `"probas"`, `X`
+                exceeds the model limits or the group columns are invalid.
             RuntimeError: If the server does not run predictions as background
                 jobs.
         """
@@ -891,7 +896,7 @@ class TabPFNClassifier(
     def _predict(
         self,
         X,
-        output_type: Literal["probas", "preds"],
+        output_type: ClassifierOutputLiteral,
     ) -> np.ndarray:
         """Validate `X` and request `output_type` predictions from the server."""
         # IMPORTANT: self._get_predict_params() should be called first to make sure
@@ -923,6 +928,7 @@ class TabPFNClassifier(
         # Before `init()`, so that a model with nothing to predict with fails
         # without authenticating first.
         self._check_fitted()
+        _validate_output_type(output_type, ClassifierOutputLiteral)
 
         # An estimator restored by `load_model()` (or whose `model_id_` was
         # assigned directly) can reach `predict` without ever calling `fit()`,
@@ -1379,9 +1385,7 @@ class TabPFNRegressor(
     def predict(
         self,
         X: pd.DataFrame | np.ndarray,
-        output_type: Literal[
-            "mean", "median", "mode", "quantiles", "full", "main"
-        ] = "mean",
+        output_type: RegressorOutputLiteral = "mean",
         quantiles: list[float] | None = None,  # NOTE: captured in _get_predict_params()
     ) -> np.ndarray | list[np.ndarray] | dict[str, np.ndarray]:
         """Predict regression target for X.
@@ -1415,8 +1419,8 @@ class TabPFNRegressor(
         Raises:
             NotFittedError: If the model has no fit, or its fit is pending:
                 call `wait_for_fit()` first.
-            ValueError: If `X` exceeds the model limits or the group columns are
-                invalid.
+            ValueError: If `output_type` is not one of the above, `X` exceeds
+                the model limits or the group columns are invalid.
             RuntimeError: If a `"full"` prediction split across several requests
                 returns fields that cannot be combined.
             PredictFailedError: If the client polls for the prediction and the
@@ -1458,9 +1462,7 @@ class TabPFNRegressor(
     def submit_predict(
         self,
         X: pd.DataFrame | np.ndarray,
-        output_type: Literal[
-            "mean", "median", "mode", "quantiles", "full", "main"
-        ] = "mean",
+        output_type: RegressorOutputLiteral = "mean",
         quantiles: list[float] | None = None,  # NOTE: captured in _get_predict_params()
     ) -> Self:
         """Start predicting on the server, without waiting for the predictions.
@@ -1486,9 +1488,9 @@ class TabPFNRegressor(
         Raises:
             NotFittedError: If the model has no fit, or its fit is pending:
                 call `wait_for_fit()` first.
-            ValueError: If `X` exceeds the model limits, the group columns are
-                invalid, or a `"full"` output for `X` does not fit in one
-                response.
+            ValueError: If `output_type` is not one `predict()` takes, `X`
+                exceeds the model limits, the group columns are invalid, or a
+                `"full"` output for `X` does not fit in one response.
             RuntimeError: If the server does not run predictions as background
                 jobs.
         """
@@ -1555,6 +1557,7 @@ class TabPFNRegressor(
         # Before `init()`, so that a model with nothing to predict with fails
         # without authenticating first.
         self._check_fitted()
+        _validate_output_type(output_type, RegressorOutputLiteral)
 
         # An estimator restored by `load_model()` (or whose `model_id_` was
         # assigned directly) can reach `predict` without ever calling `fit()`,
@@ -1944,6 +1947,20 @@ def _build_tabpfn_systems(
     if thinking_mode:
         return ["preprocessing", "text", "thinking"]
     return ["preprocessing", "text"]
+
+
+def _validate_output_type(output_type: str, allowed: Any) -> None:
+    """Check `output_type` against the `Literal` of the outputs an estimator predicts.
+
+    Raises:
+        ValueError: If `output_type` is not among them.
+    """
+    choices = get_args(allowed)
+    if output_type not in choices:
+        raise ValueError(
+            f"output_type must be one of {', '.join(map(repr, choices))}, "
+            f"not {output_type!r}."
+        )
 
 
 def _resolve_thinking_mode(enabled: bool, effort: str | None = None) -> bool:

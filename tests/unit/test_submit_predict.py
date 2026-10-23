@@ -22,7 +22,7 @@ from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 from uuid import UUID
 
@@ -335,6 +335,32 @@ class TestSubmitPredict:
         server.submit.assert_not_called()
         assert _pending_id(model) == PREDICTION_ID
         assert _dropped(caplog) == []
+
+    @pytest.mark.parametrize(
+        ("estimator_cls", "y", "output_type"),
+        [
+            (TabPFNClassifier, Y_TRAIN, "top_k"),
+            (TabPFNClassifier, Y_TRAIN, "mean"),
+            (TabPFNRegressor, Y_TRAIN_REGRESSION, "probas"),
+            (TabPFNRegressor, Y_TRAIN_REGRESSION, "bogus"),
+        ],
+    )
+    def test_refuses_an_output_the_estimator_cannot_return_before_any_request(
+        self, estimator_cls, y, output_type
+    ):
+        model = _fitted(estimator_cls, y)
+
+        with _offline_server() as server:
+            with pytest.raises(ValueError, match=rf"not '{output_type}'\.$"):
+                model.submit_predict(X_TEST, output_type=cast(Any, output_type))
+            if estimator_cls is TabPFNRegressor:
+                with pytest.raises(ValueError, match="output_type must be one of"):
+                    model.predict(X_TEST, output_type=cast(Any, output_type))
+
+        server.init.assert_not_called()
+        server.submit.assert_not_called()
+        server.predict.assert_not_called()
+        assert _pending_id(model) is None
 
     def test_refuses_a_full_output_one_response_cannot_cover(self):
         model = _fitted(TabPFNRegressor, Y_TRAIN_REGRESSION)
