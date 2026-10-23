@@ -61,43 +61,83 @@ class PredictAsyncThresholds(BaseModel):
 class AsyncSettings(BaseModel):
     use_above_trainset_size_bytes: int
     poll_timeout_secs: float
-    # Optional, unlike the server SDK: older servers omit them, and get_settings() drops settings that fail validation, which would disable every limit check.
-    predict_use_above: PredictAsyncThresholds | None = None
-    thinking_predict_use_above: PredictAsyncThresholds | None = None
+    predict_use_above: PredictAsyncThresholds
+    thinking_predict_use_above: PredictAsyncThresholds
 
 
 class ClassifierOutputType(str, Enum):
     PROBAS = "probas"
     PREDS = "preds"
+    TOP_K = "top_k"
 
 
 class ClassifierPredictParams(BaseModel):
     output_type: (
         Annotated[ClassifierOutputType | UnknownEnum, Field(union_mode="left_to_right")] | None
-    ) = None
+    ) = Field(
+        default=None,
+        description="What `prediction` contains:\n\n* `probas`: one probability for each class, for each row.\n* `preds`: one label for each row.\n* `top_k`: the most probable classes for each row.",
+    )
+    top_k: int | None = Field(
+        default=None,
+        description="Number of classes that `top_k` returns for each row. Required with `output_type=top_k`. Other output types do not permit it.",
+    )
 
 
 class FitMode(str, Enum):
+    LOW_MEMORY = "low_memory"
     FIT_PREPROCESSORS = "fit_preprocessors"
     FIT_WITH_CACHE = "fit_with_cache"
+    BATCHED = "batched"
 
 
 class ClassifierTabPFNConfig(BaseModel):
-    n_estimators: int | None = None
-    categorical_features_indices: list[int] | None = None
-    softmax_temperature: float | None = None
-    average_before_softmax: bool | None = None
-    random_state: int | None = None
+    n_estimators: int | None = Field(
+        default=None,
+        description="Ensemble size. The model averages this number of forward passes, and each pass uses a different preprocessed view of the data. If unset, TabPFN selects the size. It selects 8 for most data. For wide tables, it selects more, so that each column gets to at least one ensemble member.",
+    )
+    categorical_features_indices: list[int] | None = Field(
+        default=None,
+        description="0-based indices of the categorical columns. If unset, the model finds the categorical columns.",
+    )
+    softmax_temperature: float | None = Field(
+        default=None,
+        description="A lower value makes the predicted probabilities more confident. The value 1.0 has no effect. If unset, the model uses its default value.",
+    )
+    average_before_softmax: bool | None = Field(
+        default=None,
+        description="If true, the model averages the logits of the ensemble members before the softmax. If false, it averages their probabilities after the softmax.",
+    )
+    random_state: int | None = Field(
+        default=None,
+        description="Random seed. The same seed gives the same results. If unset, TabPFN uses its default seed.",
+    )
     inference_config: dict[str, Any] | None = Field(
-        default=None, description="Refer to tabpfn.inference_config.InferenceConfig for more details."
+        default=None,
+        description="Advanced inference settings. See `tabpfn.inference_config.InferenceConfig` in the TabPFN package.",
     )
     inference_precision: (
         Annotated[Literal["autocast", "auto"] | str, Field(union_mode="left_to_right")] | None
-    ) = None
-    ignore_pretraining_limits: bool | None = None
-    fit_mode: Annotated[FitMode | UnknownEnum, Field(union_mode="left_to_right")] | None = None
-    model_path: str | None = None
-    balance_probabilities: bool | None = None
+    ) = Field(
+        default=None,
+        description="`autocast` always uses mixed precision. `auto` selects the precision from the hardware.",
+    )
+    ignore_pretraining_limits: bool | None = Field(
+        default=None,
+        description="If true, the server accepts data outside the size ranges of the model's pre-training, and predictions on that data may be worse. If false, the server rejects that data.",
+    )
+    fit_mode: Annotated[FitMode | UnknownEnum, Field(union_mode="left_to_right")] | None = Field(
+        default=None,
+        description="How the model prepares and keeps the fit. With `fit_with_cache`, the server keeps the fit, and later requests can use it again. Not all servers support `fit_with_cache`.",
+    )
+    model_path: str | None = Field(
+        default=None,
+        description="The checkpoint, by file name or model name. If unset, the server uses its default checkpoint.",
+    )
+    balance_probabilities: bool | None = Field(
+        default=None,
+        description="If true, the model adjusts the probabilities for the class distribution of the training data. This can help with imbalanced classes when the metric ignores class imbalance, such as balanced accuracy.",
+    )
 
 
 class PredictionTask(str, Enum):
@@ -106,9 +146,15 @@ class PredictionTask(str, Enum):
 
 
 class ClassifierConfig(BaseModel):
-    task: Literal[PredictionTask.CLASSIFICATION] = PredictionTask.CLASSIFICATION
-    tabpfn_config: ClassifierTabPFNConfig | None = None
-    predict_params: ClassifierPredictParams | None = None
+    task: Literal[PredictionTask.CLASSIFICATION] = Field(
+        default=PredictionTask.CLASSIFICATION, description="The type of prediction."
+    )
+    tabpfn_config: ClassifierTabPFNConfig | None = Field(
+        default=None, description="Model settings for the fit."
+    )
+    predict_params: ClassifierPredictParams | None = Field(
+        default=None, description="What the prediction returns."
+    )
 
 
 class ClassifierFitTaskConfig(BaseModel):
@@ -117,24 +163,39 @@ class ClassifierFitTaskConfig(BaseModel):
 
 
 class ClassifierMetadata(BaseModel):
-    test_set_num_rows: int
-    test_set_num_cols: int
-    n_estimators: int | None = None
-    billing_model_version: str | None = None
+    test_set_num_rows: int = Field(description="Number of rows that the model predicted.")
+    test_set_num_cols: int = Field(
+        description="Number of columns after encoding. This number can be different from the number of columns that you sent."
+    )
+    n_estimators: int | None = Field(
+        default=None, description="Ensemble size that the request used. Null when no ensemble ran."
+    )
+    billing_model_version: str | None = Field(
+        default=None,
+        description="The model version for the usage count of the request. Null when not reported.",
+    )
     execution_mode: (
         Annotated[Literal["standard", "thinking", "cache"] | str, Field(union_mode="left_to_right")]
         | None
-    ) = None
+    ) = Field(default=None, description="How the server ran the request. Null when not reported.")
     cache_outcome: (
         Annotated[
             Literal["not_requested", "hit", "miss", "fallback"] | str, Field(union_mode="left_to_right")
         ]
         | None
-    ) = None
-    task: Literal[PredictionTask.CLASSIFICATION] = PredictionTask.CLASSIFICATION
-    package_version: str
-    tabpfn_config: ClassifierTabPFNConfig
-    classes: list[str | int | float | bool] | None = None
+    ) = Field(default=None, description="Whether the request used a kept fit. Null when not reported.")
+    task: Literal[PredictionTask.CLASSIFICATION] = Field(
+        default=PredictionTask.CLASSIFICATION, description="The type of prediction."
+    )
+    package_version: str = Field(description="Version of the TabPFN package that made the prediction.")
+    tabpfn_config: ClassifierTabPFNConfig = Field(
+        description="The model settings that the request used."
+    )
+    classes: list[str | int | float | bool] | None = Field(
+        default=None,
+        description="Class labels in ascending order. They name the columns of `probas` and the labels of `preds`. Null with `top_k`, because `top_k` has its own `prediction.classes`.",
+    )
+    top_k: int | None = Field(default=None, description="The `top_k` value of the request.")
 
 
 class ModelVersion(str, Enum):
@@ -144,6 +205,23 @@ class ModelVersion(str, Enum):
     V3 = "v3"
     V3_5 = "v3.5"
     V3_5_FAST = "v3.5-fast"
+
+
+class QuotaOperation(str, Enum):
+    PREDICT = "predict"
+    THINKING_PREDICT = "thinking_predict"
+    THINKING_FIT = "thinking_fit"
+    CACHE_PREDICT = "cache_predict"
+
+
+class EstimateCostRequest(BaseModel):
+    train_rows: int
+    raw_columns: int
+    test_rows: int | None = None
+    model_version: Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")] | None = None
+    operation: Annotated[QuotaOperation | UnknownEnum, Field(union_mode="left_to_right")] | None = None
+    n_estimators: int | None = None
+    thinking_effort: Annotated[ThinkingEffort | str, Field(union_mode="left_to_right")] | None = None
 
 
 class FileInfo(BaseModel):
@@ -205,8 +283,8 @@ class ModelLimit(BaseModel):
     test_set_max_rows: int
     max_classes: int
     max_cols: int
-    test_set_max_rows_w_full_regression_output: int
     predict_row_pairs_budget: int
+    test_set_max_rows_w_full_regression_output: int
     test_set_max_cells: int
 
 
@@ -248,31 +326,71 @@ class RegressorOutputType(str, Enum):
 class RegressorPredictParams(BaseModel):
     output_type: (
         Annotated[RegressorOutputType | UnknownEnum, Field(union_mode="left_to_right")] | None
-    ) = None
-    quantiles: list[float] | None = None
+    ) = Field(
+        default=None,
+        description="What `prediction` contains:\n\n* `mean`, `median` or `mode`: one value for each row.\n* `quantiles`: one list for each quantile.\n* `main`: the mean, median, mode and quantiles.\n* `full`: the full predicted distribution. It accepts fewer rows.",
+    )
+    quantiles: list[float] | None = Field(
+        default=None,
+        description="Quantile levels between 0 and 1, for `quantiles` and `main`. If unset, TabPFN uses its default list of 9 levels.",
+    )
 
 
 class RegressorTabPFNConfig(BaseModel):
-    n_estimators: int | None = None
-    categorical_features_indices: list[int] | None = None
-    softmax_temperature: float | None = None
-    average_before_softmax: bool | None = None
-    random_state: int | None = None
+    n_estimators: int | None = Field(
+        default=None,
+        description="Ensemble size. The model averages this number of forward passes, and each pass uses a different preprocessed view of the data. If unset, TabPFN selects the size. It selects 8 for most data. For wide tables, it selects more, so that each column gets to at least one ensemble member.",
+    )
+    categorical_features_indices: list[int] | None = Field(
+        default=None,
+        description="0-based indices of the categorical columns. If unset, the model finds the categorical columns.",
+    )
+    softmax_temperature: float | None = Field(
+        default=None,
+        description="A lower value makes the predicted probabilities more confident. The value 1.0 has no effect. If unset, the model uses its default value.",
+    )
+    average_before_softmax: bool | None = Field(
+        default=None,
+        description="If true, the model averages the logits of the ensemble members before the softmax. If false, it averages their probabilities after the softmax.",
+    )
+    random_state: int | None = Field(
+        default=None,
+        description="Random seed. The same seed gives the same results. If unset, TabPFN uses its default seed.",
+    )
     inference_config: dict[str, Any] | None = Field(
-        default=None, description="Refer to tabpfn.inference_config.InferenceConfig for more details."
+        default=None,
+        description="Advanced inference settings. See `tabpfn.inference_config.InferenceConfig` in the TabPFN package.",
     )
     inference_precision: (
         Annotated[Literal["autocast", "auto"] | str, Field(union_mode="left_to_right")] | None
-    ) = None
-    ignore_pretraining_limits: bool | None = None
-    fit_mode: Annotated[FitMode | UnknownEnum, Field(union_mode="left_to_right")] | None = None
-    model_path: str | None = None
+    ) = Field(
+        default=None,
+        description="`autocast` always uses mixed precision. `auto` selects the precision from the hardware.",
+    )
+    ignore_pretraining_limits: bool | None = Field(
+        default=None,
+        description="If true, the server accepts data outside the size ranges of the model's pre-training, and predictions on that data may be worse. If false, the server rejects that data.",
+    )
+    fit_mode: Annotated[FitMode | UnknownEnum, Field(union_mode="left_to_right")] | None = Field(
+        default=None,
+        description="How the model prepares and keeps the fit. With `fit_with_cache`, the server keeps the fit, and later requests can use it again. Not all servers support `fit_with_cache`.",
+    )
+    model_path: str | None = Field(
+        default=None,
+        description="The checkpoint, by file name or model name. If unset, the server uses its default checkpoint.",
+    )
 
 
 class RegressorConfig(BaseModel):
-    task: Literal[PredictionTask.REGRESSION] = PredictionTask.REGRESSION
-    tabpfn_config: RegressorTabPFNConfig | None = None
-    predict_params: RegressorPredictParams | None = None
+    task: Literal[PredictionTask.REGRESSION] = Field(
+        default=PredictionTask.REGRESSION, description="The type of prediction."
+    )
+    tabpfn_config: RegressorTabPFNConfig | None = Field(
+        default=None, description="Model settings for the fit."
+    )
+    predict_params: RegressorPredictParams | None = Field(
+        default=None, description="What the prediction returns."
+    )
 
 
 class RegressorFitTaskConfig(BaseModel):
@@ -281,23 +399,32 @@ class RegressorFitTaskConfig(BaseModel):
 
 
 class RegressorMetadata(BaseModel):
-    test_set_num_rows: int
-    test_set_num_cols: int
-    n_estimators: int | None = None
-    billing_model_version: str | None = None
+    test_set_num_rows: int = Field(description="Number of rows that the model predicted.")
+    test_set_num_cols: int = Field(
+        description="Number of columns after encoding. This number can be different from the number of columns that you sent."
+    )
+    n_estimators: int | None = Field(
+        default=None, description="Ensemble size that the request used. Null when no ensemble ran."
+    )
+    billing_model_version: str | None = Field(
+        default=None,
+        description="The model version for the usage count of the request. Null when not reported.",
+    )
     execution_mode: (
         Annotated[Literal["standard", "thinking", "cache"] | str, Field(union_mode="left_to_right")]
         | None
-    ) = None
+    ) = Field(default=None, description="How the server ran the request. Null when not reported.")
     cache_outcome: (
         Annotated[
             Literal["not_requested", "hit", "miss", "fallback"] | str, Field(union_mode="left_to_right")
         ]
         | None
-    ) = None
-    task: Literal[PredictionTask.REGRESSION] = PredictionTask.REGRESSION
-    package_version: str
-    tabpfn_config: RegressorTabPFNConfig
+    ) = Field(default=None, description="Whether the request used a kept fit. Null when not reported.")
+    task: Literal[PredictionTask.REGRESSION] = Field(
+        default=PredictionTask.REGRESSION, description="The type of prediction."
+    )
+    package_version: str = Field(description="Version of the TabPFN package that made the prediction.")
+    tabpfn_config: RegressorTabPFNConfig = Field(description="The model settings that the request used.")
 
 
 class ThinkingConfig(BaseModel):
@@ -307,6 +434,37 @@ class ThinkingConfig(BaseModel):
     group_col: str | list[str] | None = None
     time_col: str | None = None
     group_time_col: str | None = None
+
+
+class UsageByTokenEntry(BaseModel):
+    api_token_id: str | None
+    api_token_name: str | None
+    request_count: int
+    total_cost: int
+
+
+class UsageDailyEntry(BaseModel):
+    date: str
+    total_cost: int
+    request_count: int
+    thinking_fit_count: int
+    cost_by_operation: dict[str, int] | None = Field(
+        default=None,
+        description="Costs by requested operation (legacy fallback: operation_type), including unknown operations",
+    )
+
+
+class UsageHistoryEntry(BaseModel):
+    datetime: str
+    cost: int | None
+    duration_in_ms: int | None
+    error_message: str | None
+    error_type: str | None
+    operation_type: str
+    requested_operation_type: str | None = None
+    pricing_version: str | None = None
+    api_token_id: str | None
+    api_token_name: str | None
 
 
 Prediction = Union[list[Any], list[list[Any]], dict[str, Union[list[Any], list[list[Any]]]]]
@@ -323,18 +481,42 @@ Metadata = Annotated[Union[ClassifierMetadata, RegressorMetadata], Field(discrim
 TaskConfig = Annotated[Union[ClassifierConfig, RegressorConfig], Field(discriminator="task")]
 
 
+class APIUsageData(BaseModel):
+    daily_tokens_used: int | None = None
+    daily_token_limit: int | None = None
+    monthly_tokens_used: int | None = None
+    monthly_token_limit: int | None = None
+    current_usage: int
+    usage_limit: int
+    reset_time: str
+    monthly_usage: int
+    monthly_limit: int
+    monthly_reset_time: str
+    daily_usage: int
+    daily_limit: int
+    daily_reset_time: str
+    thinking_fit_count: int
+    thinking_fit_limit: int
+
+
 class DuplicateTestSetErrorResponse(BaseModel):
-    message: str
+    message: str = Field(description="What went wrong.")
     error_code: str = "DUPLICATE_TEST_SET_UPLOAD"
-    trace_id: UUID | None = None
+    trace_id: UUID | None = Field(default=None, description="Id to quote when reporting the error.")
     test_set_upload_id: UUID
 
 
 class DuplicateTrainSetErrorResponse(BaseModel):
-    message: str
+    message: str = Field(description="What went wrong.")
     error_code: str = "DUPLICATE_TRAIN_SET_UPLOAD"
-    trace_id: UUID | None = None
+    trace_id: UUID | None = Field(default=None, description="Id to quote when reporting the error.")
     train_set_upload_id: UUID
+
+
+class EstimateCostResponse(BaseModel):
+    estimated_cost: int
+    pricing_version: str
+    inputs: EstimateCostRequest
 
 
 class FitRequest(BaseModel):
@@ -390,9 +572,9 @@ class GetSettingsResponse(BaseModel):
 
 
 class NotFoundErrorResponse(BaseModel):
-    message: str
+    message: str = Field(description="What went wrong.")
     error_code: str = "NOT_FOUND"
-    trace_id: UUID | None = None
+    trace_id: UUID | None = Field(default=None, description="Id to quote when reporting the error.")
 
 
 class PredictPendingResponse(BaseModel):
@@ -470,24 +652,13 @@ class SubmitPredictJobResponse(BaseModel):
     fitted_test_set_id: UUID
 
 
-class QuotaOperation(str, Enum):
-    PREDICT = "predict"
-    THINKING_PREDICT = "thinking_predict"
-    THINKING_FIT = "thinking_fit"
-    CACHE_PREDICT = "cache_predict"
+class UsageByTokenResponse(BaseModel):
+    entries: list[UsageByTokenEntry]
 
 
-class EstimateCostRequest(BaseModel):
-    train_rows: int
-    raw_columns: int
-    test_rows: int | None = None
-    model_version: Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")] | None = None
-    operation: Annotated[QuotaOperation | UnknownEnum, Field(union_mode="left_to_right")] | None = None
-    n_estimators: int | None = None
-    thinking_effort: Annotated[ThinkingEffort | str, Field(union_mode="left_to_right")] | None = None
+class UsageDailyResponse(BaseModel):
+    entries: list[UsageDailyEntry]
 
 
-class EstimateCostResponse(BaseModel):
-    estimated_cost: int
-    pricing_version: str
-    inputs: EstimateCostRequest
+class UsageHistoryResponse(BaseModel):
+    entries: list[UsageHistoryEntry]

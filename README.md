@@ -253,7 +253,8 @@ A large prediction can take a while too. `submit_predict()` starts it and return
 from tabpfn_client import TabPFNClassifier
 
 model = TabPFNClassifier.load_model("model.json")
-model.submit_predict(X_test, output_type="probas")  # returns without waiting for the prediction
+# Returns without waiting for the prediction.
+model.submit_predict(X_test, output_type="probas")
 # ... other work ...
 probabilities = model.wait_for_predict()  # what model.predict_proba(X_test) returns
 ```

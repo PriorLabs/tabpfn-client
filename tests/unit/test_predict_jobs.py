@@ -28,8 +28,9 @@ import respx
 
 import tabpfn_client
 from tabpfn_client import PredictFailedError, RefitRequiredError
+from pydantic import ValidationError
+
 from tabpfn_client.api_models import (
-    AsyncSettings,
     ClassifierConfig,
     ClassifierTabPFNConfig,
     FitMode,
@@ -37,7 +38,11 @@ from tabpfn_client.api_models import (
     GetSettingsResponse,
     PredictAsyncThresholds,
 )
-from tabpfn_client.client import _MIN_RETRY_INTERVAL_SECS, ServiceClient
+from tabpfn_client.client import (
+    _MIN_RETRY_INTERVAL_SECS,
+    ResolvedAsyncSettings,
+    ServiceClient,
+)
 from tabpfn_client.errors import (
     CappedRetryableServerError,
     PredictionGoneError,
@@ -202,36 +207,32 @@ def _failed(error: str | None, error_code: str | None) -> dict[str, Any]:
 def _settings_payload(*, thresholds: bool = True) -> dict[str, Any]:
     """`get_settings`, from a server with predict jobs or from an older one."""
     payload = _api_settings_payload()
+    async_settings = payload["async_settings"]
     if thresholds:
-        payload["async_settings"] |= {
+        async_settings |= {
             "predict_use_above": THRESHOLDS,
             "thinking_predict_use_above": THINKING_THRESHOLDS,
         }
+    else:
+        del async_settings["predict_use_above"]
+        del async_settings["thinking_predict_use_above"]
     return payload
 
 
-def _cache_settings(*, thresholds: bool = True) -> None:
+def _server_settings() -> GetSettingsResponse:
+    return GetSettingsResponse.model_validate(_settings_payload())
+
+
+def _cache_settings() -> None:
     """Fill the settings cache, as `init()` does."""
-    ServiceClient._api_settings = GetSettingsResponse.model_validate(
-        _settings_payload(thresholds=thresholds)
-    )
+    ServiceClient._api_settings = _server_settings()
     ServiceClient._api_settings_ts = time.monotonic()
 
 
-def _async_settings(
-    *, thresholds: bool = True, thinking: bool = True, poll_timeout: float = 7200.0
-) -> AsyncSettings:
-    return AsyncSettings(
+def _async_settings(*, poll_timeout: float = 7200.0) -> ResolvedAsyncSettings:
+    return ResolvedAsyncSettings(
         use_above_trainset_size_bytes=50 * 1024 * 1024,
         poll_timeout_secs=poll_timeout,
-        predict_use_above=PredictAsyncThresholds.model_validate(THRESHOLDS)
-        if thresholds
-        else None,
-        thinking_predict_use_above=PredictAsyncThresholds.model_validate(
-            THINKING_THRESHOLDS
-        )
-        if thresholds and thinking
-        else None,
     )
 
 
@@ -289,15 +290,14 @@ def _fake_clock(fake_time: _FakeTime | None = None) -> Generator[_FakeTime]:
 
 
 @contextmanager
-def _settings_cached_minutes_after_boot(
-    *, thresholds: bool = True
-) -> Generator[_FakeTime]:
+def _settings_cached_minutes_after_boot() -> Generator[_FakeTime]:
     """Cache the settings a minute ago, on a fake clock two minutes after boot.
 
-    `time.monotonic()` counts from boot, so a cache expired with 0.0 rather than
-    -inf stays fresh here, as on a machine in its first hour of uptime.
+    `time.monotonic()` counts from boot, so a cache expired by setting its
+    timestamp to 0.0 would stay fresh here, as on a machine in its first hour
+    of uptime.
     """
-    _cache_settings(thresholds=thresholds)
+    _cache_settings()
     ServiceClient._api_settings_ts = 60.0
     with _fake_clock() as clock:
         clock.now = 120.0
@@ -347,13 +347,16 @@ def _broke_off_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
 
 
 class TestAsyncSettings:
-    def test_settings_from_an_older_server_have_no_predict_thresholds(self):
-        settings = GetSettingsResponse.model_validate(
-            _settings_payload(thresholds=False)
+    def test_settings_from_an_older_server_do_not_validate(self):
+        with pytest.raises(ValidationError):
+            GetSettingsResponse.model_validate(_settings_payload(thresholds=False))
+
+    def test_an_older_servers_settings_are_unavailable(self, router):
+        router.get("/tabpfn/get_settings").respond(
+            200, json=_settings_payload(thresholds=False)
         )
 
-        assert settings.async_settings.predict_use_above is None
-        assert settings.async_settings.thinking_predict_use_above is None
+        assert ServiceClient.get_settings() is None
 
     def test_settings_carry_the_predict_thresholds(self):
         settings = GetSettingsResponse.model_validate(_settings_payload())
@@ -366,41 +369,29 @@ class TestAsyncSettings:
             == PredictAsyncThresholds(train_rows=25_000, test_rows=10_000)
         )
 
-    def test_resolved_settings_carry_the_servers_thresholds(self):
+    def test_dropped_settings_are_not_returned_when_a_refetch_fails(self, router):
         _cache_settings()
+        settings_route = router.get("/tabpfn/get_settings").respond(503)
 
-        resolved = ServiceClient._resolve_async_settings()
+        ServiceClient._drop_settings()
 
-        assert resolved.predict_use_above == PredictAsyncThresholds(
-            train_rows=50_000, test_rows=100_000
-        )
-        assert resolved.thinking_predict_use_above == PredictAsyncThresholds(
-            train_rows=25_000, test_rows=10_000
-        )
-
-    @pytest.mark.parametrize("server", ["older", "unreachable"])
-    def test_resolved_settings_have_no_thresholds_the_server_did_not_send(self, server):
-        if server == "older":
-            _cache_settings(thresholds=False)
-            resolved = ServiceClient._resolve_async_settings()
-        else:
-            with patch.object(ServiceClient, "get_settings", return_value=None):
-                resolved = ServiceClient._resolve_async_settings()
-
-        assert resolved.predict_use_above is None
-        assert resolved.thinking_predict_use_above is None
+        assert ServiceClient.get_settings() is None
+        assert settings_route.call_count == 1
 
 
 def _resolve(
     api_mode: ApiMode | str,
-    settings: AsyncSettings,
     *,
+    server: bool = True,
     n_train_rows: int | None = None,
     n_test_rows: int = 1,
     thinking: bool = False,
     fit_with_cache: bool = False,
 ) -> ApiMode:
-    with patch.object(ServiceClient, "_resolve_async_settings", return_value=settings):
+    """Resolve the mode with the settings of a server with predict jobs, or with
+    none, as when the server is unreachable or predates predict jobs."""
+    settings = _server_settings() if server else None
+    with patch.object(ServiceClient, "get_settings", return_value=settings):
         return ServiceClient._resolve_predict_mode(
             cast(Any, api_mode),
             n_train_rows=n_train_rows,
@@ -411,33 +402,22 @@ def _resolve(
 
 
 class TestResolvePredictMode:
-    @pytest.mark.parametrize("api_mode", list(ApiMode))
-    def test_a_server_without_predict_jobs_gets_one_request_in_every_mode(
-        self, api_mode, caplog
-    ):
+    def test_auto_predicts_with_one_request_without_settings(self, caplog):
         with caplog.at_level(logging.DEBUG, logger="tabpfn_client.client"):
             mode = _resolve(
-                api_mode,
-                _async_settings(thresholds=False),
-                n_train_rows=10**6,
-                n_test_rows=10**6,
+                ApiMode.AUTO, server=False, n_train_rows=10**6, n_test_rows=10**6
             )
 
         assert mode is ApiMode.SYNC
-        assert "runs no predictions as background jobs" in caplog.text
+        assert "No server settings; predicting with one request." in caplog.text
 
-    @pytest.mark.parametrize("api_mode", list(ApiMode))
-    def test_unreachable_settings_mean_one_request_in_every_mode(self, api_mode):
-        with patch.object(ServiceClient, "get_settings", return_value=None):
-            mode = ServiceClient._resolve_predict_mode(
-                api_mode,
-                n_train_rows=10**6,
-                n_test_rows=10**6,
-                thinking=False,
-                fit_with_cache=False,
-            )
+    @pytest.mark.parametrize("api_mode", [ApiMode.SYNC, ApiMode.ASYNC])
+    def test_sync_and_async_are_kept_without_settings(self, api_mode):
+        # ASYNC tries the job endpoint, and `predict()` falls back to one
+        # request if the server has none.
+        mode = _resolve(api_mode, server=False, n_train_rows=1, n_test_rows=1)
 
-        assert mode is ApiMode.SYNC
+        assert mode is api_mode
 
     @pytest.mark.parametrize(
         ("api_mode", "rows"), [(ApiMode.SYNC, 10**6), (ApiMode.ASYNC, 1)]
@@ -448,7 +428,6 @@ class TestResolvePredictMode:
     ):
         mode = _resolve(
             api_mode,
-            _async_settings(),
             n_train_rows=rows,
             n_test_rows=rows,
             thinking=True,
@@ -481,7 +460,6 @@ class TestResolvePredictMode:
     ):
         mode = _resolve(
             ApiMode.AUTO,
-            _async_settings(),
             n_train_rows=n_train_rows,
             n_test_rows=n_test_rows,
         )
@@ -491,7 +469,6 @@ class TestResolvePredictMode:
     def test_auto_predicts_a_fit_with_a_kv_cache_with_one_request(self):
         mode = _resolve(
             ApiMode.AUTO,
-            _async_settings(),
             n_train_rows=10**6,
             n_test_rows=10**6,
             fit_with_cache=True,
@@ -507,22 +484,11 @@ class TestResolvePredictMode:
     ):
         rows = {"n_train_rows": n_train_rows, "n_test_rows": n_test_rows}
 
-        thinking = _resolve(ApiMode.AUTO, _async_settings(), thinking=True, **rows)
-        standard = _resolve(ApiMode.AUTO, _async_settings(), thinking=False, **rows)
+        thinking = _resolve(ApiMode.AUTO, thinking=True, **rows)
+        standard = _resolve(ApiMode.AUTO, thinking=False, **rows)
 
         assert thinking is ApiMode.ASYNC
         assert standard is ApiMode.SYNC
-
-    def test_auto_uses_the_standard_thresholds_when_there_are_no_thinking_ones(
-        self,
-    ):
-        settings = _async_settings(thinking=False)
-
-        below = _resolve(ApiMode.AUTO, settings, n_train_rows=25_000, thinking=True)
-        reached = _resolve(ApiMode.AUTO, settings, n_train_rows=50_000, thinking=True)
-
-        assert below is ApiMode.SYNC
-        assert reached is ApiMode.ASYNC
 
     @pytest.mark.parametrize(
         ("api_mode", "n_train_rows", "expected"),
@@ -536,7 +502,7 @@ class TestResolvePredictMode:
     def test_takes_the_mode_as_the_plain_string_load_model_restores(
         self, api_mode, n_train_rows, expected
     ):
-        mode = _resolve(api_mode, _async_settings(), n_train_rows=n_train_rows)
+        mode = _resolve(api_mode, n_train_rows=n_train_rows)
 
         assert mode is expected
 
@@ -1013,7 +979,7 @@ class TestPredictionJobs:
     def test_decides_on_the_fit_and_the_rows_to_predict(
         self, router, fit_mode, fit_with_cache
     ):
-        _cache_settings(thresholds=False)
+        _cache_settings()
         _upload_route(router)
         router.post("/tabpfn/predict").respond(200, json=_prediction())
         task_config = ClassifierConfig(
@@ -1073,18 +1039,23 @@ class TestPredictionJobs:
 
         assert submit_route.call_count == 1
 
-    def test_async_predicts_with_one_request_on_a_server_without_predict_jobs(
-        self, router
-    ):
-        _cache_settings(thresholds=False)
+    def test_async_tries_a_job_on_a_server_whose_settings_are_unavailable(self, router):
+        # A server that predates predict jobs: its settings don't validate.
+        settings_route = router.get("/tabpfn/get_settings").respond(
+            200, json=_settings_payload(thresholds=False)
+        )
         _upload_route(router)
-        # No submit route: submitting would fail the test.
+        submit_route = router.post("/tabpfn/submit_predict_job").respond(
+            404, json=ROUTE_MISSING
+        )
         predict_route = router.post("/tabpfn/predict").respond(
             200, json=_prediction(with_id=False)
         )
 
         result = _predict(api_mode=ApiMode.ASYNC)
 
+        assert settings_route.called
+        assert submit_route.call_count == 1
         assert predict_route.call_count == 1
         np.testing.assert_array_equal(result.y_pred, PREDICTION)
 
@@ -1119,10 +1090,10 @@ class TestPredictionJobs:
         assert submit_route.call_count == 1
         assert _sent(predict_route) == _sent(submit_route)
         assert _sent(predict_route)["test_set_upload_id"] == UPLOAD_ID
-        # The settings that sent the prediction to the job endpoint expired.
+        # The settings that sent the prediction to the job endpoint are
+        # dropped, and the older server's own don't validate.
         assert settings_route.call_count == 1
-        assert settings is not None
-        assert settings.async_settings.predict_use_above is None
+        assert settings is None
 
     @pytest.mark.parametrize(
         ("message", "error_code"),
@@ -1201,59 +1172,6 @@ class TestPredictionJobs:
 
         assert fitted_test_set_id == PREDICTION_ID
 
-    def test_submit_predict_refuses_a_server_without_predict_jobs_before_uploading(
-        self, router
-    ):
-        # No upload route: an upload would fail the test.
-        settings_route = router.get("/tabpfn/get_settings").respond(
-            200, json=_settings_payload(thresholds=False)
-        )
-
-        with (
-            _settings_cached_minutes_after_boot(thresholds=False),
-            pytest.raises(RuntimeError) as exc_info,
-        ):
-            ServiceClient.submit_predict(FIT_ID, X_TEST, ClassifierConfig())
-
-        assert str(exc_info.value) == NO_PREDICT_JOBS
-        # Cached settings may predate the server's predict jobs, so the server
-        # is asked again before the refusal.
-        assert settings_route.call_count == 1
-
-    def test_submit_predict_refuses_on_the_cached_settings_it_cannot_refresh(
-        self, router
-    ):
-        # No upload route: an upload would fail the test.
-        settings_route = router.get("/tabpfn/get_settings").respond(503)
-
-        with (
-            _settings_cached_minutes_after_boot(thresholds=False),
-            pytest.raises(RuntimeError) as exc_info,
-        ):
-            ServiceClient.submit_predict(FIT_ID, X_TEST, ClassifierConfig())
-
-        assert str(exc_info.value) == NO_PREDICT_JOBS
-        # One refetch; once it fails, the cached settings decide.
-        assert settings_route.call_count == 1
-
-    def test_submit_predict_submits_once_fresh_settings_show_predict_jobs(self, router):
-        settings_route = router.get("/tabpfn/get_settings").respond(
-            200, json=_settings_payload()
-        )
-        _upload_route(router)
-        router.post("/tabpfn/submit_predict_job").respond(
-            200, json={"fitted_test_set_id": str(PREDICTION_ID)}
-        )
-
-        # Settings cached before the server started to run predict jobs.
-        with _settings_cached_minutes_after_boot(thresholds=False):
-            fitted_test_set_id = ServiceClient.submit_predict(
-                FIT_ID, X_TEST, ClassifierConfig()
-            )
-
-        assert fitted_test_set_id == PREDICTION_ID
-        assert settings_route.call_count == 1
-
     def test_submit_predict_raises_when_the_server_has_no_submit_endpoint(self, router):
         upload_route = _upload_route(router)
         submit_route = router.post("/tabpfn/submit_predict_job").respond(
@@ -1271,11 +1189,11 @@ class TestPredictionJobs:
                 ServiceClient.submit_predict(FIT_ID, X_TEST, ClassifierConfig())
 
         assert str(first.value) == str(second.value) == NO_PREDICT_JOBS
-        # The first call expired the settings, so the second asked the server
-        # again and refused before it uploaded.
+        assert upload_route.call_count == submit_route.call_count == 2
+        # The first call dropped the settings, and the older server's own
+        # don't validate.
+        assert ServiceClient.get_settings() is None
         assert settings_route.called
-        assert upload_route.call_count == 1
-        assert submit_route.call_count == 1
 
 
 def _capped_errors() -> list[tuple[Callable[[], Any], type[Exception]]]:

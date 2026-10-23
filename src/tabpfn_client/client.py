@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from uuid import UUID
 import base64
+from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from importlib.metadata import PackageNotFoundError, version
 import io
@@ -86,7 +87,6 @@ from tabpfn_client.api_models import (
     GetPredictResultRequest,
     GetPredictResultResponse,
     ThinkingConfig,
-    AsyncSettings,
     FitTaskConfig,
     Prediction,
 )
@@ -282,6 +282,21 @@ _MIN_RETRY_INTERVAL_SECS = 0.3
 _MAX_POLL_TIMEOUT_SECS = 120.0
 
 
+@dataclass(frozen=True)
+class ResolvedAsyncSettings:
+    """The settings for background jobs that the client applies.
+
+    Attributes:
+        use_above_trainset_size_bytes: The in-memory size of a training set
+            above which an AUTO fit runs as a background job.
+        poll_timeout_secs: How long the client polls a background job before
+            it gives up.
+    """
+
+    use_above_trainset_size_bytes: int
+    poll_timeout_secs: float
+
+
 class ServiceClient(Singleton):
     """Singleton class for handling communication with the server.
 
@@ -348,14 +363,21 @@ class ServiceClient(Singleton):
             return cls._api_settings  # return stale value if available
 
     @classmethod
-    def _resolve_async_settings(cls) -> AsyncSettings:
+    def _drop_settings(cls) -> None:
+        """Drop the cached settings, so that the next `get_settings()` asks again.
+
+        For settings that describe a server version that is gone, as after a
+        rollback: a `get_settings()` that then fails returns None, not them.
+        """
+        cls._api_settings = None
+
+    @classmethod
+    def _resolve_async_settings(cls) -> ResolvedAsyncSettings:
         """Resolve async settings: environment > server default > client default.
 
         An option explicitly set via the environment wins; otherwise the
         server-sent value applies; the client default is the fallback when the
-        server is unreachable. The predict thresholds come from the server
-        alone: None means it runs no predictions as background jobs, or its
-        settings are unavailable.
+        server's settings are unavailable.
         """
         opts = get_opts()
         api_settings = cls.get_settings()
@@ -368,7 +390,7 @@ class ServiceClient(Singleton):
                 return server_value
             return getattr(opts, opt_name)
 
-        return AsyncSettings(
+        return ResolvedAsyncSettings(
             use_above_trainset_size_bytes=resolve(
                 "TABPFN_CLIENT_ASYNC_USE_ABOVE_TRAINSET_SIZE",
                 server.use_above_trainset_size_bytes if server else None,
@@ -376,10 +398,6 @@ class ServiceClient(Singleton):
             poll_timeout_secs=resolve(
                 "TABPFN_CLIENT_ASYNC_POLL_TIMEOUT",
                 server.poll_timeout_secs if server else None,
-            ),
-            predict_use_above=server.predict_use_above if server else None,
-            thinking_predict_use_above=(
-                server.thinking_predict_use_above if server else None
             ),
         )
 
@@ -395,13 +413,11 @@ class ServiceClient(Singleton):
     ) -> ApiMode:
         """Decide whether a prediction runs as one request or as a polled job.
 
-        A server that advertises no predict thresholds runs no predictions as
-        background jobs, so every mode predicts with one request there, ASYNC
-        included. Otherwise SYNC and ASYNC are kept, and AUTO runs the
-        prediction as a job once the fit's train rows or the test rows reach the
-        server's thresholds: the thinking ones for a thinking fit, when the
-        server sends them. A fit with a KV cache predicts fast whatever its
-        size, so AUTO predicts it with one request.
+        SYNC and ASYNC are kept. AUTO runs the prediction as a job once the
+        fit's train rows or the test rows reach the server's thresholds: the
+        thinking ones for a thinking fit. A fit with a KV cache predicts fast
+        whatever its size, so AUTO predicts it with one request, as it does
+        when the server's settings are unavailable.
 
         Args:
             api_mode: The requested mode; a plain string works too, as
@@ -416,20 +432,23 @@ class ServiceClient(Singleton):
             `ApiMode.SYNC` for one request, `ApiMode.ASYNC` for a polled job.
         """
         api_mode = ApiMode(api_mode)
-        async_settings = cls._resolve_async_settings()
-        thresholds = async_settings.predict_use_above
-        if thresholds is None:
-            logger.debug(
-                "The server runs no predictions as background jobs; predicting "
-                "with one request."
-            )
-            return ApiMode.SYNC
         if api_mode != ApiMode.AUTO:
             return api_mode
         if fit_with_cache:
             return ApiMode.SYNC
-        if thinking and async_settings.thinking_predict_use_above is not None:
-            thresholds = async_settings.thinking_predict_use_above
+        api_settings = cls.get_settings()
+        if api_settings is None:
+            # Unreachable, or a server that predates predictions as background
+            # jobs, whose settings lack the thresholds and so don't validate.
+            # One request works on every server.
+            logger.debug("No server settings; predicting with one request.")
+            return ApiMode.SYNC
+        async_settings = api_settings.async_settings
+        thresholds = (
+            async_settings.thinking_predict_use_above
+            if thinking
+            else async_settings.predict_use_above
+        )
         # `>=`: the server runs a prediction as a job once it reaches either
         # count. The fit rule compares bytes with `>` instead.
         reaches_thresholds = (
@@ -901,10 +920,11 @@ class ServiceClient(Singleton):
         SYNC predicts with one request. When the server stops waiting for the
         prediction before it completes, it answers that the prediction is still
         running, and the client polls for the result. ASYNC runs the prediction
-        as a background job the client polls from the start. AUTO picks ASYNC
-        once the fit's train rows or the test rows reach the server's
-        thresholds. A server that advertises no thresholds runs no predictions
-        as background jobs, so every mode predicts with one request there.
+        as a background job the client polls from the start, or with one
+        request on a server that does not run predictions as background jobs.
+        AUTO picks ASYNC once the fit's train rows or the test rows reach the
+        server's thresholds, and SYNC when the server's settings are
+        unavailable.
 
         Args:
             fitted_train_set_id: The unique ID of the fitted train set in the server.
@@ -967,10 +987,7 @@ class ServiceClient(Singleton):
                 "This TabPFN server does not run predictions as background jobs; "
                 "predicting with one request."
             )
-            # Expire the cached settings. -inf, not 0.0: `time.monotonic()`
-            # counts from boot, so 0.0 would leave them fresh during the
-            # machine's first hour of uptime.
-            cls._api_settings_ts = float("-inf")
+            cls._drop_settings()
 
         predict_resp = cls._predict(
             req=PredictRequest(
@@ -1040,22 +1057,6 @@ class ServiceClient(Singleton):
             FittedModelNotFoundError: If the fitted train set is not found.
         """
         client_options = client_options or ClientOptions()
-        # The settings already tell whether the upload would be for nothing.
-        api_settings = cls.get_settings()
-        if (
-            api_settings is not None
-            and api_settings.async_settings.predict_use_above is None
-        ):
-            # Settings cached before the server started to run predictions as
-            # background jobs would refuse them for up to an hour, so a refusal
-            # asks the server again first.
-            cls._api_settings_ts = float("-inf")
-            api_settings = cls.get_settings()
-            if (
-                api_settings is not None
-                and api_settings.async_settings.predict_use_above is None
-            ):
-                raise RuntimeError(_NO_PREDICT_JOBS)
         test_set_upload_id = cls._upload_test_set(
             fitted_train_set_id, x_test, client_options
         )
@@ -1069,10 +1070,8 @@ class ServiceClient(Singleton):
             headers=client_options.headers,
         )
         if submit_resp is None:
-            # The cached settings promised background jobs that this server
-            # does not run. Expired, they make the next call ask the server
-            # again before it uploads.
-            cls._api_settings_ts = float("-inf")
+            # The cached settings describe a server that ran background jobs.
+            cls._drop_settings()
             raise RuntimeError(_NO_PREDICT_JOBS)
         logger.debug(f"Submitted prediction {submit_resp.fitted_test_set_id}.")
         return submit_resp.fitted_test_set_id
