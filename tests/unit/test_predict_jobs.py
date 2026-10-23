@@ -861,18 +861,38 @@ class TestPredict:
         assert str(exc_info.value) == expected
         assert predict_route.call_count == 1
 
-    def test_a_retryable_status_is_still_retried_once(self, router):
+    @pytest.mark.parametrize("error", [httpx.ConnectError, httpx.ConnectTimeout])
+    def test_a_predict_that_never_reached_the_server_is_retried_once(
+        self, router, error
+    ):
         _upload_route(router)
         predict_route = router.post("/tabpfn/predict")
-        predict_route.side_effect = [
-            _error(503, "Overloaded"),
-            _json(200, _prediction()),
-        ]
+        predict_route.side_effect = [error("unreachable"), _json(200, _prediction())]
 
         result = _predict()
 
         assert predict_route.call_count == 2
         assert result.fitted_test_set_id == PREDICTION_ID
+
+    @pytest.mark.parametrize(
+        "outcome",
+        [
+            httpx.ReadTimeout("lost"),
+            httpx.RemoteProtocolError("cut off"),
+            _error(503, "Overloaded"),
+        ],
+        ids=["read_timeout", "cut_off", "503"],
+    )
+    def test_a_predict_the_server_may_have_run_is_not_retried(self, router, outcome):
+        # Each /predict creates a job; even a 503 can come after it completed.
+        _upload_route(router)
+        predict_route = router.post("/tabpfn/predict")
+        predict_route.side_effect = [outcome]
+
+        with pytest.raises((httpx.HTTPError, RetryableServerError)):
+            _predict()
+
+        assert predict_route.call_count == 1
 
     def test_rejects_an_invalid_mode_before_any_request(self, router):
         with pytest.raises(ValueError):

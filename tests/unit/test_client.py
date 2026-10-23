@@ -28,6 +28,7 @@ from tabpfn_client.models import ApiMode
 from tabpfn_client.api_models import (
     ClassifierConfig,
     DuplicateTrainSetErrorResponse,
+    FitRequest,
     FitResponse,
     FitStatus,
     GetFitStatusRequest,
@@ -507,6 +508,56 @@ class TestServiceClient(unittest.TestCase):
         self.assertEqual(fitted_train_set_id_1, fitted_train_set_id_2)
         self.assertEqual(prepare_route.call_count, 2)
         self.assertEqual(fit_route.call_count, 2)
+
+    def _sync_fit(self) -> FitResponse:
+        return ServiceClient._fit(
+            req=FitRequest(
+                train_set_upload_id=UUID("00000000-0000-0000-0000-000000000001"),
+                task_config=ClassifierFitTaskConfig(),
+                tabpfn_systems=["preprocessing", "text"],
+            ),
+            timeout=10.0,
+        )
+
+    @with_mock_server()
+    def test_sync_fit_that_never_reached_the_server_is_retried_once(self, mock_server):
+        fit_route = mock_server.router.post("/tabpfn/fit")
+        for error in (httpx.ConnectError, httpx.ConnectTimeout):
+            with self.subTest(error=error.__name__):
+                fit_route.reset()
+                fit_route.side_effect = [
+                    error("unreachable"),
+                    httpx.Response(
+                        200,
+                        json={
+                            "fitted_train_set_id": "00000000-0000-0000-0000-000000000002",
+                            "status": "completed",
+                        },
+                    ),
+                ]
+
+                response = self._sync_fit()
+
+                self.assertEqual(response.status, FitStatus.COMPLETED)
+                self.assertEqual(fit_route.call_count, 2)
+
+    @with_mock_server()
+    def test_sync_fit_the_server_may_have_run_is_not_retried(self, mock_server):
+        # Each /fit creates a fit job, which a retry would run and bill twice.
+        fit_route = mock_server.router.post("/tabpfn/fit")
+        for outcome in (
+            httpx.ReadTimeout("lost"),
+            httpx.RemoteProtocolError("cut off"),
+            httpx.Response(503, json={"message": "Overloaded"}),
+        ):
+            with self.subTest(outcome=type(outcome).__name__):
+                fit_route.reset()
+                fit_route.side_effect = [outcome]
+
+                with self.assertRaises((httpx.HTTPError, RetryableServerError)):
+                    self._sync_fit()
+
+                self.assertEqual(fit_route.call_count, 1)
 
     def test_fit_rejects_invalid_api_mode_before_any_request(self):
         # `api_mode` is coerced through the ApiMode enum up front, so a typo

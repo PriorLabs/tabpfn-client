@@ -868,15 +868,14 @@ class ServiceClient(Singleton):
         )
 
     @classmethod
+    # Every fit call creates a new fit job, and the server has no dedup logic,
+    # so retry only errors that prove the request never reached it: a retry
+    # after a lost response or a 503 could fit, and bill, twice.
     @backoff.on_exception(
         backoff.constant,
         (
             httpx.ConnectError,
-            httpx.TimeoutException,
-            httpx.ReadTimeout,
-            httpx.WriteTimeout,
-            httpx.RemoteProtocolError,
-            RetryableServerError,
+            httpx.ConnectTimeout,
         ),
         max_tries=2,
         interval=0,
@@ -1522,15 +1521,14 @@ class ServiceClient(Singleton):
         )
 
     @classmethod
+    # Every predict creates a new predict job, as a submit does, so the same
+    # caution applies: even a 503 can come after the job completed, when the
+    # server cannot read the stored result.
     @backoff.on_exception(
         backoff.constant,
         (
             httpx.ConnectError,
-            httpx.TimeoutException,
-            httpx.ReadTimeout,
-            httpx.WriteTimeout,
-            httpx.RemoteProtocolError,
-            RetryableServerError,
+            httpx.ConnectTimeout,
         ),
         max_tries=2,
         interval=0,
