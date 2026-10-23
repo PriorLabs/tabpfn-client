@@ -341,8 +341,8 @@ class InferenceClient(ServiceClientWrapper, Singleton):
     @classmethod
     def fit(
         cls,
-        X,
-        y,
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray,
         task_config: FitTaskConfig,
         tabpfn_systems: list[TabPFNSystem],
         thinking_config: ThinkingConfig | None,
@@ -367,8 +367,8 @@ class InferenceClient(ServiceClientWrapper, Singleton):
     @classmethod
     def fit_with_result(
         cls,
-        X,
-        y,
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray,
         task_config: FitTaskConfig,
         tabpfn_systems: list[TabPFNSystem],
         thinking_config: ThinkingConfig | None,
@@ -381,6 +381,29 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         """Upload a train set to the server and fit it.
 
         See `ServiceClient.fit_with_result`.
+
+        Args:
+            X: The training input samples, of shape (n_samples, n_features).
+            y: The target values, of shape (n_samples,) or (n_samples, n_outputs).
+            task_config: The configuration for the fit task.
+            tabpfn_systems: The systems to use for the fit.
+            thinking_config: The configuration for the thinking mode.
+            api_mode: The API mode to use for the fit: SYNC, ASYNC, or AUTO.
+            client_options: Client specific options (e.g. timeout, headers).
+            description: Description of the dataset and task for the server.
+            text_handling: Text-processing preset, ``"advanced"`` or ``"simple"``.
+            wait: Whether to poll the server until the fit completes.
+
+        Returns:
+            The fit as the server reports it: its id, its status and its
+            timings. A fit not waited for may still be PENDING.
+
+        Raises:
+            ValueError: If ``text_handling`` is invalid or the in-memory size of
+                ``X`` or ``y`` exceeds the server limit.
+            FitFailedError: If the server reports that a fit waited for failed.
+            TimeoutError: If a fit waited for has not completed within
+                `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds.
         """
         return ServiceClient.fit_with_result(
             X,
@@ -404,6 +427,21 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         """Wait until the server completes a fit.
 
         See `ServiceClient._wait_for_fit`.
+
+        Args:
+            fitted_train_set_id: The id of the fit.
+            client_options: Client specific options; only the headers apply.
+
+        Returns:
+            The status of the completed fit, with its timings.
+
+        Raises:
+            FitFailedError: If the server reports that the fit failed.
+            FittedModelNotFoundError: If the server has no fit with this id.
+            TimeoutError: If the fit has not completed within
+                `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds.
+            RuntimeError: If polling for the fit fails 4 times in a row with
+                an unexpected error.
         """
         return ServiceClient._wait_for_fit(
             fitted_train_set_id,
@@ -413,7 +451,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
     @classmethod
     def predict(
         cls,
-        X,
+        X: pd.DataFrame | np.ndarray,
         fitted_train_set_id: UUID,
         task_config: ClassifierConfig | RegressorConfig,
         client_options: ClientOptions | None = None,
@@ -425,6 +463,31 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         """Predict on a test set with a fitted train set.
 
         See `ServiceClient.predict`.
+
+        Args:
+            X: The test input, of shape (n_samples, n_features).
+            fitted_train_set_id: The unique ID of the fitted train set in the server.
+            task_config: The classification or regression task configuration.
+            client_options: Client specific options (e.g. timeout, headers).
+            api_mode: The API mode to use for the prediction: SYNC, ASYNC, or AUTO.
+            n_train_rows: The fit's train rows, for AUTO; None if unknown.
+            thinking: Whether the fit runs in thinking mode, for AUTO.
+
+        Returns:
+            The prediction, its metadata, the server-reported timings and the
+            prediction's id.
+
+        Raises:
+            ValueError: If the in-memory size of ``X`` exceeds the server
+                limit, or ``api_mode`` is not a valid mode.
+            FittedModelNotFoundError: If the fitted train set is not found.
+            PredictFailedError: If the client polls for the prediction and the
+                server reports that it failed. A failure the server reports in
+                answer to the prediction request itself raises RuntimeError.
+            RefitRequiredError: If the fitted model can no longer predict and
+                must be fitted again.
+            TimeoutError: If a prediction the client polls for has not completed
+                within the poll timeout.
         """
         return ServiceClient.predict(
             x_test=X,
@@ -489,7 +552,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
     @classmethod
     def submit_predict(
         cls,
-        X,
+        X: pd.DataFrame | np.ndarray,
         fitted_train_set_id: UUID,
         task_config: ClassifierConfig | RegressorConfig,
         client_options: ClientOptions | None = None,
@@ -497,6 +560,21 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         """Start predicting on a test set, without waiting for the prediction.
 
         See `ServiceClient.submit_predict`.
+
+        Args:
+            X: The test input, of shape (n_samples, n_features).
+            fitted_train_set_id: The unique ID of the fitted train set in the server.
+            task_config: The classification or regression task configuration.
+            client_options: Client specific options (e.g. timeout, headers).
+
+        Returns:
+            The id of the prediction, which `wait_for_predict` takes.
+
+        Raises:
+            ValueError: If the in-memory size of ``X`` exceeds the server limit.
+            FittedModelNotFoundError: If the fitted train set is not found.
+            RuntimeError: If the server does not run predictions as background
+                jobs.
         """
         return ServiceClient.submit_predict(
             x_test=X,

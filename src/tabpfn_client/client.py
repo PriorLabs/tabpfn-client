@@ -582,6 +582,9 @@ class ServiceClient(Singleton):
         Raises:
             ValueError: If ``text_handling`` is invalid or the in-memory size of
                 ``X`` or ``y`` exceeds the server limit.
+            FitFailedError: If the server reports that a fit waited for failed.
+            TimeoutError: If a fit waited for has not completed within the poll
+                timeout.
         """
         validate_text_handling(text_handling)
         api_mode = ApiMode(api_mode)
