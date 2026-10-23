@@ -83,6 +83,8 @@ dev = [
     "ruff==0.17.0",
     "licensecheck==2025.1.0",
     "basedpyright>=1.39.9,<1.41.0",
+    # numba, a shap dependency, ships no Intel macOS wheels.
+    "shap>=0.46; sys_platform != 'darwin' or platform_machine != 'x86_64'",
 ]
 
 [tool.changelog-bot.towncrier_changelog]
