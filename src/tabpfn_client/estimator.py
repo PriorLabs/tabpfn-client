@@ -259,6 +259,8 @@ class _AsyncMixin(ModelPersistenceMixin):
             TimeoutError: If the fit has not completed within
                 `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds. The model is still
                 pending, so `wait_for_fit()` can be called again.
+            RuntimeError: If polling for the fit fails 4 times in a row with
+                an unexpected error. The model is still pending.
         """
         if not self._fit_pending:
             check_is_fitted(
@@ -669,6 +671,12 @@ class TabPFNClassifier(
         also on a model with a pending fit. To start a fit without waiting for
         it, use `submit_fit()`.
 
+        The model takes the new fit as soon as the server has accepted it. A
+        fit that `fit()` polls for, as an ASYNC or thinking-mode one, is then
+        pending until the poll sees it complete: if the poll stops, for a
+        timeout or an interrupt, the model stays pending on the new fit, and
+        `wait_for_fit()` resumes the wait.
+
         Args:
             X: The input data.
             y: The target variable.
@@ -681,9 +689,12 @@ class TabPFNClassifier(
             ValueError: If the data or the estimator's parameters are invalid,
                 or the data exceeds the model limits.
             FitFailedError: If the server reports that the fit failed while
-                `fit()` polled for it, as for an ASYNC or thinking-mode fit.
+                `fit()` polled for it. The model is then unfitted.
+            FittedModelNotFoundError: If the server no longer has the fit
+                while `fit()` polls for it. The model is then unfitted.
             TimeoutError: If a fit that `fit()` polls for has not completed
-                within `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds.
+                within `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds. The model is
+                then pending on the new fit.
         """
         return self._fit(X, y, description, submit=False)
 
@@ -748,7 +759,8 @@ class TabPFNClassifier(
                 ),
                 client_options=self.client_options,
                 description=description,
-                wait=not submit,
+                # Waited for below, once the model holds the new fit.
+                wait=False,
             )
             self._set_fit(fit_result, n_train_rows=X.shape[0])
             # Set only after the server has accepted the fit, so a failed refit
@@ -759,6 +771,8 @@ class TabPFNClassifier(
             raise NotImplementedError(
                 "Only server mode is supported at the moment for init(use_server=False)"
             )
+        if not submit and self._fit_pending:
+            self.wait_for_fit()
         return self
 
     def predict(self, X):
@@ -1272,6 +1286,12 @@ class TabPFNRegressor(
         also on a model with a pending fit. To start a fit without waiting for
         it, use `submit_fit()`.
 
+        The model takes the new fit as soon as the server has accepted it. A
+        fit that `fit()` polls for, as an ASYNC or thinking-mode one, is then
+        pending until the poll sees it complete: if the poll stops, for a
+        timeout or an interrupt, the model stays pending on the new fit, and
+        `wait_for_fit()` resumes the wait.
+
         Args:
             X: The input data.
             y: The target variable.
@@ -1284,9 +1304,12 @@ class TabPFNRegressor(
             ValueError: If the data or the estimator's parameters are invalid,
                 or the data exceeds the model limits.
             FitFailedError: If the server reports that the fit failed while
-                `fit()` polled for it, as for an ASYNC or thinking-mode fit.
+                `fit()` polled for it. The model is then unfitted.
+            FittedModelNotFoundError: If the server no longer has the fit
+                while `fit()` polls for it. The model is then unfitted.
             TimeoutError: If a fit that `fit()` polls for has not completed
-                within `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds.
+                within `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds. The model is
+                then pending on the new fit.
         """
         return self._fit(X, y, description, submit=False)
 
@@ -1340,7 +1363,8 @@ class TabPFNRegressor(
                 ),
                 client_options=self.client_options,
                 description=description,
-                wait=not submit,
+                # Waited for below, once the model holds the new fit.
+                wait=False,
             )
             self._set_fit(fit_result, n_train_rows=X.shape[0])
             self._fit_count += 1
@@ -1348,7 +1372,8 @@ class TabPFNRegressor(
             raise NotImplementedError(
                 "Only server mode is supported at the moment for init(use_server=False)"
             )
-
+        if not submit and self._fit_pending:
+            self.wait_for_fit()
         return self
 
     def predict(

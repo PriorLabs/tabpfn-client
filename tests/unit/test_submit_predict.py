@@ -36,7 +36,12 @@ from sklearn.exceptions import NotFittedError
 from sklearn.utils.validation import check_is_fitted
 
 from tabpfn_client import PredictFailedError, RefitRequiredError, init, reset
-from tabpfn_client.api_models import FitResponse, FitStatus, GetSettingsResponse
+from tabpfn_client.api_models import (
+    FitResponse,
+    FitStatus,
+    GetFitStatusResponse,
+    GetSettingsResponse,
+)
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.config import Config
 from tabpfn_client.constants import CACHE_DIR
@@ -144,8 +149,8 @@ def _offline_server(
 ) -> Generator[SimpleNamespace]:
     """Run the estimators with no network: no auth, mocked inference.
 
-    The server fits every model as `FIT_ID`, completed unless it was submitted,
-    and accepts every submitted prediction as `PREDICTION_ID`. A prediction,
+    The server fits every model as `FIT_ID`, completed unless it runs as a
+    background job, which waiting finds completed, and accepts every submitted prediction as `PREDICTION_ID`. A prediction,
     whether predicted with one request or waited for, is `y_pred()` with
     `METADATA` and `TIMINGS`. `settings` are what `get_settings` returns; None
     leaves the model limits unchecked.
@@ -153,9 +158,15 @@ def _offline_server(
     use_server_before = Config.use_server
     Config.use_server = True
 
-    def fit_with_result(*args: Any, wait: bool, **kwargs: Any) -> FitResponse:
-        status = FitStatus.COMPLETED if wait else FitStatus.PENDING
+    def fit_with_result(*args: Any, api_mode: ApiMode, **kwargs: Any) -> FitResponse:
+        # A background job comes back pending; one request, completed.
+        status = FitStatus.PENDING if api_mode == ApiMode.ASYNC else FitStatus.COMPLETED
         return FitResponse(fitted_train_set_id=FIT_ID, status=status)
+
+    def wait_for_fit(fit_id: UUID, **kwargs: Any) -> GetFitStatusResponse:
+        return GetFitStatusResponse(
+            fitted_train_set_id=fit_id, status=FitStatus.COMPLETED
+        )
 
     def prediction(*args: Any, **kwargs: Any) -> PredictionResult:
         return PredictionResult(y_pred=y_pred(), metadata=METADATA, timings=TIMINGS)
@@ -167,6 +178,7 @@ def _offline_server(
             patch.object(
                 InferenceClient, "fit_with_result", side_effect=fit_with_result
             ) as fit,
+            patch.object(InferenceClient, "wait_for_fit", side_effect=wait_for_fit),
             patch.object(InferenceClient, "predict", side_effect=prediction) as predict,
             patch.object(
                 InferenceClient, "submit_predict", return_value=PREDICTION_ID

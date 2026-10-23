@@ -864,7 +864,9 @@ class TestTabPFNClassifierInference(unittest.TestCase):
     def test_single_class_reaches_the_server_without_thinking(self):
         # Parity with the local package, which fits a single class.
         X = np.random.rand(10, 5)
-        with patch.object(InferenceClient, "fit_with_result") as fit:
+        with patch.object(
+            InferenceClient, "fit_with_result", return_value=_DUMMY_FIT
+        ) as fit:
             TabPFNClassifier().fit(X, np.zeros(10, dtype=int))
         fit.assert_called_once()
 

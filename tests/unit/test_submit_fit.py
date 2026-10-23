@@ -86,22 +86,23 @@ def _read(path: Path) -> dict[str, Any]:
 def _offline_server() -> Generator[SimpleNamespace]:
     """Run the estimators with no network: no auth, no settings, mocked inference.
 
-    The server accepts every fit as `FIT_ID`: one the client waits for comes
-    back completed with `TIMINGS`, one it does not wait for comes back pending.
-    Waiting for a fit finds it completed, and a prediction is a row of zeros per
+    The server accepts every fit as `FIT_ID`: one request comes back completed
+    with `TIMINGS`, a background job comes back pending, and waiting for a fit
+    finds it completed, and a prediction is a row of zeros per
     test row.
     """
     use_server_before = Config.use_server
     Config.use_server = True
 
-    def fit_with_result(*args: Any, wait: bool, **kwargs: Any) -> FitResponse:
-        if wait:
-            return FitResponse(
-                fitted_train_set_id=FIT_ID,
-                status=FitStatus.COMPLETED,
-                timings=FitTimings.model_validate(TIMINGS),
-            )
-        return FitResponse(fitted_train_set_id=FIT_ID, status=FitStatus.PENDING)
+    def fit_with_result(*args: Any, api_mode: ApiMode, **kwargs: Any) -> FitResponse:
+        # A background job comes back pending; one request, completed.
+        if api_mode == ApiMode.ASYNC:
+            return FitResponse(fitted_train_set_id=FIT_ID, status=FitStatus.PENDING)
+        return FitResponse(
+            fitted_train_set_id=FIT_ID,
+            status=FitStatus.COMPLETED,
+            timings=FitTimings.model_validate(TIMINGS),
+        )
 
     try:
         with (
@@ -136,6 +137,15 @@ def _submitted(
     """Return an estimator whose fit `submit_fit()` started and nobody waited for."""
     with _offline_server():
         return estimator_cls(**params).submit_fit(X_TRAIN, y)
+
+
+def _fitted(
+    estimator_cls: type[TabPFNClassifier | TabPFNRegressor] = TabPFNClassifier,
+    y: np.ndarray = Y_TRAIN,
+) -> Any:
+    """Return an estimator with a completed fit."""
+    with _offline_server():
+        return estimator_cls().fit(X_TRAIN, y)
 
 
 class TestSubmitFit:
@@ -286,7 +296,6 @@ class TestFit:
 
         server.fit.assert_called_once()
         assert server.fit.call_args.kwargs["api_mode"] == ApiMode.SYNC
-        assert server.fit.call_args.kwargs["wait"] is True
         server.wait.assert_not_called()
         assert model.model_id_ == NEW_FIT_ID
         assert server.predict.call_args.kwargs["fitted_train_set_id"] == NEW_FIT_ID
@@ -306,8 +315,56 @@ class TestFit:
             model = estimator_cls(api_mode=api_mode, **thinking).fit(X_TRAIN, y)
 
         assert server.fit.call_args.kwargs["api_mode"] == ApiMode.ASYNC
-        assert server.fit.call_args.kwargs["wait"] is True
+        server.wait.assert_called_once_with(FIT_ID, client_options=model.client_options)
+        assert model.get_timings()["fit"] == TIMINGS
         check_is_fitted(model)
+
+    @ESTIMATORS
+    @pytest.mark.parametrize("stop", [KeyboardInterrupt, TimeoutError])
+    def test_a_poll_that_stops_leaves_the_model_pending_on_the_new_fit(
+        self, estimator_cls, y, stop
+    ):
+        model = _fitted(estimator_cls, y)
+
+        with _offline_server() as server:
+            server.fit.side_effect = lambda *args, **kwargs: FitResponse(
+                fitted_train_set_id=NEW_FIT_ID, status=FitStatus.PENDING
+            )
+            server.wait.side_effect = stop
+            with pytest.raises(stop):
+                model.fit(X_TRAIN, y)
+
+            assert server.fit.call_args.kwargs["wait"] is False
+            assert model.model_id_ == NEW_FIT_ID
+            assert model.save_model()["fit_status"] == "pending"
+            with pytest.raises(NotFittedError, match=r"wait_for_fit\(\)"):
+                model.predict(X_TEST)
+
+            server.wait.side_effect = lambda fit_id, **kwargs: _completed(fit_id)
+            model.wait_for_fit()
+
+        assert server.wait.call_args_list[-1].args == (NEW_FIT_ID,)
+        check_is_fitted(model)
+
+    @ESTIMATORS
+    @FIT_ERRORS
+    def test_a_refit_that_fails_while_polled_leaves_the_model_unfitted(
+        self, estimator_cls, y, error
+    ):
+        model = _fitted(estimator_cls, y)
+
+        with _offline_server() as server:
+            server.fit.side_effect = lambda *args, **kwargs: FitResponse(
+                fitted_train_set_id=NEW_FIT_ID, status=FitStatus.PENDING
+            )
+            server.wait.side_effect = error
+            with pytest.raises(type(error)):
+                model.fit(X_TRAIN, y)
+
+        # Neither the failed fit nor the one it replaced.
+        assert not hasattr(model, "model_id_")
+        with pytest.raises(NotFittedError):
+            check_is_fitted(model)
 
     @ESTIMATORS
     @pytest.mark.parametrize("api_mode", list(ApiMode))
