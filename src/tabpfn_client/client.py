@@ -1312,12 +1312,11 @@ class ServiceClient(Singleton):
         `wait_for_predict` can still return it.
 
         Raises:
-            PredictFailedError: If the server reports that the prediction failed.
+            PredictFailedError: If the server reports that the prediction
+                failed, or that it completed but sends no prediction.
             PredictionGoneError: If the server does not have the prediction.
             TimeoutError: If the prediction has not completed within the poll
                 timeout.
-            RuntimeError: If the server reports the prediction as completed but
-                sends no prediction.
         """
         # A None timeout would leave a poll on a dead connection hanging
         # forever, past any deadline.
@@ -1346,7 +1345,8 @@ class ServiceClient(Singleton):
             )
             raise
         if result_resp.prediction is None or result_resp.metadata is None:
-            raise RuntimeError(
+            # A failure like any other: a later poll would answer the same.
+            raise PredictFailedError(
                 f"The server reported prediction {fitted_test_set_id} as "
                 "completed, but sent no prediction."
             )
@@ -1463,7 +1463,9 @@ class ServiceClient(Singleton):
         if cls._is_route_missing(res):
             raise RuntimeError(
                 f"Cannot wait for prediction {req.fitted_test_set_id}: this TabPFN "
-                "server does not run predictions as background jobs."
+                "server does not run predictions as background jobs right now. "
+                "Wait for it again later: a server that runs them again may "
+                "still complete it."
             )
         try:
             return cls._validate_response(

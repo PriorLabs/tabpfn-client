@@ -1452,7 +1452,8 @@ class TestWaitForPredict:
 
         assert str(exc_info.value) == (
             f"Cannot wait for prediction {PREDICTION_ID}: this TabPFN server does "
-            "not run predictions as background jobs."
+            "not run predictions as background jobs right now. Wait for it again "
+            "later: a server that runs them again may still complete it."
         )
         assert not isinstance(exc_info.value, PredictFailedError)
         assert clock.sleeps == []
@@ -1778,12 +1779,17 @@ class TestWaitForPredict:
         )
 
     @pytest.mark.parametrize("missing", ["prediction", "metadata"])
-    def test_a_completed_poll_without_the_prediction_raises(self, router, missing):
+    def test_a_completed_poll_without_the_prediction_fails_it(
+        self, router, missing, caplog
+    ):
         body = {**_completed(), missing: None}
 
         with _polling(router, [_json(200, body)]):
-            with pytest.raises(RuntimeError, match="sent no prediction"):
+            with pytest.raises(PredictFailedError, match="sent no prediction"):
                 _wait()
+
+        # A later poll would answer the same: nothing to come back for.
+        assert _broke_off_warnings(caplog) == []
 
     def test_a_malformed_id_raises_before_any_poll(self, router, caplog):
         # No poll route: a poll would fail the test.

@@ -530,7 +530,9 @@ class TestWaitForPredict:
             # After a rollback, which a roll-forward with the prediction can end.
             RuntimeError(
                 f"Cannot wait for prediction {PREDICTION_ID}: this TabPFN server "
-                "does not run predictions as background jobs."
+                "does not run predictions as background jobs right now. Wait for "
+                "it again later: a server that runs them again may still "
+                "complete it."
             ),
         ],
         ids=["timeout", "interrupt", "unauthorized", "route_missing"],
