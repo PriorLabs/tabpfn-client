@@ -5,11 +5,15 @@ from __future__ import annotations
 
 from itertools import combinations
 from math import factorial
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from tabpfn_client import TabPFNClassifier
+from tabpfn_client.api_models import GetSettingsResponse
+from tabpfn_client.client import ServiceClient
 from tabpfn_client.explain import permutation_shap
 
 
@@ -113,6 +117,81 @@ def test_batch_size_splits_calls_without_changing_values() -> None:
     )
     assert call_sizes == [100] * (n_masked // 100) + [n_masked % 100]
     np.testing.assert_allclose(split.values, whole.values)
+
+
+def _settings(
+    max_rows: int = 10**9,
+    max_cells: int = 10**9,
+    max_bytes: int = 10**9,
+    row_pairs_budget: int = 10**12,
+) -> GetSettingsResponse:
+    limit = {
+        "train_set_max_rows": 10**9,
+        "train_set_max_cells": 10**9,
+        "train_set_max_upload_cells": 10**9,
+        "test_set_max_rows": max_rows,
+        "test_set_max_cells": max_cells,
+        "test_set_max_rows_w_full_regression_output": 10**9,
+        "max_cols": 1_000,
+        "max_classes": 10,
+        "predict_row_pairs_budget": row_pairs_budget,
+    }
+    return GetSettingsResponse.model_validate(
+        {
+            "default_model_version": "v2.5",
+            "max_model_limit": limit,
+            "model_limits": {"v2.5": limit},
+            "dataset_max_size_bytes": max_bytes,
+            "async_settings": {
+                "use_above_trainset_size_bytes": 10**9,
+                "poll_timeout_secs": 1.0,
+            },
+        }
+    )
+
+
+# 4 float features take 32 bytes per row, 1,000 train rows, 5 background rows.
+@pytest.mark.parametrize(
+    ("settings", "rows_per_call"),
+    [
+        (_settings(max_rows=50), 50),
+        (_settings(max_cells=160), 40),
+        (_settings(max_bytes=30 * 32 + pd.RangeIndex(0).memory_usage()), 30),
+        (_settings(row_pairs_budget=1_000 * 20), 20),
+    ],
+    ids=["rows", "cells", "bytes", "row_pairs_budget"],
+)
+def test_client_estimator_batches_fit_the_api_limits(
+    settings: GetSettingsResponse, rows_per_call: int
+) -> None:
+    rng = np.random.default_rng(7)
+    X, background = rng.normal(size=(3, 4)), rng.normal(size=(5, 4))
+    model = TabPFNClassifier()
+    model._n_train_rows = 1_000
+    call_sizes: list[int] = []
+
+    def predict_proba(self, rows) -> np.ndarray:
+        call_sizes.append(len(rows))
+        return np.zeros((len(rows), 2))
+
+    with (
+        patch.object(ServiceClient, "get_settings", return_value=settings),
+        patch.object(TabPFNClassifier, "predict_proba", predict_proba),
+    ):
+        permutation_shap(model.predict_proba, X, background, n_permutations=2)
+
+    assert max(call_sizes) == rows_per_call
+    assert len(call_sizes) > 1
+
+
+def test_api_limit_below_background_rows_raises() -> None:
+    X = np.zeros((2, 3))
+    model = TabPFNClassifier()
+    with (
+        patch.object(ServiceClient, "get_settings", return_value=_settings(max_rows=1)),
+        pytest.raises(ValueError, match="background rows"),
+    ):
+        permutation_shap(model.predict_proba, X, X)
 
 
 def test_each_set_of_shown_features_is_predicted_once() -> None:
