@@ -268,7 +268,7 @@ def test_background_dtype_mismatch_raises(x_column, background_column) -> None:
 @pytest.mark.parametrize(
     ("X", "match"),
     [
-        (pd.DataFrame([[1.0, 2.0]], columns=["a", "a"]), "duplicate"),
+        (pd.DataFrame([[1.0, 2.0]], columns=pd.Index(["a", "a"])), "duplicate"),
         (np.zeros((2, 0)), "one column"),
     ],
     ids=["duplicate-columns", "no-columns"],
