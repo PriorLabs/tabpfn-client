@@ -2,12 +2,13 @@
 #  Licensed under the Apache License, Version 2.0
 """`submit_predict()` / `wait_for_predict()`: a prediction started without
 waiting for it, the pending prediction the model holds until it is waited for,
-and what `predict()` gives the client to route each prediction by.
+how a later run saves, loads and waits for it, and what `predict()` gives the
+client to route each prediction by.
 
 Hermetic by default: `init` and the `InferenceClient` boundary are patched. The
 tests that take `mock_server` run the real HTTP layer: for poll answers that
-only the transport tells apart, and, at the end, for a model fitted in one run
-that a later run predicts with as a background job.
+only the transport tells apart, and, at the end, for a prediction that one run
+submits with a model fitted in an earlier run, and a later run waits for.
 """
 
 from __future__ import annotations
@@ -449,8 +450,8 @@ class TestWaitForPredict:
         with _offline_server() as server:
             model.wait_for_predict()
 
-        # Authenticates: a pickled model carries its pending prediction into a
-        # new process.
+        # Authenticates: a pickled or loaded model carries its pending
+        # prediction into a new process.
         server.init.assert_called_once()
         assert server.wait.call_args.args == (PREDICTION_ID,)
         assert server.wait.call_args.kwargs == {"client_options": model.client_options}
@@ -755,6 +756,89 @@ class TestFit:
         assert _dropped(caplog) == []
 
 
+class TestSaveAndLoad:
+    @OUTPUTS
+    def test_saves_the_pending_prediction(
+        self, tmp_path, estimator_cls, y, output_type, predict_kwargs
+    ):
+        path = tmp_path / "model.json"
+        model = _fitted(estimator_cls, y)
+        with _offline_server():
+            model.submit_predict(X_TEST, output_type=output_type, **predict_kwargs)
+
+        record = model.save_model(path)
+
+        assert record == _read(path)
+        assert record["pending_predict"] == {
+            "fitted_test_set_id": str(PREDICTION_ID),
+            "output_type": output_type,
+        }
+        assert record["model_id"] == str(FIT_ID)
+        assert record["fit_status"] == "completed"
+
+    @ESTIMATORS
+    def test_saves_no_prediction_once_it_was_waited_for(self, estimator_cls, y):
+        model = _fitted(estimator_cls, y)
+
+        with _offline_server():
+            model.submit_predict(X_TEST).wait_for_predict()
+
+        assert model.save_model()["pending_predict"] is None
+
+    def test_loads_the_pending_prediction_without_a_request(self, tmp_path):
+        path = tmp_path / "model.json"
+        model = _fitted()
+        with _offline_server():
+            model.submit_predict(X_TEST, output_type="probas")
+        model.save_model(path)
+
+        with _offline_server() as server:
+            loaded = TabPFNClassifier.load_model(path)
+
+        server.init.assert_not_called()
+        server.wait.assert_not_called()
+        assert _pending_id(loaded) == PREDICTION_ID
+        check_is_fitted(loaded)
+        assert loaded.save_model() == _read(path)
+
+    @OUTPUTS
+    @NO_CRITERION
+    def test_a_later_run_waits_for_the_loaded_prediction(
+        self, tmp_path, estimator_cls, y, output_type, predict_kwargs
+    ):
+        path = tmp_path / "model.json"
+        predicted, submitted = _fitted(estimator_cls, y), _fitted(estimator_cls, y)
+        with _offline_server():
+            submitted.submit_predict(X_TEST, output_type=output_type, **predict_kwargs)
+        submitted.save_model(path)
+        before = path.read_text()
+
+        with (
+            _offline_server(lambda: _y_pred(X_TEST, output_type)),
+            _without_criterion_dependencies(),
+        ):
+            expected = _predict(predicted, output_type, **predict_kwargs)
+        with (
+            _offline_server(lambda: _y_pred(X_TEST, output_type)) as server,
+            _without_criterion_dependencies(),
+        ):
+            loaded = estimator_cls.load_model(path)
+            actual = loaded.wait_for_predict()
+
+        _assert_same(actual, expected)
+        # A model loaded in a fresh process authenticates before waiting.
+        server.init.assert_called_once()
+        assert server.wait.call_args.args == (PREDICTION_ID,)
+        server.fit.assert_not_called()
+        server.submit.assert_not_called()
+        server.predict.assert_not_called()
+        assert loaded.get_timings()["predict"] == TIMINGS
+        # Nothing rewrites the file; saving again records that the model holds
+        # no prediction.
+        assert path.read_text() == before
+        assert loaded.save_model(path)["pending_predict"] is None
+
+
 @pytest.fixture
 def mock_server() -> Iterator[MockTabPFNServer]:
     with MockTabPFNServer() as server:
@@ -774,6 +858,13 @@ def _sent(route: respx.Route) -> list[dict[str, Any]]:
     return [json.loads(call.request.content) for call in route.calls]
 
 
+def _start_a_new_process() -> None:
+    """Forget what a process keeps between runs: its sign-in and the settings."""
+    Config.is_initialized = False
+    ServiceClient.reset_authorization()
+    ServiceClient._api_settings = None
+
+
 class TestWithServer:
     dummy_token = "dummy_token"
 
@@ -789,7 +880,7 @@ class TestWithServer:
         ServiceClient._api_settings_ts = 0.0
         shutil.rmtree(CACHE_DIR, ignore_errors=True)
 
-    def test_a_model_fitted_in_one_run_predicts_as_a_background_job_in_a_later_one(
+    def test_a_prediction_submitted_in_one_run_is_waited_for_in_a_later_one(
         self,
         mock_server: MockTabPFNServer,
         tmp_path: Path,
@@ -802,7 +893,8 @@ class TestWithServer:
         upload_id = "00000000-0000-0000-0000-000000000003"
         prediction_id = str(PREDICTION_ID)
         probabilities = [[0.25, 0.25, 0.5], [0.5, 0.25, 0.25], [0.25, 0.5, 0.25]]
-        path = tmp_path / "model.json"
+        model_path = tmp_path / "model.json"
+        prediction_path = tmp_path / "prediction.json"
         UserAuthenticationClient.CACHED_TOKEN_FILE.parent.mkdir(
             parents=True, exist_ok=True
         )
@@ -831,7 +923,8 @@ class TestWithServer:
         router.post("/tabpfn/fit").respond(
             200, json={"fitted_train_set_id": fit_id, "status": "completed"}
         )
-        router.post("/tabpfn/prepare_test_set_upload").respond(
+        test_upload_route = router.post("/tabpfn/prepare_test_set_upload")
+        test_upload_route.respond(
             409,
             json={
                 "message": "duplicate",
@@ -879,22 +972,31 @@ class TestWithServer:
         with patch("tabpfn_client.client.time.sleep") as sleep:
             # A run that fits the model, saves it and ends.
             init(use_server=True)
-            TabPFNClassifier().fit(X_TRAIN, Y_TRAIN).save_model(path)
+            TabPFNClassifier().fit(X_TRAIN, Y_TRAIN).save_model(model_path)
 
             # A later run, in a new process: loading asks nothing, and
-            # submit_predict() returns once the server accepted the prediction.
-            Config.is_initialized = False
-            ServiceClient.reset_authorization()
-            ServiceClient._api_settings = None
-            clf = TabPFNClassifier.load_model(path)
+            # submit_predict() returns once the server accepted the prediction,
+            # which the run saves with the model before it ends.
+            _start_a_new_process()
+            clf = TabPFNClassifier.load_model(model_path)
             assert auth_route.call_count == 1
-            clf.submit_predict(X_TEST, output_type="probas")
+            clf.submit_predict(X_TEST, output_type="probas").save_model(prediction_path)
             assert result_route.call_count == 0
-            assert clf.save_model() == _read(path), "a pending prediction isn't saved"
+
+            # A third run, in a new process: loading asks nothing, and
+            # wait_for_predict() polls for the saved prediction.
+            _start_a_new_process()
+            clf = TabPFNClassifier.load_model(prediction_path)
+            assert auth_route.call_count == 2
             result = clf.wait_for_predict()
 
         np.testing.assert_array_equal(result, probabilities)
-        assert auth_route.call_count == 2, "each run authenticates once"
+        assert auth_route.call_count == 3, "each run authenticates once"
+        assert _read(prediction_path)["pending_predict"] == {
+            "fitted_test_set_id": prediction_id,
+            "output_type": "probas",
+        }
+        assert test_upload_route.call_count == 1, "the last run uploads nothing"
         [submitted] = _sent(submit_route)
         assert submitted.keys() == {
             "test_set_upload_id",

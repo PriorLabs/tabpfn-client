@@ -7,8 +7,7 @@ from __future__ import annotations
 
 import logging
 import warnings
-from dataclasses import dataclass
-from uuid import UUID, uuid4
+from uuid import uuid4
 from typing import Any, Literal, cast, overload
 from typing_extensions import Self
 
@@ -60,7 +59,7 @@ from tabpfn_client.api_models import (
     FitTimings,
 )
 from tabpfn_client.models import ApiMode, TabPFNConfig, FitModeLiteral
-from tabpfn_client.persistence import ModelPersistenceMixin
+from tabpfn_client.persistence import ModelPersistenceMixin, _PendingPredict
 
 try:
     from torch import Tensor  # type: ignore
@@ -181,14 +180,6 @@ def _timings_dict(timings: FitTimings | None) -> dict[str, Any] | None:
     return timings.model_dump(mode="json") if timings is not None else None
 
 
-@dataclass(frozen=True)
-class _PendingPredict:
-    """A prediction `submit_predict()` started, and the output it was asked for."""
-
-    fitted_test_set_id: UUID
-    output_type: str
-
-
 class _AsyncMixin(ModelPersistenceMixin):
     """Starts work on the TabPFN server without waiting for it, and waits for it.
 
@@ -196,17 +187,11 @@ class _AsyncMixin(ModelPersistenceMixin):
     the model pending until `wait_for_fit()` sees the fit complete. In between,
     `save_model()` saves the pending fit, for a later run to load and wait for.
     Each estimator's `submit_predict()` does the same for a prediction, which
-    the model holds until its `wait_for_predict()` returns it; `save_model()`
-    does not save a pending prediction.
+    the model holds until its `wait_for_predict()` returns it.
     """
 
     # Set by the estimator's `__init__`.
     client_options: ClientOptions
-
-    # The prediction `submit_predict()` started that `wait_for_predict()` has
-    # not returned yet. Class-level default so estimators pickled before this
-    # attribute existed read it as None.
-    _pending_predict: _PendingPredict | None = None
 
     def submit_fit(
         self,
@@ -366,8 +351,8 @@ class _AsyncMixin(ModelPersistenceMixin):
                 f"This {type(self).__name__} has no prediction to wait for. "
                 "Call submit_predict() first."
             )
-        # A pickled model carries its pending prediction into a process that
-        # may not have authorized the HTTP client yet.
+        # A pickled or loaded model carries its pending prediction into a
+        # process that may not have authorized the HTTP client yet.
         init()
         logger.debug(
             f"Waiting for prediction {pending.fitted_test_set_id} to complete."
@@ -815,8 +800,10 @@ class TabPFNClassifier(
         server has accepted the prediction, which it then runs as a background
         job, whatever `api_mode` is. `wait_for_predict()` waits for it and
         returns the predictions. The model holds one pending prediction: a new
-        `submit_predict()` replaces it, and a new fit drops it. A pickled or
-        copied model keeps it; `save_model()` and `clone()` do not.
+        `submit_predict()` replaces it, and a new fit drops it. `save_model()`
+        saves it with the model, so that a later run can `load_model()` and
+        wait for it. A pickled or copied model keeps it too; `clone()` does
+        not.
 
         Args:
             X: The input data for prediction.
@@ -844,7 +831,11 @@ class TabPFNClassifier(
             task_config=task_config,
             client_options=self.client_options,
         )
-        self._set_pending_predict(_PendingPredict(fitted_test_set_id, output_type))
+        self._set_pending_predict(
+            _PendingPredict(
+                fitted_test_set_id=fitted_test_set_id, output_type=output_type
+            )
+        )
         return self
 
     def wait_for_predict(self) -> np.ndarray:
@@ -852,7 +843,8 @@ class TabPFNClassifier(
 
         Polls the server until the prediction has completed. Until then the
         prediction is pending, so a wait that stops can be resumed by calling
-        `wait_for_predict()` again.
+        `wait_for_predict()` again. A model `load_model()` restored from a
+        record of a pending prediction waits for it the same way.
 
         Returns:
             The predictions, as `predict()` returns them for `"preds"` and
@@ -1444,8 +1436,10 @@ class TabPFNRegressor(
         server has accepted the prediction, which it then runs as a background
         job, whatever `api_mode` is. `wait_for_predict()` waits for it and
         returns the predictions. The model holds one pending prediction: a new
-        `submit_predict()` replaces it, and a new fit drops it. A pickled or
-        copied model keeps it; `save_model()` and `clone()` do not.
+        `submit_predict()` replaces it, and a new fit drops it. `save_model()`
+        saves it with the model, so that a later run can `load_model()` and
+        wait for it. A pickled or copied model keeps it too; `clone()` does
+        not.
 
         Args:
             X: The input data, of shape (n_samples, n_features).
@@ -1479,7 +1473,11 @@ class TabPFNRegressor(
             task_config=task_config,
             client_options=self.client_options,
         )
-        self._set_pending_predict(_PendingPredict(fitted_test_set_id, output_type))
+        self._set_pending_predict(
+            _PendingPredict(
+                fitted_test_set_id=fitted_test_set_id, output_type=output_type
+            )
+        )
         return self
 
     def wait_for_predict(self) -> np.ndarray | list[np.ndarray] | dict[str, np.ndarray]:
@@ -1487,7 +1485,8 @@ class TabPFNRegressor(
 
         Polls the server until the prediction has completed. Until then the
         prediction is pending, so a wait that stops can be resumed by calling
-        `wait_for_predict()` again.
+        `wait_for_predict()` again. A model `load_model()` restored from a
+        record of a pending prediction waits for it the same way.
 
         Returns:
             The predictions, as `predict()` returns them for the `output_type`
