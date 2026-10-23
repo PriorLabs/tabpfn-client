@@ -1,11 +1,12 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 #  Licensed under the Apache License, Version 2.0
 """`submit_fit()` / `wait_for_fit()`: a fit started without waiting for it, the
-pending model it leaves, and how a later run saves, loads and waits for it.
+pending model it leaves, and how a later run saves, loads and waits for it; and
+the thinking fits that always run as background jobs.
 
 Hermetic by default: `init` and the `InferenceClient` boundary are patched. The
-mock-server test at the end runs the real HTTP layer for a fit submitted in one
-run and waited for in a later one.
+mock-server tests at the end run the real HTTP layer for a fit submitted in one
+run and waited for in a later one, and for thinking fits.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 from uuid import UUID
 
@@ -85,22 +86,23 @@ def _read(path: Path) -> dict[str, Any]:
 def _offline_server() -> Generator[SimpleNamespace]:
     """Run the estimators with no network: no auth, no settings, mocked inference.
 
-    The server accepts every fit as `FIT_ID`: one the client waits for comes
-    back completed with `TIMINGS`, one it does not wait for comes back pending.
-    Waiting for a fit finds it completed, and a prediction is a row of zeros per
+    The server accepts every fit as `FIT_ID`: one request comes back completed
+    with `TIMINGS`, a background job comes back pending, and waiting for a fit
+    finds it completed, and a prediction is a row of zeros per
     test row.
     """
     use_server_before = Config.use_server
     Config.use_server = True
 
-    def fit_with_result(*args: Any, wait: bool, **kwargs: Any) -> FitResponse:
-        if wait:
-            return FitResponse(
-                fitted_train_set_id=FIT_ID,
-                status=FitStatus.COMPLETED,
-                timings=FitTimings.model_validate(TIMINGS),
-            )
-        return FitResponse(fitted_train_set_id=FIT_ID, status=FitStatus.PENDING)
+    def fit_with_result(*args: Any, api_mode: ApiMode, **kwargs: Any) -> FitResponse:
+        # A background job comes back pending; one request, completed.
+        if api_mode == ApiMode.ASYNC:
+            return FitResponse(fitted_train_set_id=FIT_ID, status=FitStatus.PENDING)
+        return FitResponse(
+            fitted_train_set_id=FIT_ID,
+            status=FitStatus.COMPLETED,
+            timings=FitTimings.model_validate(TIMINGS),
+        )
 
     try:
         with (
@@ -135,6 +137,15 @@ def _submitted(
     """Return an estimator whose fit `submit_fit()` started and nobody waited for."""
     with _offline_server():
         return estimator_cls(**params).submit_fit(X_TRAIN, y)
+
+
+def _fitted(
+    estimator_cls: type[TabPFNClassifier | TabPFNRegressor] = TabPFNClassifier,
+    y: np.ndarray = Y_TRAIN,
+) -> Any:
+    """Return an estimator with a completed fit."""
+    with _offline_server():
+        return estimator_cls().fit(X_TRAIN, y)
 
 
 class TestSubmitFit:
@@ -175,7 +186,10 @@ class TestPredict:
     @ESTIMATORS
     def test_raises_on_a_pending_fit_without_a_request(self, estimator_cls, y):
         model = _submitted(estimator_cls, y)
-        methods = [getattr(model, m, None) for m in ("predict", "predict_proba")]
+        methods = [
+            getattr(model, m, None)
+            for m in ("predict", "predict_proba", "submit_predict")
+        ]
 
         with _offline_server() as server:
             for predict in (m for m in methods if m is not None):
@@ -246,13 +260,24 @@ class TestWaitForFit:
             with pytest.raises(NotFittedError):
                 nothing_to_do(clf)
 
-    @pytest.mark.parametrize("stop", [KeyboardInterrupt, TimeoutError])
+    @pytest.mark.parametrize(
+        "stop",
+        [
+            KeyboardInterrupt(),
+            TimeoutError(),
+            # Polling failed: the fit itself may still complete.
+            RuntimeError(
+                f"Polling fit {FIT_ID} failed 4 times in a row: [HTTP 500] boom"
+            ),
+        ],
+        ids=["interrupt", "timeout", "poll_failures"],
+    )
     def test_a_wait_that_stops_keeps_the_fit_pending(self, stop):
         clf = _submitted()
 
         with _offline_server() as server:
             server.wait.side_effect = stop
-            with pytest.raises(stop):
+            with pytest.raises(type(stop)):
                 clf.wait_for_fit()
             assert clf.save_model()["fit_status"] == "pending"
 
@@ -282,11 +307,111 @@ class TestFit:
 
         server.fit.assert_called_once()
         assert server.fit.call_args.kwargs["api_mode"] == ApiMode.SYNC
-        assert server.fit.call_args.kwargs["wait"] is True
         server.wait.assert_not_called()
         assert model.model_id_ == NEW_FIT_ID
         assert server.predict.call_args.kwargs["fitted_train_set_id"] == NEW_FIT_ID
         assert model.save_model()["fit_status"] == "completed"
+
+    @ESTIMATORS
+    @pytest.mark.parametrize("api_mode", list(ApiMode))
+    @pytest.mark.parametrize(
+        "thinking",
+        [{"thinking_mode": True}, {"thinking_effort": "high"}],
+        ids=["thinking_mode", "thinking_effort"],
+    )
+    def test_a_thinking_fit_runs_as_a_background_job_whatever_the_api_mode(
+        self, estimator_cls, y, api_mode, thinking
+    ):
+        with _offline_server() as server:
+            model = estimator_cls(api_mode=api_mode, **thinking).fit(X_TRAIN, y)
+
+        assert server.fit.call_args.kwargs["api_mode"] == ApiMode.ASYNC
+        server.wait.assert_called_once_with(FIT_ID, client_options=model.client_options)
+        assert model.get_timings()["fit"] == TIMINGS
+        check_is_fitted(model)
+
+    @ESTIMATORS
+    @pytest.mark.parametrize(
+        "stop",
+        [
+            KeyboardInterrupt(),
+            TimeoutError(),
+            # Polling failed: the fit itself may still complete.
+            RuntimeError(
+                f"Polling fit {NEW_FIT_ID} failed 4 times in a row: [HTTP 500] boom"
+            ),
+        ],
+        ids=["interrupt", "timeout", "poll_failures"],
+    )
+    def test_a_poll_that_stops_leaves_the_model_pending_on_the_new_fit(
+        self, estimator_cls, y, stop
+    ):
+        model = _fitted(estimator_cls, y)
+
+        with _offline_server() as server:
+            server.fit.side_effect = lambda *args, **kwargs: FitResponse(
+                fitted_train_set_id=NEW_FIT_ID, status=FitStatus.PENDING
+            )
+            server.wait.side_effect = stop
+            with pytest.raises(type(stop)):
+                model.fit(X_TRAIN, y)
+
+            assert server.fit.call_args.kwargs["wait"] is False
+            assert model.model_id_ == NEW_FIT_ID
+            assert model.save_model()["fit_status"] == "pending"
+            with pytest.raises(NotFittedError, match=r"wait_for_fit\(\)"):
+                model.predict(X_TEST)
+
+            server.wait.side_effect = lambda fit_id, **kwargs: _completed(fit_id)
+            model.wait_for_fit()
+
+        assert server.wait.call_args_list[-1].args == (NEW_FIT_ID,)
+        check_is_fitted(model)
+
+    @ESTIMATORS
+    @FIT_ERRORS
+    def test_a_refit_that_fails_while_polled_leaves_the_model_unfitted(
+        self, estimator_cls, y, error
+    ):
+        model = _fitted(estimator_cls, y)
+
+        with _offline_server() as server:
+            server.fit.side_effect = lambda *args, **kwargs: FitResponse(
+                fitted_train_set_id=NEW_FIT_ID, status=FitStatus.PENDING
+            )
+            server.wait.side_effect = error
+            with pytest.raises(type(error)):
+                model.fit(X_TRAIN, y)
+
+        # Neither the failed fit nor the one it replaced.
+        assert not hasattr(model, "model_id_")
+        with pytest.raises(NotFittedError):
+            check_is_fitted(model)
+
+    @ESTIMATORS
+    @pytest.mark.parametrize("api_mode", list(ApiMode))
+    def test_other_fits_run_in_the_api_mode(self, estimator_cls, y, api_mode):
+        with _offline_server() as server:
+            estimator_cls(api_mode=api_mode).fit(X_TRAIN, y)
+
+        assert server.fit.call_args.kwargs["api_mode"] == api_mode
+
+    @ESTIMATORS
+    @pytest.mark.parametrize(
+        ("fit", "params"),
+        [("fit", {"thinking_mode": True}), ("submit_fit", {})],
+        ids=["thinking_fit", "submit_fit"],
+    )
+    def test_an_invalid_api_mode_fails_before_the_upload(
+        self, estimator_cls, y, fit, params
+    ):
+        model = estimator_cls(api_mode=cast(Any, "ASYNC"), **params)
+
+        with _offline_server() as server:
+            with pytest.raises(ValueError, match="is not a valid ApiMode"):
+                getattr(model, fit)(X_TRAIN, y)
+
+        server.fit.assert_not_called()
 
 
 class TestSaveAndLoad:
@@ -337,16 +462,6 @@ class TestSaveAndLoad:
         # Nothing rewrites the file; saving again records the completed fit.
         assert path.read_text() == before
         assert loaded.save_model(path)["fit_status"] == "completed"
-
-
-@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
-def test_async_prediction_is_not_implemented_yet(estimator_cls):
-    model = estimator_cls()
-
-    with pytest.raises(NotImplementedError, match=r"predict\(\)"):
-        model.submit_predict(X_TEST)
-    with pytest.raises(NotImplementedError, match=r"predict\(\)"):
-        model.wait_for_predict()
 
 
 class TestWithServer:
@@ -471,3 +586,44 @@ class TestWithServer:
         predict_request = json.loads(predict_route.calls.last.request.content)
         assert predict_request["fitted_train_set_id"] == fit_id
         assert clf.get_timings()["fit"] == TIMINGS
+
+    @with_mock_server()
+    def test_a_thinking_fit_holds_no_request_open_whatever_the_api_mode(
+        self, mock_server
+    ):
+        fit_id = "00000000-0000-0000-0000-000000000002"
+        # Signed in already, so `init()` asks nothing; teardown signs out.
+        Config.is_initialized = True
+        mock_server.router.post("/tabpfn/prepare_train_set_upload").respond(
+            409,
+            json={
+                "message": "duplicate",
+                "error_code": "DUPLICATE_TRAIN_SET_UPLOAD",
+                "train_set_upload_id": "00000000-0000-0000-0000-000000000001",
+            },
+        )
+        # No sync /tabpfn/fit route: fitting through it fails the test.
+        submit_route = mock_server.router.post("/tabpfn/submit_fit_job")
+        submit_route.respond(200, json={"fitted_train_set_id": fit_id})
+        status_route = mock_server.router.post("/tabpfn/get_fit_status")
+        status_route.respond(
+            200,
+            json={
+                "fitted_train_set_id": fit_id,
+                "status": "completed",
+                "timings": TIMINGS,
+            },
+        )
+
+        with patch.object(ServiceClient, "get_settings", return_value=None):
+            fitted = [
+                TabPFNClassifier(thinking_mode=True, api_mode=api_mode).fit(
+                    X_TRAIN, Y_TRAIN
+                )
+                for api_mode in ApiMode
+            ]
+
+        assert submit_route.call_count == status_route.call_count == len(ApiMode)
+        for clf in fitted:
+            check_is_fitted(clf)
+            assert clf.get_timings()["fit"] == TIMINGS

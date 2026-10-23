@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import logging
 import warnings
-from uuid import uuid4
-from typing import Any, Literal, cast, overload
+from dataclasses import dataclass
+from uuid import UUID, uuid4
+from typing import Any, Literal, cast, get_args, overload
 from typing_extensions import Self
 
 import numpy as np
@@ -22,10 +23,16 @@ from tabpfn_client.client import (
     ServiceClient,
     ClientOptions,
     PredictionResult,
+    _resume_hint,
 )
 from tabpfn_client.config import Config, init
 from tabpfn_client.constants import URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE
-from tabpfn_client.errors import FitFailedError, FittedModelNotFoundError
+from tabpfn_client.errors import (
+    FitFailedError,
+    FittedModelNotFoundError,
+    PredictFailedError,
+    PredictionGoneError,
+)
 from tabpfn_client.api_models import ModelVersion
 from tabpfn_client.utils import (
     model_limit_from_version,
@@ -80,6 +87,11 @@ _DEFAULT_MODEL_NAMES = tuple(f"{v.value}_default" for v in reversed(ModelVersion
 # The server sends its budget via get_settings (`predict_row_pairs_budget`);
 # this is only the fallback for servers that predate that field.
 FALLBACK_PREDICT_ROW_PAIRS_BUDGET = 250_000 * 1_000_000
+
+# The outputs each estimator predicts. The server accepts more, and would bill a
+# background prediction whose output the estimator cannot return.
+ClassifierOutputLiteral = Literal["preds", "probas"]
+RegressorOutputLiteral = Literal["mean", "median", "mode", "quantiles", "full", "main"]
 
 
 class TabPFNModelSelection:
@@ -174,17 +186,32 @@ def _timings_dict(timings: FitTimings | None) -> dict[str, Any] | None:
     return timings.model_dump(mode="json") if timings is not None else None
 
 
+@dataclass(frozen=True)
+class _PendingPredict:
+    """A prediction `submit_predict()` started, and the output it was asked for."""
+
+    fitted_test_set_id: UUID
+    output_type: str
+
+
 class _AsyncMixin(ModelPersistenceMixin):
     """Starts work on the TabPFN server without waiting for it, and waits for it.
 
     `submit_fit()` returns as soon as the server has accepted the fit, leaving
     the model pending until `wait_for_fit()` sees the fit complete. In between,
     `save_model()` saves the pending fit, for a later run to load and wait for.
-    `submit_predict()` and `wait_for_predict()` are reserved for predictions.
+    Each estimator's `submit_predict()` does the same for a prediction, which
+    the model holds until its `wait_for_predict()` returns it; `save_model()`
+    does not save a pending prediction.
     """
 
     # Set by the estimator's `__init__`.
     client_options: ClientOptions
+
+    # The prediction `submit_predict()` started that `wait_for_predict()` has
+    # not returned yet. Class-level default so estimators pickled before this
+    # attribute existed read it as None.
+    _pending_predict: _PendingPredict | None = None
 
     def submit_fit(
         self,
@@ -237,6 +264,8 @@ class _AsyncMixin(ModelPersistenceMixin):
             TimeoutError: If the fit has not completed within
                 `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds. The model is still
                 pending, so `wait_for_fit()` can be called again.
+            RuntimeError: If polling for the fit fails 4 times in a row with
+                an unexpected error. The model is still pending.
         """
         if not self._fit_pending:
             check_is_fitted(
@@ -258,35 +287,6 @@ class _AsyncMixin(ModelPersistenceMixin):
         self.fit_timings_ = _timings_dict(response.timings)
         self._fit_pending = False
         return self
-
-    def submit_predict(self, X: pd.DataFrame | np.ndarray) -> Self:
-        """Start predicting on the server, without waiting for the predictions.
-
-        Not implemented yet: reserved for the prediction counterpart of
-        `submit_fit()`. Use `predict()` in the meantime.
-
-        Args:
-            X: The input data for prediction.
-
-        Raises:
-            NotImplementedError: Always, for now.
-        """
-        raise NotImplementedError(
-            "submit_predict() is not implemented yet. Use predict()."
-        )
-
-    def wait_for_predict(self) -> Any:
-        """Wait for the predictions `submit_predict()` started.
-
-        Not implemented yet: reserved for the prediction counterpart of
-        `wait_for_fit()`. Use `predict()` in the meantime.
-
-        Raises:
-            NotImplementedError: Always, for now.
-        """
-        raise NotImplementedError(
-            "wait_for_predict() is not implemented yet. Use predict()."
-        )
 
     def _fit(
         self,
@@ -320,8 +320,10 @@ class _AsyncMixin(ModelPersistenceMixin):
     ) -> None:
         """Assign the fitted state both estimators keep, for one fit.
 
-        A fit the server is still running leaves the model pending.
+        A fit the server is still running leaves the model pending. A pending
+        prediction belongs to the previous fit, so it is dropped.
         """
+        self._drop_pending_predict("a new fit replaced the one it was made with")
         self.model_id_ = fit_result.fitted_train_set_id
         self.fit_timings_ = _timings_dict(fit_result.timings)
         self._n_train_rows = n_train_rows
@@ -333,6 +335,60 @@ class _AsyncMixin(ModelPersistenceMixin):
             vars(self).pop(name, None)
         self._n_train_rows = None
         self._fit_pending = False
+        self._drop_pending_predict("the model no longer has its fit")
+
+    def _set_pending_predict(self, pending: _PendingPredict) -> None:
+        """Hold a prediction the server accepted, in place of any earlier one."""
+        self._drop_pending_predict("submit_predict() started a new one")
+        self._pending_predict = pending
+
+    def _drop_pending_predict(self, reason: str) -> None:
+        """Forget the pending prediction, if there is one, logging its id."""
+        pending = self._pending_predict
+        if pending is None:
+            return
+        # The id is the only way back to a prediction the server runs and bills
+        # regardless; Python shows only WARNING and above by default.
+        logger.warning(
+            f"Prediction {pending.fitted_test_set_id} is no longer pending on "
+            f"this {type(self).__name__}: {reason}. The server bills it whether "
+            "or not anyone waits for it; "
+            f"{_resume_hint(pending.fitted_test_set_id)}"
+        )
+        self._pending_predict = None
+
+    def _await_pending_predict(self) -> tuple[_PendingPredict, PredictionResult]:
+        """Wait for the prediction `submit_predict()` started.
+
+        The prediction stays pending, so that a wait that stops can be resumed,
+        unless the server reports that it failed or that it does not have it;
+        the caller drops it once it has its output.
+
+        Raises:
+            RuntimeError: If no prediction is pending.
+        """
+        pending = self._pending_predict
+        if pending is None:
+            raise RuntimeError(
+                f"This {type(self).__name__} has no prediction to wait for. "
+                "Call submit_predict() first."
+            )
+        # A pickled model carries its pending prediction into a process that
+        # may not have authorized the HTTP client yet.
+        init()
+        logger.debug(
+            f"Waiting for prediction {pending.fitted_test_set_id} to complete."
+        )
+        try:
+            result = InferenceClient.wait_for_predict(
+                pending.fitted_test_set_id, client_options=self.client_options
+            )
+        except (PredictFailedError, PredictionGoneError):
+            # Nothing is left to wait for: no drop warning, whose resume hint
+            # would fail.
+            self._pending_predict = None
+            raise
+        return pending, result
 
 
 class TabPFNClassifier(
@@ -556,10 +612,20 @@ class TabPFNClassifier(
                   waits on one open request.
                 - `ASYNC`: for larger workloads. The server runs the work as a
                   background job, and the client polls it until it is done.
-                - `AUTO`: `ASYNC` for large training sets, `SYNC` otherwise.
+                - `AUTO`: `ASYNC` for large workloads, `SYNC` otherwise. A fit
+                  runs as a job for a large training set. A prediction runs as
+                  a job once the fit's training rows or the rows to predict
+                  reach the thresholds the server sets; a model fitted with
+                  `fit_mode="fit_with_cache"` predicts with one request.
 
                 In every mode `fit()` and `predict()` return once the work is
-                done. `submit_fit()` always runs async, whatever this setting is.
+                done. A thinking-mode fit always runs as a background job, as do
+                `submit_fit()` and `submit_predict()`, whatever this setting is.
+                In every mode, `fit()` waits for a thinking-mode fit for at most
+                `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds: by default the
+                server's 2 hours, which outlasts the server's own deadline for
+                a fit. Against a server that does not run predictions as
+                background jobs, `predict()` sends one request in every mode.
 
             client_options:
                 Client specific options (e.g. timeout, headers).
@@ -610,6 +676,12 @@ class TabPFNClassifier(
         also on a model with a pending fit. To start a fit without waiting for
         it, use `submit_fit()`.
 
+        The model takes the new fit as soon as the server has accepted it. A
+        fit that `fit()` polls for, as an ASYNC or thinking-mode one, is then
+        pending until the poll sees it complete: if the poll stops, for a
+        timeout or an interrupt, the model stays pending on the new fit, and
+        `wait_for_fit()` resumes the wait.
+
         Args:
             X: The input data.
             y: The target variable.
@@ -622,7 +694,12 @@ class TabPFNClassifier(
             ValueError: If the data or the estimator's parameters are invalid,
                 or the data exceeds the model limits.
             FitFailedError: If the server reports that the fit failed while
-                `fit()` polled for it, as in ASYNC mode.
+                `fit()` polled for it. The model is then unfitted.
+            FittedModelNotFoundError: If the server no longer has the fit
+                while `fit()` polls for it. The model is then unfitted.
+            TimeoutError: If a fit that `fit()` polls for has not completed
+                within `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds. The model is
+                then pending on the new fit.
         """
         return self._fit(X, y, description, submit=False)
 
@@ -682,11 +759,13 @@ class TabPFNClassifier(
                 tabpfn_systems=tabpfn_systems,
                 text_handling=text_handling,
                 thinking_config=thinking_config,
-                # Only an ASYNC fit is accepted before it runs, as submit needs.
-                api_mode=ApiMode.ASYNC if submit else self.api_mode,
+                api_mode=_fit_api_mode(
+                    self.api_mode, submit=submit, thinking=thinking_mode
+                ),
                 client_options=self.client_options,
                 description=description,
-                wait=not submit,
+                # Waited for below, once the model holds the new fit.
+                wait=False,
             )
             self._set_fit(fit_result, n_train_rows=X.shape[0])
             # Set only after the server has accepted the fit, so a failed refit
@@ -697,6 +776,8 @@ class TabPFNClassifier(
             raise NotImplementedError(
                 "Only server mode is supported at the moment for init(use_server=False)"
             )
+        if not submit and self._fit_pending:
+            self.wait_for_fit()
         return self
 
     def predict(self, X):
@@ -711,6 +792,12 @@ class TabPFNClassifier(
         Raises:
             NotFittedError: If the model has no fit, or its fit is pending:
                 call `wait_for_fit()` first.
+            PredictFailedError: If the client polls for the prediction and the
+                server reports that it failed. A failure the server reports in
+                answer to the prediction request itself raises RuntimeError,
+                which `PredictFailedError` subclasses.
+            RefitRequiredError: If the fitted model can no longer predict:
+                call `fit()` again.
         """
         return self._predict(X, output_type="preds")
 
@@ -727,22 +814,121 @@ class TabPFNClassifier(
         Raises:
             NotFittedError: If the model has no fit, or its fit is pending:
                 call `wait_for_fit()` first.
+            PredictFailedError: If the client polls for the prediction and the
+                server reports that it failed. A failure the server reports in
+                answer to the prediction request itself raises RuntimeError,
+                which `PredictFailedError` subclasses.
+            RefitRequiredError: If the fitted model can no longer predict:
+                call `fit()` again.
         """
         return self._predict(X, output_type="probas")
+
+    def submit_predict(
+        self,
+        X: pd.DataFrame | np.ndarray,
+        output_type: ClassifierOutputLiteral = "preds",
+    ) -> Self:
+        """Start predicting on the server, without waiting for the predictions.
+
+        Checks and uploads `X` as `predict()` does, but returns as soon as the
+        server has accepted the prediction, which it then runs as a background
+        job, whatever `api_mode` is. `wait_for_predict()` waits for it and
+        returns the predictions. The model holds one pending prediction: a new
+        `submit_predict()` replaces it, and a new fit drops it. A pickled or
+        copied model keeps it; `save_model()` and `clone()` do not.
+
+        Args:
+            X: The input data for prediction.
+            output_type: `"preds"` for the class labels `predict()` returns,
+                `"probas"` for the probabilities `predict_proba()` returns.
+
+        Returns:
+            self
+
+        Raises:
+            NotFittedError: If the model has no fit, or its fit is pending:
+                call `wait_for_fit()` first.
+            ValueError: If `output_type` is not `"preds"` or `"probas"`, `X`
+                exceeds the model limits or the group columns are invalid.
+            RuntimeError: If the server does not run predictions as background
+                jobs.
+        """
+        # IMPORTANT: self._get_predict_params() should be called first to make sure
+        # we capture the original user-provided values.
+        predict_params = self._get_predict_params(locals())
+        X_clean, task_config = self._prepare_predict(X, output_type, predict_params)
+        fitted_test_set_id = InferenceClient.submit_predict(
+            X_clean,
+            fitted_train_set_id=self.model_id_,
+            task_config=task_config,
+            client_options=self.client_options,
+        )
+        self._set_pending_predict(_PendingPredict(fitted_test_set_id, output_type))
+        return self
+
+    def wait_for_predict(self) -> np.ndarray:
+        """Wait for the prediction `submit_predict()` started, and return it.
+
+        Polls the server until the prediction has completed. Until then the
+        prediction is pending, so a wait that stops can be resumed by calling
+        `wait_for_predict()` again.
+
+        Returns:
+            The predictions, as `predict()` returns them for `"preds"` and
+            `predict_proba()` for `"probas"`.
+
+        Raises:
+            RuntimeError: If no prediction is pending, polling for it fails,
+                or the server no longer has it. In the last case, it is then
+                no longer pending.
+            PredictFailedError: If the server reports that the prediction
+                failed. It is then no longer pending.
+            RefitRequiredError: If the fitted model can no longer predict:
+                call `fit()` again. The prediction is then no longer pending.
+            TimeoutError: If the prediction has not completed within
+                `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds.
+        """
+        _, result = self._await_pending_predict()
+        output = self._finish_predict(result)
+        self._pending_predict = None
+        return output
 
     def _predict(
         self,
         X,
-        output_type: Literal["probas", "preds"],
+        output_type: ClassifierOutputLiteral,
     ) -> np.ndarray:
         """Validate `X` and request `output_type` predictions from the server."""
         # IMPORTANT: self._get_predict_params() should be called first to make sure
         # we capture the original user-provided values.
         predict_params = self._get_predict_params(locals())
+        X_clean, task_config = self._prepare_predict(X, output_type, predict_params)
+        result = InferenceClient.predict(
+            X_clean,
+            fitted_train_set_id=self.model_id_,
+            task_config=task_config,
+            client_options=self.client_options,
+            api_mode=self.api_mode,
+            n_train_rows=self._n_train_rows,
+            thinking=_resolve_thinking_mode(self.thinking_mode, self.thinking_effort),
+        )
+        return self._finish_predict(result)
 
+    def _prepare_predict(
+        self,
+        X: Any,
+        output_type: str,
+        predict_params: ClassifierPredictParams,
+    ) -> tuple[Any, ClassifierConfig]:
+        """Check that the model can predict `X`, and build the request for it.
+
+        Returns:
+            `X` with its text cleaned, and the task config to send with it.
+        """
         # Before `init()`, so that a model with nothing to predict with fails
         # without authenticating first.
         self._check_fitted()
+        _validate_output_type(output_type, ClassifierOutputLiteral)
 
         # An estimator restored by `load_model()` (or whose `model_id_` was
         # assigned directly) can reach `predict` without ever calling `fit()`,
@@ -777,13 +963,10 @@ class TabPFNClassifier(
             and self._last_trace_id is not None
         ):
             self.client_options.headers["sentry-trace"] = self._last_trace_id
+        return X_clean, task_config
 
-        result = InferenceClient.predict(
-            X_clean,
-            fitted_train_set_id=self.model_id_,
-            task_config=task_config,
-            client_options=self.client_options,
-        )
+    def _finish_predict(self, result: PredictionResult) -> np.ndarray:
+        """Store the metadata and timings of a prediction, and return its output."""
         # Unpack and store metadata
         self._last_meta = result.metadata
         self._last_timings = result.timings
@@ -1046,10 +1229,20 @@ class TabPFNRegressor(
                   waits on one open request.
                 - `ASYNC`: for larger workloads. The server runs the work as a
                   background job, and the client polls it until it is done.
-                - `AUTO`: `ASYNC` for large training sets, `SYNC` otherwise.
+                - `AUTO`: `ASYNC` for large workloads, `SYNC` otherwise. A fit
+                  runs as a job for a large training set. A prediction runs as
+                  a job once the fit's training rows or the rows to predict
+                  reach the thresholds the server sets; a model fitted with
+                  `fit_mode="fit_with_cache"` predicts with one request.
 
                 In every mode `fit()` and `predict()` return once the work is
-                done. `submit_fit()` always runs async, whatever this setting is.
+                done. A thinking-mode fit always runs as a background job, as do
+                `submit_fit()` and `submit_predict()`, whatever this setting is.
+                In every mode, `fit()` waits for a thinking-mode fit for at most
+                `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds: by default the
+                server's 2 hours, which outlasts the server's own deadline for
+                a fit. Against a server that does not run predictions as
+                background jobs, `predict()` sends one request in every mode.
 
             client_options:
                 Client specific options (e.g. timeout, headers).
@@ -1099,6 +1292,12 @@ class TabPFNRegressor(
         also on a model with a pending fit. To start a fit without waiting for
         it, use `submit_fit()`.
 
+        The model takes the new fit as soon as the server has accepted it. A
+        fit that `fit()` polls for, as an ASYNC or thinking-mode one, is then
+        pending until the poll sees it complete: if the poll stops, for a
+        timeout or an interrupt, the model stays pending on the new fit, and
+        `wait_for_fit()` resumes the wait.
+
         Args:
             X: The input data.
             y: The target variable.
@@ -1111,7 +1310,12 @@ class TabPFNRegressor(
             ValueError: If the data or the estimator's parameters are invalid,
                 or the data exceeds the model limits.
             FitFailedError: If the server reports that the fit failed while
-                `fit()` polled for it, as in ASYNC mode.
+                `fit()` polled for it. The model is then unfitted.
+            FittedModelNotFoundError: If the server no longer has the fit
+                while `fit()` polls for it. The model is then unfitted.
+            TimeoutError: If a fit that `fit()` polls for has not completed
+                within `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds. The model is
+                then pending on the new fit.
         """
         return self._fit(X, y, description, submit=False)
 
@@ -1160,11 +1364,13 @@ class TabPFNRegressor(
                 tabpfn_systems=tabpfn_systems,
                 text_handling=text_handling,
                 thinking_config=thinking_config,
-                # Only an ASYNC fit is accepted before it runs, as submit needs.
-                api_mode=ApiMode.ASYNC if submit else self.api_mode,
+                api_mode=_fit_api_mode(
+                    self.api_mode, submit=submit, thinking=thinking_mode
+                ),
                 client_options=self.client_options,
                 description=description,
-                wait=not submit,
+                # Waited for below, once the model holds the new fit.
+                wait=False,
             )
             self._set_fit(fit_result, n_train_rows=X.shape[0])
             self._fit_count += 1
@@ -1172,15 +1378,14 @@ class TabPFNRegressor(
             raise NotImplementedError(
                 "Only server mode is supported at the moment for init(use_server=False)"
             )
-
+        if not submit and self._fit_pending:
+            self.wait_for_fit()
         return self
 
     def predict(
         self,
         X: pd.DataFrame | np.ndarray,
-        output_type: Literal[
-            "mean", "median", "mode", "quantiles", "full", "main"
-        ] = "mean",
+        output_type: RegressorOutputLiteral = "mean",
         quantiles: list[float] | None = None,  # NOTE: captured in _get_predict_params()
     ) -> np.ndarray | list[np.ndarray] | dict[str, np.ndarray]:
         """Predict regression target for X.
@@ -1200,7 +1405,9 @@ class TabPFNRegressor(
                 - If `"full"`, we return the full output of the model, including
                   the logits, the borders and all the output types from "main".
                   The criterion is included when the optional `tabpfn` and
-                  `torch` packages are installed.
+                  `torch` packages are installed. A full output too large for
+                  one response is split over several requests; those that run
+                  as background jobs overlap, up to 4 at once.
 
             quantiles: The quantiles to return if `output_type="quantiles"`.
                 By default, the `[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]`
@@ -1214,18 +1421,152 @@ class TabPFNRegressor(
         Raises:
             NotFittedError: If the model has no fit, or its fit is pending:
                 call `wait_for_fit()` first.
-            ValueError: If `X` exceeds the model limits or the group columns are
-                invalid.
+            ValueError: If `output_type` is not one of the above, `X` exceeds
+                the model limits or the group columns are invalid.
             RuntimeError: If a `"full"` prediction split across several requests
                 returns fields that cannot be combined.
+            PredictFailedError: If the client polls for the prediction and the
+                server reports that it failed. A failure the server reports in
+                answer to the prediction request itself raises RuntimeError,
+                which `PredictFailedError` subclasses.
+            RefitRequiredError: If the fitted model can no longer predict:
+                call `fit()` again.
         """
         # IMPORTANT: self._get_predict_params() should be called first to make sure
         # we capture the original user-provided values.
         predict_params = self._get_predict_params(locals())
+        task_config, rows_per_call = self._prepare_predict(
+            X, output_type, predict_params, split_full_output=True
+        )
 
+        thinking = _resolve_thinking_mode(self.thinking_mode, self.thinking_effort)
+        if rows_per_call is None:
+            results = [
+                InferenceClient.predict(
+                    _clean_text_features(X),
+                    fitted_train_set_id=self.model_id_,
+                    task_config=task_config,
+                    client_options=self.client_options,
+                    api_mode=self.api_mode,
+                    n_train_rows=self._n_train_rows,
+                    thinking=thinking,
+                )
+            ]
+        else:
+            # A generator, so that each chunk is sliced only when it is sent.
+            results = InferenceClient.predict_chunks(
+                (
+                    _clean_text_features(_row_slice(X, start, start + rows_per_call))
+                    for start in range(0, X.shape[0], rows_per_call)
+                ),
+                fitted_train_set_id=self.model_id_,
+                task_config=task_config,
+                client_options=self.client_options,
+                api_mode=self.api_mode,
+                n_train_rows=self._n_train_rows,
+                thinking=thinking,
+            )
+        return self._finish_predict(results, output_type)
+
+    def submit_predict(
+        self,
+        X: pd.DataFrame | np.ndarray,
+        output_type: RegressorOutputLiteral = "mean",
+        quantiles: list[float] | None = None,  # NOTE: captured in _get_predict_params()
+    ) -> Self:
+        """Start predicting on the server, without waiting for the predictions.
+
+        Checks and uploads `X` as `predict()` does, but returns as soon as the
+        server has accepted the prediction, which it then runs as a background
+        job, whatever `api_mode` is. `wait_for_predict()` waits for it and
+        returns the predictions. The model holds one pending prediction: a new
+        `submit_predict()` replaces it, and a new fit drops it. A pickled or
+        copied model keeps it; `save_model()` and `clone()` do not.
+
+        Args:
+            X: The input data, of shape (n_samples, n_features).
+            output_type: The type of output to return, as for `predict()`. A
+                `"full"` output must fit in one response; `predict()` splits a
+                larger one over several requests.
+            quantiles: The quantiles to return if `output_type="quantiles"`, as
+                for `predict()`.
+
+        Returns:
+            self
+
+        Raises:
+            NotFittedError: If the model has no fit, or its fit is pending:
+                call `wait_for_fit()` first.
+            ValueError: If `output_type` is not one `predict()` takes, `X`
+                exceeds the model limits, the group columns are invalid, or a
+                `"full"` output for `X` does not fit in one response.
+            RuntimeError: If the server does not run predictions as background
+                jobs.
+        """
+        # IMPORTANT: self._get_predict_params() should be called first to make sure
+        # we capture the original user-provided values.
+        predict_params = self._get_predict_params(locals())
+        task_config, _ = self._prepare_predict(
+            X, output_type, predict_params, split_full_output=False
+        )
+        fitted_test_set_id = InferenceClient.submit_predict(
+            _clean_text_features(X),
+            fitted_train_set_id=self.model_id_,
+            task_config=task_config,
+            client_options=self.client_options,
+        )
+        self._set_pending_predict(_PendingPredict(fitted_test_set_id, output_type))
+        return self
+
+    def wait_for_predict(self) -> np.ndarray | list[np.ndarray] | dict[str, np.ndarray]:
+        """Wait for the prediction `submit_predict()` started, and return it.
+
+        Polls the server until the prediction has completed. Until then the
+        prediction is pending, so a wait that stops can be resumed by calling
+        `wait_for_predict()` again.
+
+        Returns:
+            The predictions, as `predict()` returns them for the `output_type`
+            and `quantiles` given to `submit_predict()`.
+
+        Raises:
+            RuntimeError: If no prediction is pending, polling for it fails,
+                or the server no longer has it. In the last case, it is then
+                no longer pending.
+            PredictFailedError: If the server reports that the prediction
+                failed. It is then no longer pending.
+            RefitRequiredError: If the fitted model can no longer predict:
+                call `fit()` again. The prediction is then no longer pending.
+            TimeoutError: If the prediction has not completed within
+                `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds.
+        """
+        pending, result = self._await_pending_predict()
+        output = self._finish_predict([result], pending.output_type)
+        self._pending_predict = None
+        return output
+
+    def _prepare_predict(
+        self,
+        X: Any,
+        output_type: str,
+        predict_params: RegressorPredictParams,
+        *,
+        split_full_output: bool,
+    ) -> tuple[RegressorConfig, int | None]:
+        """Check that the model can predict `X`, and build the request for it.
+
+        `split_full_output` says whether the caller splits a `"full"` output
+        that one response cannot cover, as `predict()` does; otherwise such an
+        output raises `ValueError`.
+
+        Returns:
+            The task config to send, and the rows one request may cover when a
+            `"full"` output for `X` has to be split, else None.
+        """
         # Before `init()`, so that a model with nothing to predict with fails
         # without authenticating first.
         self._check_fitted()
+        _validate_output_type(output_type, RegressorOutputLiteral)
 
         # An estimator restored by `load_model()` (or whose `model_id_` was
         # assigned directly) can reach `predict` without ever calling `fit()`,
@@ -1241,8 +1582,8 @@ class TabPFNRegressor(
 
         # A full-output response carries one logit per histogram bar for every
         # test row, so the server caps the rows a single response may cover.
-        # Splitting the call here keeps the returned arrays identical to what
-        # one unrestricted call would have produced.
+        # Splitting the call keeps the returned arrays identical to what one
+        # unrestricted call would have produced.
         rows_per_call = (
             _full_output_row_limit(tabpfn_config.model_path)
             if output_type == "full"
@@ -1257,6 +1598,14 @@ class TabPFNRegressor(
             inference_config=tabpfn_config.inference_config,
             split_full_output=chunked,
         )
+        # A pending prediction holds one id, so a background prediction is one
+        # request.
+        if chunked and not split_full_output:
+            raise ValueError(
+                f"The full output for {X.shape[0]} test rows is too large for one "
+                f"background prediction, which covers at most {rows_per_call} "
+                "rows; use predict(), which splits it."
+            )
         _validate_group_columns(
             X,
             enabled=_resolve_thinking_mode(self.thinking_mode, self.thinking_effort),
@@ -1276,21 +1625,18 @@ class TabPFNRegressor(
             and self._last_trace_id is not None
         ):
             self.client_options.headers["sentry-trace"] = self._last_trace_id
+        return task_config, rows_per_call if chunked else None
 
-        def predict_rows(X_rows: Any) -> PredictionResult:
-            return InferenceClient.predict(
-                _clean_text_features(X_rows),
-                fitted_train_set_id=self.model_id_,
-                task_config=task_config,
-                client_options=self.client_options,
-            )
+    def _finish_predict(
+        self,
+        results: list[PredictionResult],
+        output_type: str,
+    ) -> np.ndarray | list[np.ndarray] | dict[str, np.ndarray]:
+        """Store the metadata and timings of a prediction, and shape its output.
 
-        if chunked:
-            rows_per_call = cast(int, rows_per_call)
-            results = [
-                predict_rows(_row_slice(X, start, start + rows_per_call))
-                for start in range(0, X.shape[0], rows_per_call)
-            ]
+        `results` holds one result per request the prediction was sent in.
+        """
+        if len(results) > 1:
             # Metadata describes the request, and every chunk shares the same
             # config; the last one stands for the whole prediction.
             self._last_meta = results[-1].metadata
@@ -1299,11 +1645,10 @@ class TabPFNRegressor(
                 [cast("dict[str, np.ndarray]", r.y_pred) for r in results]
             )
         else:
-            result = predict_rows(X)
             # Unpack and store metadata
-            self._last_meta = result.metadata
-            self._last_timings = result.timings
-            output = result.y_pred
+            self._last_meta = results[0].metadata
+            self._last_timings = results[0].timings
+            output = results[0].y_pred
 
         if output_type == "quantiles" and isinstance(output, np.ndarray):
             return list(output) if output.ndim == 2 else [output]
@@ -1324,7 +1669,9 @@ class TabPFNRegressor(
                 warnings.warn(
                     "Optional dependencies 'tabpfn' and 'torch' are required to "
                     "construct the criterion when output_type='full'. Skipping criterion.",
-                    stacklevel=2,
+                    # Points at the user's call of `predict()` or
+                    # `wait_for_predict()`, which call this.
+                    stacklevel=3,
                 )
             return full
 
@@ -1619,6 +1966,20 @@ def _build_tabpfn_systems(
     return ["preprocessing", "text"]
 
 
+def _validate_output_type(output_type: str, allowed: Any) -> None:
+    """Check `output_type` against the `Literal` of the outputs an estimator predicts.
+
+    Raises:
+        ValueError: If `output_type` is not among them.
+    """
+    choices = get_args(allowed)
+    if output_type not in choices:
+        raise ValueError(
+            f"output_type must be one of {', '.join(map(repr, choices))}, "
+            f"not {output_type!r}."
+        )
+
+
 def _resolve_thinking_mode(enabled: bool, effort: str | None = None) -> bool:
     """Return whether thinking is enabled, either explicitly or by setting an effort."""
     # To honour previous contract, setting effort alone is enough to enable thinking.
@@ -1627,6 +1988,22 @@ def _resolve_thinking_mode(enabled: bool, effort: str | None = None) -> bool:
     if effort:
         return True
     return False
+
+
+def _fit_api_mode(api_mode: ApiMode, *, submit: bool, thinking: bool) -> ApiMode:
+    """Return the mode a fit runs in, for `fit()` or, with `submit`, `submit_fit()`.
+
+    Raises:
+        ValueError: If `api_mode` is not a valid mode.
+    """
+    # Checked on every path, so that an invalid mode fails before any upload,
+    # not at the first predict() after a billed fit.
+    api_mode = ApiMode(api_mode)
+    # Only an ASYNC fit is accepted before it runs, as submit needs. A thinking
+    # fit can take most of an hour, too long to hold one request open for.
+    if submit or thinking:
+        return ApiMode.ASYNC
+    return api_mode
 
 
 def _build_thinking_config(

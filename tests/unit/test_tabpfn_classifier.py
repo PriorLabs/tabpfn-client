@@ -63,6 +63,8 @@ def _api_settings_payload(
         "async_settings": {
             "use_above_trainset_size_bytes": 50 * 1024 * 1024,
             "poll_timeout_secs": 7200.0,
+            "predict_use_above": {"train_rows": 50_000, "test_rows": 100_000},
+            "thinking_predict_use_above": {"train_rows": 25_000, "test_rows": 10_000},
         },
     }
 
@@ -862,7 +864,9 @@ class TestTabPFNClassifierInference(unittest.TestCase):
     def test_single_class_reaches_the_server_without_thinking(self):
         # Parity with the local package, which fits a single class.
         X = np.random.rand(10, 5)
-        with patch.object(InferenceClient, "fit_with_result") as fit:
+        with patch.object(
+            InferenceClient, "fit_with_result", return_value=_DUMMY_FIT
+        ) as fit:
             TabPFNClassifier().fit(X, np.zeros(10, dtype=int))
         fit.assert_called_once()
 

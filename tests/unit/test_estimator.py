@@ -59,6 +59,24 @@ def _normalize_type(tp: object) -> object:
     return tp
 
 
+# Server options the estimators don't expose yet. Exposing one is a feature of
+# its own; delete its entry here when it lands.
+_NOT_YET_EXPOSED_VALUES = {
+    "fit_mode": {"low_memory", "batched"},
+    "output_type": {"top_k"},
+}
+_NOT_YET_EXPOSED_PARAMS = {"top_k"}
+
+
+def _exposed(param: str, tp: object) -> object:
+    """Drop from a normalized ``Literal`` the values of ``param`` the estimators
+    don't expose yet."""
+    hidden = _NOT_YET_EXPOSED_VALUES.get(param)
+    if hidden is None or get_origin(tp) is not Literal:
+        return tp
+    return Literal[tuple(v for v in get_args(tp) if v not in hidden)]
+
+
 _ALLOWED_NON_NULL_DEFAULT_TABPFN_CONFIG_PARAMS = [
     "random_state",
     "ignore_pretraining_limits",
@@ -87,7 +105,7 @@ def test_client_config_includes_server_config(
         assert param in init_params, (
             f"Field `{param}` is absent from {estimator.__name__}.__init__()."
         )
-        expected = _normalize_type(field.annotation)
+        expected = _exposed(param, _normalize_type(field.annotation))
         actual = _normalize_type(init_hints[param])
         assert actual == expected, (
             f"Type of `{param}` on {estimator.__name__}.__init__() is {actual}, "
@@ -111,7 +129,9 @@ _ALLOWED_NON_NULL_DEFAULT_PREDICT_PARAMS = [
     "predict_fn, predict_params_model",
     [
         (TabPFNClassifier._predict, ClassifierPredictParams),
+        (TabPFNClassifier.submit_predict, ClassifierPredictParams),
         (TabPFNRegressor.predict, RegressorPredictParams),
+        (TabPFNRegressor.submit_predict, RegressorPredictParams),
     ],
 )
 def test_client_predict_params_include_server_predict_params(
@@ -123,10 +143,12 @@ def test_client_predict_params_include_server_predict_params(
     predict_hints = get_type_hints(predict_fn)
 
     for param, field in predict_params_model.model_fields.items():
+        if param in _NOT_YET_EXPOSED_PARAMS:
+            continue
         assert param in predict_params, (
             f"Field `{param}` is absent from {predict_fn.__qualname__}()."
         )
-        expected = _normalize_type(field.annotation)
+        expected = _exposed(param, _normalize_type(field.annotation))
         actual = _normalize_type(predict_hints[param])
         assert actual == expected, (
             f"Type of `{param}` on {predict_fn.__qualname__}() is {actual}, "

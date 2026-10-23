@@ -40,6 +40,11 @@ def _limits(
             "async_settings": {
                 "use_above_trainset_size_bytes": 50 * 1024 * 1024,
                 "poll_timeout_secs": 7200.0,
+                "predict_use_above": {"train_rows": 50_000, "test_rows": 100_000},
+                "thinking_predict_use_above": {
+                    "train_rows": 25_000,
+                    "test_rows": 10_000,
+                },
             },
         }
     )
