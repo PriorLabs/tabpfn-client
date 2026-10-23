@@ -193,7 +193,7 @@ def permutation_shap(
     path = np.concatenate(
         [
             np.broadcast_to(hidden[:, None, None], ends),
-            mean[:, 2:].reshape(n_rows, n_orderings, n_features - 1, -1),
+            mean[:, 2:].reshape(n_rows, n_orderings, n_features - 1, mean.shape[-1]),
             np.broadcast_to(shown[:, None, None], ends),
         ],
         axis=2,

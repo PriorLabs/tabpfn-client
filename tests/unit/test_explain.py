@@ -39,10 +39,12 @@ def _interactions(rows) -> np.ndarray:
     return x[:, 0] * x[:, 1] * x[:, 2] + np.sin(x[:, 2]) * x[:, 3] + x[:, 1] ** 2
 
 
-def test_linear_model_values_are_exact() -> None:
+@pytest.mark.parametrize("n_features", [1, 5])
+def test_linear_model_values_are_exact(n_features: int) -> None:
     rng = np.random.default_rng(0)
-    X, background = rng.normal(size=(4, 5)), rng.normal(size=(7, 5))
-    w = rng.normal(size=5)
+    X = rng.normal(size=(4, n_features))
+    background = rng.normal(size=(7, n_features))
+    w = rng.normal(size=n_features)
 
     result = permutation_shap(lambda rows: rows.to_numpy() @ w, X, background)
 
