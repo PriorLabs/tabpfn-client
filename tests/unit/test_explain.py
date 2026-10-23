@@ -99,7 +99,9 @@ def test_multi_output_values_add_up_to_predictions() -> None:
     np.testing.assert_allclose(result.base_values + result.values.sum(axis=1), proba(X))
 
 
-def test_batch_size_splits_calls_without_changing_values() -> None:
+# Each row has 14 masks, so batch_size=25 also builds them one row at a time.
+@pytest.mark.parametrize("batch_size", [100, 25])
+def test_batch_size_splits_calls_without_changing_values(batch_size: int) -> None:
     rng = np.random.default_rng(4)
     X, background = rng.normal(size=(3, 4)), rng.normal(size=(5, 4))
     call_sizes: list[int] = []
@@ -113,9 +115,11 @@ def test_batch_size_splits_calls_without_changing_values() -> None:
 
     call_sizes.clear()
     split = permutation_shap(
-        f, X, background, n_permutations=2, batch_size=100, random_state=0
+        f, X, background, n_permutations=2, batch_size=batch_size, random_state=0
     )
-    assert call_sizes == [100] * (n_masked // 100) + [n_masked % 100]
+    # Calls hold whole groups of 5 background rows.
+    per_call = batch_size // 5 * 5
+    assert call_sizes == [per_call] * (n_masked // per_call) + [n_masked % per_call]
     np.testing.assert_allclose(split.values, whole.values)
 
 
@@ -259,6 +263,19 @@ def test_background_dtype_mismatch_raises(x_column, background_column) -> None:
 
     with pytest.raises(ValueError, match="dtypes"):
         permutation_shap(lambda rows: np.zeros(len(rows)), X, background)
+
+
+@pytest.mark.parametrize(
+    ("X", "match"),
+    [
+        (pd.DataFrame([[1.0, 2.0]], columns=["a", "a"]), "duplicate"),
+        (np.zeros((2, 0)), "one column"),
+    ],
+    ids=["duplicate-columns", "no-columns"],
+)
+def test_invalid_columns_raise(X, match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        permutation_shap(lambda rows: np.zeros(len(rows)), X, X)
 
 
 def test_batch_size_below_background_rows_raises() -> None:
