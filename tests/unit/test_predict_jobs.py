@@ -1305,6 +1305,32 @@ class TestWaitForPredict:
         np.testing.assert_allclose(y_pred["borders"], [0.0, np.nan, 2.0])
         np.testing.assert_allclose(y_pred["logits"], [[1.0, np.nan], [np.nan, 4.0]])
 
+    def test_a_malformed_poll_body_is_retried_as_a_capped_error(self, router, caplog):
+        with (
+            _polling(
+                router,
+                [_json(200, {"unexpected": "shape"}), _json(200, _completed())],
+            ) as (clock, route),
+            caplog.at_level(logging.WARNING, logger="tabpfn_client.client"),
+        ):
+            result = _wait()
+
+        assert route.call_count == 2
+        assert clock.sleeps == [5.0]
+        assert result.fitted_test_set_id == PREDICTION_ID
+        assert "Unexpected error while polling status of prediction" in caplog.text
+
+    def test_the_fourth_malformed_poll_body_in_a_row_raises(self, router):
+        with _polling(router, [_json(200, {"unexpected": "shape"})] * 4) as (_, route):
+            with pytest.raises(RuntimeError) as exc_info:
+                _wait()
+
+        assert route.call_count == 4
+        assert str(exc_info.value).startswith(
+            f"Polling prediction {PREDICTION_ID} failed 4 times in a row:"
+        )
+        assert isinstance(exc_info.value.__cause__, ValidationError)
+
     def test_a_status_this_client_does_not_know_counts_as_still_running(self, router):
         unknown = {**_pending(1.0), "status": "queued"}
 

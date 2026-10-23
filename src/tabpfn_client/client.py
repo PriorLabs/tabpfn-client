@@ -20,7 +20,7 @@ import struct
 import time
 import warnings
 from pydantic import BaseModel, TypeAdapter, ValidationError
-from typing import Any, cast, Mapping, NoReturn, TypeAlias
+from typing import Any, Callable, cast, Mapping, NoReturn, TypeAlias
 from typing_extensions import (
     Never,  # in `typing` only from Python 3.11
     TypeVar,  # supports default= on Python 3.10
@@ -269,6 +269,9 @@ def _serialize_to_parquet(df: pd.DataFrame) -> tuple[bytes, str]:
 
 SuccessT = TypeVar("SuccessT", bound=BaseModel)
 ErrorT = TypeVar("ErrorT", bound=BaseModel, default=Never)
+_PollResponseT = TypeVar(
+    "_PollResponseT", GetFitStatusResponse, GetPredictResultResponse
+)
 
 # Floor for the server's `retry_in_secs` polling hint — defensive: a zero or
 # negative value must neither busy-poll the endpoint nor crash `time.sleep`.
@@ -280,6 +283,9 @@ _MIN_RETRY_INTERVAL_SECS = 0.3
 # of silence means a lost response, which the next poll gets again; the default
 # timeout of 15 minutes would stall the wait instead.
 _MAX_POLL_TIMEOUT_SECS = 120.0
+
+# HTTP timeout of a fit status poll, which the server answers at once.
+_FIT_STATUS_POLL_TIMEOUT_SECS = 15.0
 
 
 @dataclass(frozen=True)
@@ -696,97 +702,174 @@ class ServiceClient(Singleton):
     ) -> GetFitStatusResponse:
         """Poll ``/tabpfn/get_fit_status`` until the fit reaches a terminal state.
 
-        The first poll happens immediately; between polls we sleep for the
-        server's per-response ``retry_in_secs`` hint (5s until the first hint
-        arrives), clamped to the ``_MIN_RETRY_INTERVAL_SECS`` floor so a
-        zero/negative hint can neither busy-poll the endpoint nor crash
-        ``time.sleep``. The server derives the hint from how long the fit has
-        been pending, so a process resuming the wait for a fit another process
-        submitted polls at the same cadence.
+        Polls as `_poll_until_done` describes, at once and then at the pace the
+        server hints, which it derives from how long the fit has been pending,
+        so a process resuming the wait for a fit another process submitted
+        polls at the same cadence. A failed fit is reported by the server as
+        HTTP 200 with ``status=failed`` (only an unknown/foreign id is a 404),
+        so the status field — not the HTTP code — is what we inspect here.
 
-        Returns once the fit is COMPLETED. Raises ``FitFailedError`` if the fit
-        FAILED, ``FittedModelNotFoundError`` if the server has no fit with this
-        id, or ``TimeoutError`` when no terminal state is reached within the
-        resolved poll timeout. The timeout is a hard bound: the loop gives up as
-        soon as the next poll could no longer start before the deadline, instead
-        of sleeping up to the deadline and polling once more past it.
-        A failed fit is reported by the server as HTTP 200 with
-        ``status=failed`` (only an unknown/foreign id is a 404), so the status
-        field — not the HTTP code — is what we inspect here.
+        Network errors, cut-off responses and 408, 502, 503 and 504 are
+        transient, logged and retried until the deadline; 429, 500, an empty
+        body and a malformed one are retried up to 3 times in a row.
 
-        Transient poll failures (network errors, retryable HTTP statuses) are
-        logged and retried until the deadline; when the deadline expires while
-        polls are failing, the ``TimeoutError`` chains the most recent poll
-        error so the cause is not lost.
+        Raises:
+            FitFailedError: If the fit FAILED.
+            FittedModelNotFoundError: If the server has no fit with this id.
+            TimeoutError: If the fit reaches no terminal state within the
+                resolved poll timeout.
+            RuntimeError: On the 4th capped poll error in a row.
         """
-        single_poll_timeout = 15.0
-        async_settings = cls._resolve_async_settings()
-        total_timeout = async_settings.poll_timeout_secs
-        deadline = time.monotonic() + total_timeout
-        retry_in_secs = 5.0  # fallback until the server sends retry_in_secs
-        # Most recent transient poll error; reset on every successful poll so
-        # the TimeoutError only chains it if polls were failing at the end.
-        last_error: Exception | None = None
-        max_consecutive_capped_errors = 3
-        consecutive_capped_errors = 0
 
-        while True:
-            try:
-                status_resp = cls._get_fit_status(
-                    req=GetFitStatusRequest(fitted_train_set_id=fitted_train_set_id),
-                    timeout=single_poll_timeout,
-                    headers=headers,
+        def is_done(status_resp: GetFitStatusResponse) -> bool:
+            if status_resp.status == FitStatus.FAILED:
+                raise FitFailedError(
+                    f"Fit {fitted_train_set_id} failed: "
+                    f"{status_resp.error or 'no error message provided'}"
                 )
-            except (
+            return status_resp.status == FitStatus.COMPLETED
+
+        return cls._poll_until_done(
+            lambda: cls._get_fit_status(
+                req=GetFitStatusRequest(fitted_train_set_id=fitted_train_set_id),
+                timeout=_FIT_STATUS_POLL_TIMEOUT_SECS,
+                headers=headers,
+            ),
+            is_done,
+            subject=f"fit {fitted_train_set_id}",
+            transient_errors=(
                 httpx.NetworkError,
                 httpx.TimeoutException,
                 httpx.RemoteProtocolError,
                 RetryableServerError,
-            ) as exc:
+            ),
+            capped_errors=(CappedRetryableServerError,),
+        )
+
+    @classmethod
+    def _poll_until_done(
+        cls,
+        fetch: Callable[[], _PollResponseT],
+        is_done: Callable[[_PollResponseT], bool],
+        *,
+        subject: str,
+        transient_errors: tuple[type[Exception], ...],
+        capped_errors: tuple[type[Exception], ...],
+        first_poll_delay_secs: float = 0.0,
+    ) -> _PollResponseT:
+        """Poll until a response ends the wait, and return that response.
+
+        The first poll happens after ``first_poll_delay_secs``, at once by
+        default, and no later than the deadline; between polls we sleep for
+        the server's per-response ``retry_in_secs`` hint (5s until the first
+        hint arrives, and at least 5s after a failed poll), clamped to the
+        ``_MIN_RETRY_INTERVAL_SECS`` floor so a zero/negative hint can neither
+        busy-poll the endpoint nor crash ``time.sleep``.
+
+        The resolved poll timeout, counted from the start of this call, is a
+        hard bound: the loop gives up as soon as the next poll could no longer
+        start before the deadline, instead of sleeping up to the deadline and
+        polling once more past it. A single poll can still run past the
+        deadline, for as long as its own request timeout allows.
+
+        Args:
+            fetch: Polls once.
+            is_done: Whether a response ends the wait. It raises for one that
+                ends the wait in failure.
+            subject: What is polled, such as ``"fit <id>"``, for messages.
+            transient_errors: Poll errors that are logged and retried until
+                the deadline.
+            capped_errors: Poll errors that are logged and retried up to 3
+                times in a row. A malformed response, which fails validation,
+                always counts as one.
+            first_poll_delay_secs: Seconds to wait before the first poll.
+
+        Returns:
+            The response that ended the wait.
+
+        Raises:
+            TimeoutError: If no response ended the wait within the poll
+                timeout. When polls were failing at the end, it chains the
+                last poll error so the cause is not lost.
+            RuntimeError: On the 4th capped poll error in a row, which it
+                chains.
+        """
+        total_timeout = cls._resolve_async_settings().poll_timeout_secs
+        deadline = time.monotonic() + total_timeout
+        fallback_retry_in_secs = 5.0
+        retry_in_secs = fallback_retry_in_secs  # until the server sends a hint
+        # A malformed body can only come from a broken or foreign response,
+        # which a later poll may not repeat.
+        capped_errors = (*capped_errors, ValidationError)
+        # Most recent poll error; reset on every successful poll so the
+        # TimeoutError only chains it if polls were failing at the end.
+        last_error: Exception | None = None
+        max_consecutive_capped_errors = 3
+        consecutive_capped_errors = 0
+
+        if first_poll_delay_secs > 0:
+            # Clamped to the deadline, and the poll still goes out after it: a
+            # poll timeout shorter than the hint still gets one answer.
+            time.sleep(
+                min(first_poll_delay_secs, max(0.0, deadline - time.monotonic()))
+            )
+
+        while True:
+            try:
+                response = fetch()
+            except transient_errors as exc:
                 last_error = exc
                 consecutive_capped_errors = 0
                 logger.warning(
-                    f"Transient error while polling status of fit "
-                    f"{fitted_train_set_id}, retrying until the poll deadline: {exc}"
+                    f"Transient error while polling status of {subject}, "
+                    f"retrying until the poll deadline: {exc}"
                 )
-            except CappedRetryableServerError as exc:
+            except capped_errors as exc:
                 consecutive_capped_errors += 1
                 if consecutive_capped_errors > max_consecutive_capped_errors:
-                    raise exc
+                    # As a RuntimeError, like every other error that ends a
+                    # poll, so that `except RuntimeError` catches it.
+                    raise RuntimeError(
+                        f"Polling {subject} failed {consecutive_capped_errors} "
+                        f"times in a row: {exc}"
+                    ) from exc
                 last_error = exc
                 logger.warning(
-                    f"Unexpected error while polling status of fit "
-                    f"{fitted_train_set_id}, retrying up to {max_consecutive_capped_errors} consecutive errors: {exc}"
+                    f"Unexpected error while polling status of {subject}, "
+                    f"retrying up to {max_consecutive_capped_errors} "
+                    f"consecutive errors: {exc}"
                 )
             else:
                 last_error = None
                 consecutive_capped_errors = 0
-                if status_resp.status == FitStatus.COMPLETED:
-                    return status_resp
-                if status_resp.status == FitStatus.FAILED:
-                    raise FitFailedError(
-                        f"Fit {fitted_train_set_id} failed: "
-                        f"{status_resp.error or 'no error message provided'}"
-                    )
-                if status_resp.retry_in_secs is not None:
+                if is_done(response):
+                    return response
+                if response.retry_in_secs is not None:
                     retry_in_secs = max(
-                        status_resp.retry_in_secs, _MIN_RETRY_INTERVAL_SECS
+                        response.retry_in_secs, _MIN_RETRY_INTERVAL_SECS
                     )
 
-            # Still PENDING (or a transient error): sleep, then poll again —
-            # unless the next poll could only start at/after the deadline. The
-            # poll timeout is a hard bound, so give up now rather than sleep
-            # up to the deadline and issue one more poll past it.
+            # After a failed poll, wait at least the fallback: the short hint of
+            # a young job would otherwise poll, and warn, twice a second
+            # through an outage. The hint applies again after the next success.
+            sleep_secs = (
+                retry_in_secs
+                if last_error is None
+                else max(retry_in_secs, fallback_retry_in_secs)
+            )
+            # Still running (or a poll error): sleep, then poll again — unless
+            # the next poll could only start at/after the deadline.
             remaining = deadline - time.monotonic()
-            if remaining <= retry_in_secs:
+            if remaining <= sleep_secs:
                 message = (
-                    f"Fit {fitted_train_set_id} did not reach a terminal state "
-                    f"within the poll timeout of {total_timeout} seconds."
+                    f"{subject[:1].upper()}{subject[1:]} did not reach a "
+                    "terminal state within the poll timeout of "
+                    f"{total_timeout} seconds."
                 )
                 if last_error is not None:
                     message += f" The last status poll failed: {last_error}"
                 raise TimeoutError(message) from last_error
-            time.sleep(retry_in_secs)
+            time.sleep(sleep_secs)
 
     # NOTE: no backoff decorator here on purpose — the `_wait_for_fit` polling
     # loop already retries transient errors until its deadline, and a nested
@@ -1285,130 +1368,62 @@ class ServiceClient(Singleton):
     ) -> GetPredictResultResponse:
         """Poll ``/tabpfn/get_predict_result`` until the prediction reaches a terminal state.
 
-        The first poll happens after ``first_poll_delay_secs``, at once by
-        default, and no later than the deadline; between polls we sleep for
-        the server's per-response ``retry_in_secs`` hint (5s until the first
-        hint arrives, and at least 5s after a failed poll), clamped to the
-        ``_MIN_RETRY_INTERVAL_SECS`` floor so a zero/negative hint can neither
-        busy-poll the endpoint nor crash ``time.sleep``. Each poll also runs
-        the job's upkeep on the server, such as failing it past its deadline;
-        nothing else does that.
+        Polls as `_poll_until_done` describes, the first time after
+        ``first_poll_delay_secs``. Each poll also runs the job's upkeep on the
+        server, such as failing it past its deadline; nothing else does that.
+        A single poll can run past the deadline by up to ``timeout`` when its
+        response stalls, as httpx applies ``timeout`` to each read rather than
+        to the whole response, and for as long as the server keeps sending
+        bytes. A failed prediction is reported by the server as HTTP 200 with
+        ``status=failed``, so the status field — not the HTTP code — is what we
+        inspect here.
 
         Returns once the prediction is COMPLETED, with the whole prediction:
         every completed poll streams it again, so the loop stops at the first
-        one. Raises ``PredictFailedError`` (``RefitRequiredError`` if the model
-        must be fitted again) if the prediction FAILED, or ``TimeoutError``
-        when no terminal state is reached within the resolved poll timeout,
-        counted from the start of this call. The timeout is a hard bound: the
-        loop gives up as soon as the next poll could no longer start before
-        the deadline, instead of sleeping up to the deadline and polling once
-        more past it. A single poll can still run past the deadline: by up to
-        ``timeout`` when its response stalls, as httpx applies ``timeout`` to
-        each read rather than to the whole response, and for as long as the
-        server keeps sending bytes. A failed prediction is reported by the
-        server as HTTP 200 with ``status=failed``, so the status field — not
-        the HTTP code — is what we inspect here.
+        one.
 
         Poll errors are classified by their HTTP status, or by the status a
         streamed error envelope reports. 408, 502, 503, 504 and network errors
         are transient, logged and retried until the deadline; 429, 500, an
-        empty body and a cut-off response are retried up to 3 times in a row,
-        and the 4th in a row raises a ``RuntimeError`` that chains it;
-        anything else, such as an unknown (404) or expired (410) prediction,
-        raises at once. When the deadline expires while polls are failing, the
-        ``TimeoutError`` chains the most recent poll error so the cause is not
-        lost.
+        empty or malformed body and a cut-off response are retried up to 3
+        times in a row; anything else, such as an unknown (404) or expired
+        (410) prediction, raises at once.
+
+        Raises:
+            PredictFailedError: If the prediction FAILED;
+                ``RefitRequiredError`` if the model must be fitted again.
+            TimeoutError: If the prediction reaches no terminal state within
+                the resolved poll timeout.
+            RuntimeError: On the 4th capped poll error in a row.
         """
-        async_settings = cls._resolve_async_settings()
-        total_timeout = async_settings.poll_timeout_secs
-        deadline = time.monotonic() + total_timeout
-        fallback_retry_in_secs = 5.0
-        retry_in_secs = fallback_retry_in_secs  # until the server sends a hint
-        # Most recent transient poll error; reset on every successful poll so
-        # the TimeoutError only chains it if polls were failing at the end.
-        last_error: Exception | None = None
-        max_consecutive_capped_errors = 3
-        consecutive_capped_errors = 0
 
-        if first_poll_delay_secs > 0:
-            # Clamped to the deadline, and the poll still goes out after it: a
-            # poll timeout shorter than the hint still gets one answer.
-            time.sleep(
-                min(first_poll_delay_secs, max(0.0, deadline - time.monotonic()))
-            )
-
-        while True:
-            try:
-                result_resp = cls._get_predict_result(
-                    req=GetPredictResultRequest(fitted_test_set_id=fitted_test_set_id),
-                    timeout=timeout,
-                    headers=headers,
+        def is_done(result_resp: GetPredictResultResponse) -> bool:
+            if result_resp.status == PredictStatus.FAILED:
+                raise _prediction_failed(
+                    fitted_test_set_id, result_resp.error, result_resp.error_code
                 )
-            except (
+            # Anything else, a status this client does not know included,
+            # counts as still running.
+            return result_resp.status == PredictStatus.COMPLETED
+
+        return cls._poll_until_done(
+            lambda: cls._get_predict_result(
+                req=GetPredictResultRequest(fitted_test_set_id=fitted_test_set_id),
+                timeout=timeout,
+                headers=headers,
+            ),
+            is_done,
+            subject=f"prediction {fitted_test_set_id}",
+            transient_errors=(
                 httpx.NetworkError,
                 httpx.TimeoutException,
                 RetryableServerError,
-            ) as exc:
-                last_error = exc
-                consecutive_capped_errors = 0
-                logger.warning(
-                    f"Transient error while polling status of prediction "
-                    f"{fitted_test_set_id}, retrying until the poll deadline: {exc}"
-                )
+            ),
             # A response cut off mid-body is capped rather than transient: the
             # server cuts it when it fails after starting it, as on a late 404.
-            except (CappedRetryableServerError, httpx.RemoteProtocolError) as exc:
-                consecutive_capped_errors += 1
-                if consecutive_capped_errors > max_consecutive_capped_errors:
-                    # As a RuntimeError, like every other error that ends a
-                    # poll, so that `except RuntimeError` catches it.
-                    raise RuntimeError(
-                        f"Polling prediction {fitted_test_set_id} failed "
-                        f"{consecutive_capped_errors} times in a row: {exc}"
-                    ) from exc
-                last_error = exc
-                logger.warning(
-                    f"Unexpected error while polling status of prediction "
-                    f"{fitted_test_set_id}, retrying up to {max_consecutive_capped_errors} consecutive errors: {exc}"
-                )
-            else:
-                last_error = None
-                consecutive_capped_errors = 0
-                if result_resp.status == PredictStatus.COMPLETED:
-                    return result_resp
-                if result_resp.status == PredictStatus.FAILED:
-                    raise _prediction_failed(
-                        fitted_test_set_id, result_resp.error, result_resp.error_code
-                    )
-                # Anything else, a status this client does not know included,
-                # counts as still running.
-                if result_resp.retry_in_secs is not None:
-                    retry_in_secs = max(
-                        result_resp.retry_in_secs, _MIN_RETRY_INTERVAL_SECS
-                    )
-
-            # After a failed poll, wait at least the fallback: the short hint of
-            # a young prediction would otherwise poll, and warn, twice a second
-            # through an outage. The hint applies again after the next success.
-            sleep_secs = (
-                retry_in_secs
-                if last_error is None
-                else max(retry_in_secs, fallback_retry_in_secs)
-            )
-            # Still PENDING (or a poll error): sleep, then poll again — unless
-            # the next poll could only start at/after the deadline. The poll
-            # timeout is a hard bound, so give up now rather than sleep up to
-            # the deadline and issue one more poll past it.
-            remaining = deadline - time.monotonic()
-            if remaining <= sleep_secs:
-                message = (
-                    f"Prediction {fitted_test_set_id} did not reach a terminal "
-                    f"state within the poll timeout of {total_timeout} seconds."
-                )
-                if last_error is not None:
-                    message += f" The last status poll failed: {last_error}"
-                raise TimeoutError(message) from last_error
-            time.sleep(sleep_secs)
+            capped_errors=(CappedRetryableServerError, httpx.RemoteProtocolError),
+            first_poll_delay_secs=first_poll_delay_secs,
+        )
 
     # NOTE: no backoff decorator here on purpose — the `_wait_for_predict`
     # polling loop already retries transient errors until its deadline, and a
