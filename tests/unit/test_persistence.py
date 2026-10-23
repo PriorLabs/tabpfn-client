@@ -131,6 +131,7 @@ class TestRecord:
             "n_train_rows",
             "classes",
             "fit_status",
+            "pending_predict",
         }
         assert record["tabpfn_client_version"] == __version__
         assert record["task"] == "regression"
@@ -138,6 +139,7 @@ class TestRecord:
         assert record["n_train_rows"] == N_TRAIN_ROWS
         assert record["classes"] is None
         assert record["fit_status"] == "completed"
+        assert record["pending_predict"] is None
         assert record["params"] == _model_params(reg)
         assert "client_options" not in record["params"]
         json.dumps(record)  # JSON-serialisable as returned
@@ -151,6 +153,17 @@ class TestRecord:
 
         check_is_fitted(loaded)
         assert loaded.save_model()["fit_status"] == "completed"
+
+    def test_a_record_from_before_pending_predict_holds_no_prediction(self):
+        # Records written before `pending_predict` existed held no prediction.
+        record = _fitted_regressor().save_model()
+        del record["pending_predict"]
+
+        loaded = TabPFNRegressor.load_model(record)
+
+        check_is_fitted(loaded)
+        assert loaded._pending_predict is None
+        assert loaded.save_model()["pending_predict"] is None
 
     def test_none_valued_params_survive(self):
         # `random_state=None` asks for a fresh seed each run and differs from
@@ -272,6 +285,14 @@ class TestLoadRejects:
         unknown_task["task"] = "timeseries"
         with pytest.raises(ValueError, match="not a model record"):
             TabPFNRegressor.load_model(unknown_task)
+
+        malformed_prediction = _fitted_regressor().save_model()
+        malformed_prediction["pending_predict"] = {
+            "fitted_test_set_id": "not-an-id",
+            "output_type": "mean",
+        }
+        with pytest.raises(ValueError, match="not a model record"):
+            TabPFNRegressor.load_model(malformed_prediction)
 
         with pytest.raises(FileNotFoundError):
             TabPFNRegressor.load_model(tmp_path / "missing.json")

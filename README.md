@@ -174,7 +174,7 @@ tabpfn_client.init()
 result = InferenceClient.wait_for_predict("<id>")  # the id from the warning
 ```
 
-It returns a `PredictionResult` with the server's raw output in `result.y_pred`. For a regressor's `"quantiles"` and `"full"` outputs, this output is not shaped as `predict()` shapes it. While a model still holds the prediction, after a `TimeoutError` or an interrupt in its `wait_for_predict()`, call `model.wait_for_predict()` again instead: see [Submitting a prediction and waiting for it later](#submitting-a-prediction-and-waiting-for-it-later).
+It returns a `PredictionResult` with the server's raw output in `result.y_pred`. For a regressor's `"quantiles"` and `"full"` outputs, this output is not shaped as `predict()` shapes it. While a model still holds the prediction, for example after a `TimeoutError` or an interrupt in its `wait_for_predict()`, or loaded from a file that `save_model()` wrote while it held the prediction, call `model.wait_for_predict()` instead: see [Submitting a prediction and waiting for it later](#submitting-a-prediction-and-waiting-for-it-later).
 
 ## Saving and Loading Fitted Models
 
@@ -260,12 +260,30 @@ probabilities = model.wait_for_predict()  # what model.predict_proba(X_test) ret
 
 `submit_predict()` takes the arguments of `predict()` (a classifier's also takes `output_type`), and `wait_for_predict()` returns what `predict()` returns for them. A classifier's `output_type` is `"preds"` (the default: the class labels) or `"probas"` (what `predict_proba()` returns).
 
+The process waiting for a prediction can stop too. Save the model after `submit_predict()`, and a later run can load it and wait for the same prediction instead of predicting again:
+
+```python
+from pathlib import Path
+
+from tabpfn_client import TabPFNClassifier
+
+path = Path("prediction.json")
+if path.exists():
+    model = TabPFNClassifier.load_model(path)
+else:
+    model = TabPFNClassifier.load_model("model.json")
+    model.submit_predict(X_test, output_type="probas")
+    model.save_model(path)  # records the pending prediction with the model
+probabilities = model.wait_for_predict()
+```
+
 Notes:
 
 - `submit_predict()` checks and uploads the data as `predict()` does, and needs a completed fit. The server always runs a submitted prediction as a background job, whatever `api_mode` is.
 - A model holds one pending prediction. A new `submit_predict()` replaces it, and a new fit drops it; both log the id of the dropped prediction as a warning, which [Fetching a prediction by its id](#fetching-a-prediction-by-its-id) uses. The server runs and bills a prediction whether or not anyone waits for it.
-- The server keeps the result of a prediction for about a day. A pickled or copied model keeps its pending prediction; `save_model()` and `clone()` do not.
-- If the server reports that the prediction failed, `wait_for_predict()` raises `PredictFailedError`, or `RefitRequiredError` if the model must be fitted again. If the server no longer has the prediction, for example because its result is no longer stored, `wait_for_predict()` raises `RuntimeError`. In these cases, the model no longer holds the prediction. After any other error, such as a `TimeoutError` or an interrupt, the model still holds it: call `wait_for_predict()` again.
+- `save_model()` records the pending prediction under `pending_predict`, with its id and output type, and `load_model()` restores it without a request. A pickled or copied model keeps its pending prediction too; `clone()` does not.
+- The server keeps the result of a prediction for about a day. Nothing updates the file when `wait_for_predict()` returns, so until then a model loaded from the file gets the same predictions again. Save the model again after `wait_for_predict()` to record that it holds no prediction.
+- If the server reports that the prediction failed, `wait_for_predict()` raises `PredictFailedError`, or `RefitRequiredError` if the model must be fitted again. If the server does not have the prediction, for example because its result is no longer stored or another account submitted it, `wait_for_predict()` raises `RuntimeError`. In these cases, the model no longer holds the prediction. After any other error, such as a `TimeoutError` or an interrupt, the model still holds it: call `wait_for_predict()` again.
 - For a regressor's `"full"` output that the server cannot send in one response, `submit_predict()` raises `ValueError`; `predict()` splits such an output over several requests.
 - `submit_predict()` and `wait_for_predict()` are not part of the scikit-learn API.
 
