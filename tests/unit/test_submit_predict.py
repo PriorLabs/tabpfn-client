@@ -720,18 +720,30 @@ class TestPredict:
         model = _fitted(TabPFNRegressor, Y_TRAIN_REGRESSION, api_mode=ApiMode.ASYNC)
         settings = _settings(test_set_max_rows_w_full_regression_output=2)
 
-        with _offline_server(settings=settings) as server:
-            server.predict.side_effect = lambda X_rows, **kwargs: PredictionResult(
-                y_pred=_y_pred(X_rows, "full"), timings=TIMINGS
-            )
+        chunks: list[np.ndarray] = []
+
+        def predict_chunks(x_chunks: Any, **kwargs: Any) -> list[PredictionResult]:
+            chunks.extend(x_chunks)
+            return [
+                PredictionResult(y_pred=_y_pred(chunk, "full"), timings=TIMINGS)
+                for chunk in chunks
+            ]
+
+        with (
+            _offline_server(settings=settings) as server,
+            patch.object(
+                InferenceClient, "predict_chunks", side_effect=predict_chunks
+            ) as predict_chunks_mock,
+        ):
             output = model.predict(X, output_type="full")
 
-        calls = server.predict.call_args_list
-        assert [c.args[0][:, 0].tolist() for c in calls] == [[0, 2], [4, 6], [8]]
-        for call in calls:
-            assert call.kwargs["api_mode"] == ApiMode.ASYNC
-            assert call.kwargs["n_train_rows"] == len(X_TRAIN)
-            assert call.kwargs["thinking"] is False
+        server.predict.assert_not_called()
+        assert [chunk[:, 0].tolist() for chunk in chunks] == [[0, 2], [4, 6], [8]]
+        kwargs = predict_chunks_mock.call_args.kwargs
+        assert kwargs["fitted_train_set_id"] == FIT_ID
+        assert kwargs["api_mode"] == ApiMode.ASYNC
+        assert kwargs["n_train_rows"] == len(X_TRAIN)
+        assert kwargs["thinking"] is False
         np.testing.assert_array_equal(output["mean"], X[:, 0])
         assert model.get_timings()["predict"] == {k: 3 * v for k, v in TIMINGS.items()}
 

@@ -8,7 +8,10 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
+from typing import Iterable
 
+import numpy as np
+import pandas as pd
 from uuid import UUID
 from tabpfn_client.client import (
     ServiceClient,
@@ -428,6 +431,56 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             fitted_train_set_id=fitted_train_set_id,
             task_config=task_config,
             client_options=client_options,
+            api_mode=api_mode,
+            n_train_rows=n_train_rows,
+            thinking=thinking,
+        )
+
+    @classmethod
+    def predict_chunks(
+        cls,
+        x_chunks: Iterable[pd.DataFrame | np.ndarray],
+        fitted_train_set_id: UUID,
+        task_config: ClassifierConfig | RegressorConfig,
+        client_options: ClientOptions | None = None,
+        *,
+        api_mode: ApiMode = ApiMode.SYNC,
+        n_train_rows: int | None = None,
+        thinking: bool = False,
+    ) -> list[PredictionResult]:
+        """Predict several test sets with one fitted train set.
+
+        Background predictions overlap, up to 4 at once. See
+        `ServiceClient.predict_chunks`.
+
+        Args:
+            x_chunks: The test sets, each of shape (n_samples, n_features).
+            fitted_train_set_id: The unique ID of the fitted train set in the server.
+            task_config: The classification or regression task configuration.
+            client_options: Client specific options (e.g. timeout, headers).
+            api_mode: The API mode for each test set: SYNC, ASYNC, or AUTO.
+            n_train_rows: The fit's train rows, for AUTO; None if unknown.
+            thinking: Whether the fit runs in thinking mode, for AUTO.
+
+        Returns:
+            One result per test set, in the order of ``x_chunks``.
+
+        Raises:
+            ValueError: If the in-memory size of a test set exceeds the server
+                limit, or ``api_mode`` is not a valid mode.
+            FittedModelNotFoundError: If the fitted train set is not found.
+            PredictFailedError: If the client polls for a prediction and the
+                server reports that it failed.
+            RefitRequiredError: If the fitted model can no longer predict and
+                must be fitted again.
+            TimeoutError: If a prediction the client polls for has not completed
+                within the poll timeout.
+        """
+        return ServiceClient.predict_chunks(
+            fitted_train_set_id,
+            x_chunks,
+            task_config,
+            client_options,
             api_mode=api_mode,
             n_train_rows=n_train_rows,
             thinking=thinking,

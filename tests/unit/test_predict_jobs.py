@@ -1272,6 +1272,143 @@ TRANSIENT_ERRORS = pytest.mark.parametrize(
 )
 
 
+def _job_id(index: int) -> UUID:
+    return UUID(int=0x100 + index)
+
+
+def _chunk_result(index: int) -> PredictionResult:
+    return PredictionResult(y_pred=np.array([index]), fitted_test_set_id=_job_id(index))
+
+
+@contextmanager
+def _chunk_server(
+    *,
+    sync: frozenset[int] = frozenset(),
+    stop_start: dict[int, BaseException] | None = None,
+    stop_wait: dict[int, BaseException] | None = None,
+) -> Generator[list[str]]:
+    """Serve `predict_chunks` for test sets whose cells hold their position.
+
+    Each starts as a job, except those in `sync`, predicted with one request.
+    Starting or waiting for the one at position i raises `stop_start[i]` or
+    `stop_wait[i]`. Yields the starts and waits, in order.
+    """
+    events: list[str] = []
+
+    def start(fitted_train_set_id: UUID, x_chunk: Any, *args: Any, **kwargs: Any):
+        index = int(x_chunk[0][0])
+        events.append(f"start {index}")
+        if index in (stop_start or {}):
+            raise (stop_start or {})[index]
+        return _chunk_result(index) if index in sync else _job_id(index)
+
+    def wait(fitted_test_set_id: UUID, *args: Any, **kwargs: Any) -> PredictionResult:
+        index = fitted_test_set_id.int - 0x100
+        events.append(f"wait {index}")
+        if index in (stop_wait or {}):
+            raise (stop_wait or {})[index]
+        return _chunk_result(index)
+
+    with (
+        patch.object(ServiceClient, "_start_predict", side_effect=start),
+        patch.object(ServiceClient, "_await_prediction", side_effect=wait),
+    ):
+        yield events
+
+
+def _predict_chunks(n_chunks: int) -> list[PredictionResult]:
+    return ServiceClient.predict_chunks(
+        FIT_ID,
+        (np.full((1, 2), index) for index in range(n_chunks)),
+        ClassifierConfig(),
+        api_mode=ApiMode.ASYNC,
+    )
+
+
+class TestPredictChunks:
+    """`ServiceClient.predict_chunks`, which a regressor's split full output
+    goes through: its background predictions overlap, up to 4 at once."""
+
+    def test_keeps_up_to_four_jobs_running_and_returns_them_in_order(self):
+        with _chunk_server() as events:
+            results = _predict_chunks(6)
+
+        assert events == [
+            *(f"start {i}" for i in range(4)),
+            "wait 0",
+            "start 4",
+            "wait 1",
+            "start 5",
+            *(f"wait {i}" for i in range(2, 6)),
+        ]
+        assert [int(r.y_pred[0]) for r in results] == list(range(6))
+
+    def test_a_test_set_predicted_with_one_request_keeps_its_place(self):
+        with _chunk_server(sync=frozenset({1})) as events:
+            results = _predict_chunks(3)
+
+        assert events == ["start 0", "start 1", "start 2", "wait 0", "wait 2"]
+        assert [int(r.y_pred[0]) for r in results] == [0, 1, 2]
+
+    def test_passes_the_mode_and_the_fit_to_every_test_set(self):
+        with (
+            _chunk_server(),
+            patch.object(
+                ServiceClient,
+                "_start_predict",
+                side_effect=lambda *args, **kwargs: _chunk_result(0),
+            ) as start,
+        ):
+            ServiceClient.predict_chunks(
+                FIT_ID,
+                [X_TEST, X_TEST],
+                ClassifierConfig(),
+                api_mode=ApiMode.AUTO,
+                n_train_rows=7,
+                thinking=True,
+            )
+
+        assert start.call_count == 2
+        for call in start.call_args_list:
+            assert call.args[0] == FIT_ID
+            assert call.kwargs == {
+                "api_mode": ApiMode.AUTO,
+                "n_train_rows": 7,
+                "thinking": True,
+            }
+
+    def test_a_failed_prediction_stops_the_rest_and_logs_the_running_jobs(self, caplog):
+        with _chunk_server(stop_wait={0: PredictFailedError("boom")}) as events:
+            with pytest.raises(PredictFailedError):
+                _predict_chunks(6)
+
+        # Nothing starts after the failure.
+        assert events == [*(f"start {i}" for i in range(4)), "wait 0"]
+        warnings = _broke_off_warnings(caplog)
+        assert len(warnings) == 3
+        for index, warning in zip([1, 2, 3], warnings):
+            assert str(_job_id(index)) in warning
+
+    def test_an_interrupted_start_logs_the_running_jobs(self, caplog):
+        with _chunk_server(stop_start={2: KeyboardInterrupt()}) as events:
+            with pytest.raises(KeyboardInterrupt):
+                _predict_chunks(6)
+
+        assert events == ["start 0", "start 1", "start 2"]
+        warnings = _broke_off_warnings(caplog)
+        assert len(warnings) == 2
+        assert str(_job_id(0)) in warnings[0]
+        assert str(_job_id(1)) in warnings[1]
+
+    def test_rejects_an_invalid_mode_before_any_request(self):
+        with _chunk_server() as events, pytest.raises(ValueError):
+            ServiceClient.predict_chunks(
+                FIT_ID, [X_TEST], ClassifierConfig(), api_mode=cast(Any, "ASYNC")
+            )
+
+        assert events == []
+
+
 class TestWaitForPredict:
     """The poll loop: `ServiceClient.wait_for_predict` and what it does with
     each answer a poll can get."""

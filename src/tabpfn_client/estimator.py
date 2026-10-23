@@ -1405,7 +1405,9 @@ class TabPFNRegressor(
                 - If `"full"`, we return the full output of the model, including
                   the logits, the borders and all the output types from "main".
                   The criterion is included when the optional `tabpfn` and
-                  `torch` packages are installed.
+                  `torch` packages are installed. A full output too large for
+                  one response is split over several requests; those that run
+                  as background jobs overlap, up to 4 at once.
 
             quantiles: The quantiles to return if `output_type="quantiles"`.
                 By default, the `[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]`
@@ -1437,26 +1439,33 @@ class TabPFNRegressor(
             X, output_type, predict_params, split_full_output=True
         )
 
-        def predict_rows(X_rows: Any) -> PredictionResult:
-            return InferenceClient.predict(
-                _clean_text_features(X_rows),
+        thinking = _resolve_thinking_mode(self.thinking_mode, self.thinking_effort)
+        if rows_per_call is None:
+            results = [
+                InferenceClient.predict(
+                    _clean_text_features(X),
+                    fitted_train_set_id=self.model_id_,
+                    task_config=task_config,
+                    client_options=self.client_options,
+                    api_mode=self.api_mode,
+                    n_train_rows=self._n_train_rows,
+                    thinking=thinking,
+                )
+            ]
+        else:
+            # A generator, so that each chunk is sliced only when it is sent.
+            results = InferenceClient.predict_chunks(
+                (
+                    _clean_text_features(_row_slice(X, start, start + rows_per_call))
+                    for start in range(0, X.shape[0], rows_per_call)
+                ),
                 fitted_train_set_id=self.model_id_,
                 task_config=task_config,
                 client_options=self.client_options,
                 api_mode=self.api_mode,
                 n_train_rows=self._n_train_rows,
-                thinking=_resolve_thinking_mode(
-                    self.thinking_mode, self.thinking_effort
-                ),
+                thinking=thinking,
             )
-
-        if rows_per_call is None:
-            results = [predict_rows(X)]
-        else:
-            results = [
-                predict_rows(_row_slice(X, start, start + rows_per_call))
-                for start in range(0, X.shape[0], rows_per_call)
-            ]
         return self._finish_predict(results, output_type)
 
     def submit_predict(

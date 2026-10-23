@@ -1,5 +1,7 @@
 import time
 import unittest
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any, cast
 from unittest.mock import patch
 from uuid import UUID
@@ -971,6 +973,21 @@ class TestTabPFNModelSelection(unittest.TestCase):
         self.assertIsNotNone(y_pred_false)
 
 
+@contextmanager
+def _serving(fake_predict: Callable[..., PredictionResult]) -> Iterator[None]:
+    """Answer each predict request, split or not, with `fake_predict(X)`."""
+    with (
+        patch.object(InferenceClient, "predict", side_effect=fake_predict),
+        # Split requests go through `predict_chunks`, as single requests here.
+        patch.object(
+            ServiceClient,
+            "_start_predict",
+            side_effect=lambda fitted_train_set_id, X, *args, **kwargs: fake_predict(X),
+        ),
+    ):
+        yield
+
+
 class TestFullOutputChunking(unittest.TestCase):
     """`output_type="full"` splits into per-chunk calls above the server cap."""
 
@@ -1023,7 +1040,7 @@ class TestFullOutputChunking(unittest.TestCase):
                 y_pred=cast(Any, self._full_output(len(X), offset)), metadata={}
             )
 
-        with patch.object(InferenceClient, "predict", side_effect=fake_predict):
+        with _serving(fake_predict):
             output = cast(
                 "dict[str, Any]",
                 self.regressor.predict(
@@ -1056,7 +1073,7 @@ class TestFullOutputChunking(unittest.TestCase):
             payload["surprise"] = np.zeros(len(X))
             return PredictionResult(y_pred=cast(Any, payload), metadata={})
 
-        with patch.object(InferenceClient, "predict", side_effect=fake_predict):
+        with _serving(fake_predict):
             with self.assertRaisesRegex(RuntimeError, "surprise"):
                 self.regressor.predict(
                     np.random.randn(self.FULL_OUTPUT_MAX_ROWS + 1, 2),
@@ -1072,7 +1089,7 @@ class TestFullOutputChunking(unittest.TestCase):
             payload["logits"][:, -2:] = np.nan
             return PredictionResult(y_pred=cast(Any, payload), metadata={})
 
-        with patch.object(InferenceClient, "predict", side_effect=fake_predict):
+        with _serving(fake_predict):
             output = cast(
                 "dict[str, Any]",
                 self.regressor.predict(

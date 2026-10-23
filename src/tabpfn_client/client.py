@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from uuid import UUID
 import base64
+from collections import deque
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from importlib.metadata import PackageNotFoundError, version
@@ -20,7 +21,7 @@ import struct
 import time
 import warnings
 from pydantic import BaseModel, TypeAdapter, ValidationError
-from typing import Any, Callable, cast, Mapping, NoReturn, TypeAlias
+from typing import Any, Callable, Iterable, cast, Mapping, NoReturn, TypeAlias
 from typing_extensions import (
     Never,  # in `typing` only from Python 3.11
     TypeVar,  # supports default= on Python 3.10
@@ -269,6 +270,19 @@ def _resume_hint(fitted_test_set_id: UUID) -> str:
     )
 
 
+def _warn_stopped_waiting(fitted_test_set_id: UUID) -> None:
+    """Log the id of a prediction that may run on after the client stopped waiting.
+
+    The id is the only way back to a prediction that may run on, and be billed,
+    after the wait breaks off; Python shows only WARNING and above by default.
+    """
+    logger.warning(
+        f"Stopped waiting for prediction {fitted_test_set_id}. If it is "
+        "still running, the server completes it and bills it even if "
+        f"nobody waits for it; {_resume_hint(fitted_test_set_id)}"
+    )
+
+
 def _serialize_to_parquet(df: pd.DataFrame) -> tuple[bytes, str]:
     """Serialize ``df`` to zstd-compressed parquet.
 
@@ -301,6 +315,11 @@ _MAX_POLL_TIMEOUT_SECS = 120.0
 
 # HTTP timeout of a fit status poll, which the server answers at once.
 _FIT_STATUS_POLL_TIMEOUT_SECS = 15.0
+
+# Background predictions `predict_chunks` keeps running at once: enough to keep
+# the server busy between polls, few enough not to flood its queue with the
+# chunks of one call.
+_MAX_PREDICT_JOBS_IN_FLIGHT = 4
 
 
 @dataclass(frozen=True)
@@ -1045,8 +1064,122 @@ class ServiceClient(Singleton):
             TimeoutError: If a prediction the client polls for has not completed
                 within the poll timeout.
         """
+        client_options = client_options or ClientOptions()
+        started = cls._start_predict(
+            fitted_train_set_id,
+            x_test,
+            task_config,
+            client_options,
+            api_mode=api_mode,
+            n_train_rows=n_train_rows,
+            thinking=thinking,
+        )
+        if isinstance(started, UUID):
+            return cls._await_prediction(started, client_options)
+        return started
+
+    @classmethod
+    def predict_chunks(
+        cls,
+        fitted_train_set_id: UUID,
+        x_chunks: Iterable[pd.DataFrame | np.ndarray],
+        task_config: ClassifierConfig | RegressorConfig,
+        client_options: ClientOptions | None = None,
+        *,
+        api_mode: ApiMode = ApiMode.SYNC,
+        n_train_rows: int | None = None,
+        thinking: bool = False,
+    ) -> list[PredictionResult]:
+        """Predict several test sets with one fitted train set, as `predict` does each.
+
+        Each test set is predicted as `predict` would predict it. Those that run
+        as background jobs overlap: up to 4 run at once, and with 4 running the
+        client waits for the oldest before it starts the next. Those predicted
+        with one request run one at a time. When a test set fails, or the wait
+        breaks off, the client starts no more and logs the id of every job
+        still running, which the server completes and bills regardless.
+
+        Args:
+            fitted_train_set_id: The unique ID of the fitted train set in the server.
+            x_chunks: The test sets, each of shape (n_samples, n_features). An
+                iterator is consumed one test set at a time.
+            task_config: The classification or regression task configuration.
+            client_options: Client specific options (e.g. timeout, headers).
+            api_mode: The API mode for each test set: SYNC, ASYNC, or AUTO.
+            n_train_rows: The fit's train rows, for AUTO; None if unknown.
+            thinking: Whether the fit runs in thinking mode, for AUTO.
+
+        Returns:
+            One result per test set, in the order of ``x_chunks``.
+
+        Raises:
+            ValueError: If the in-memory size of a test set exceeds the server
+                limit, or ``api_mode`` is not a valid mode.
+            FittedModelNotFoundError: If the fitted train set is not found.
+            PredictFailedError: If the client polls for a prediction and the
+                server reports that it failed.
+            RefitRequiredError: If the fitted model can no longer predict and
+                must be fitted again.
+            TimeoutError: If a prediction the client polls for has not completed
+                within the poll timeout.
+        """
         api_mode = ApiMode(api_mode)
         client_options = client_options or ClientOptions()
+        results: dict[int, PredictionResult] = {}
+        # The jobs started and not waited for yet, oldest first, with the
+        # position of their test set.
+        in_flight: deque[tuple[int, UUID]] = deque()
+        try:
+            for index, x_chunk in enumerate(x_chunks):
+                if len(in_flight) == _MAX_PREDICT_JOBS_IN_FLIGHT:
+                    oldest, fitted_test_set_id = in_flight.popleft()
+                    results[oldest] = cls._await_prediction(
+                        fitted_test_set_id, client_options
+                    )
+                started = cls._start_predict(
+                    fitted_train_set_id,
+                    x_chunk,
+                    task_config,
+                    client_options,
+                    api_mode=api_mode,
+                    n_train_rows=n_train_rows,
+                    thinking=thinking,
+                )
+                if isinstance(started, UUID):
+                    in_flight.append((index, started))
+                else:
+                    results[index] = started
+            while in_flight:
+                oldest, fitted_test_set_id = in_flight.popleft()
+                results[oldest] = cls._await_prediction(
+                    fitted_test_set_id, client_options
+                )
+        except BaseException:
+            # `_await_prediction` logs the one it was waiting for itself.
+            for _, fitted_test_set_id in in_flight:
+                _warn_stopped_waiting(fitted_test_set_id)
+            raise
+        return [results[index] for index in sorted(results)]
+
+    @classmethod
+    def _start_predict(
+        cls,
+        fitted_train_set_id: UUID,
+        x_test: pd.DataFrame | np.ndarray,
+        task_config: ClassifierConfig | RegressorConfig,
+        client_options: ClientOptions,
+        *,
+        api_mode: ApiMode,
+        n_train_rows: int | None,
+        thinking: bool,
+    ) -> UUID | PredictionResult:
+        """Upload a test set, and predict it with one request or start it as a job.
+
+        Returns:
+            The prediction, if predicted with one request, or else the id of
+            the background job to wait for.
+        """
+        api_mode = ApiMode(api_mode)
         test_set_upload_id = cls._upload_test_set(
             fitted_train_set_id, x_test, client_options
         )
@@ -1071,9 +1204,7 @@ class ServiceClient(Singleton):
                 headers=client_options.headers,
             )
             if submit_resp is not None:
-                return cls._await_prediction(
-                    submit_resp.fitted_test_set_id, client_options
-                )
+                return submit_resp.fitted_test_set_id
             # The cached settings promised background jobs that this server
             # (rolled back, say) does not run. It created no job, so one request
             # with the same upload predicts, and bills, once.
@@ -1350,14 +1481,7 @@ class ServiceClient(Singleton):
             # nothing to come back for.
             raise
         except BaseException:
-            # The id is the only way back to a prediction that may run on, and
-            # be billed, after the wait breaks off; Python shows only WARNING
-            # and above by default.
-            logger.warning(
-                f"Stopped waiting for prediction {fitted_test_set_id}. If it is "
-                "still running, the server completes it and bills it even if "
-                f"nobody waits for it; {_resume_hint(fitted_test_set_id)}"
-            )
+            _warn_stopped_waiting(fitted_test_set_id)
             raise
         if result_resp.prediction is None or result_resp.metadata is None:
             # A failure like any other: a later poll would answer the same.
