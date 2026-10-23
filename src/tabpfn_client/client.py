@@ -99,14 +99,16 @@ logger = logging.getLogger(__name__)
 class PredictResponseWithDownloadURI(BaseModel):
     """A predict answered with a signed download URL for the prediction.
 
-    Not among the generated API models: the server doesn't return this shape
-    today, but the client follows it if it ever does.
+    Mirrors the server's model of the same name, which the generated API models
+    leave out: the server answers so only when asked to, which this client
+    never does, but the client follows the URL if it ever gets one.
     """
 
     prediction_uri: str
     prediction_uri_expires_in_secs: int
     metadata: Metadata
     timings: PredictTimings | None = None
+    fitted_test_set_id: UUID | None = None
 
 
 PredictResponseUnion: TypeAlias = (
@@ -1105,7 +1107,10 @@ class ServiceClient(Singleton):
                     timeout=client_options.timeout,
                 )
                 return cls._prediction_result(
-                    prediction, predict_resp.metadata, predict_resp.timings, None
+                    prediction,
+                    predict_resp.metadata,
+                    predict_resp.timings,
+                    predict_resp.fitted_test_set_id,
                 )
             case PredictPendingResponse():
                 logger.info(
