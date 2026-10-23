@@ -1960,15 +1960,16 @@ class ServiceClient(Singleton):
         """Return whether the server has no endpoint at the requested path.
 
         This is how a server that predates predictions as background jobs (or
-        was rolled back to such a version) answers their endpoints. The
-        endpoints' own 404s carry the ``NOT_FOUND`` error code instead.
+        was rolled back to such a version) answers their endpoints: with the
+        bare "Not Found" of an unmatched route, whose error code is
+        ``NOT_FOUND`` since tabpfn-server#1384 and ``USER_ERROR`` before. The
+        endpoints' own 404s say what is not found, such as "Prediction not
+        found", and a proxy's carry no JSON message.
         """
         if response.status_code != 404:
             return False
         body, _ = ServiceClient._read_json_body(response)
-        return (
-            body.get("message") == "Not Found" and body.get("error_code") != "NOT_FOUND"
-        )
+        return body.get("message") == "Not Found"
 
     @staticmethod
     def _validate_response(

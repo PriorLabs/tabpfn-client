@@ -93,8 +93,16 @@ MISSING_KV_CACHE = (
     "the model (call fit() again) before predicting."
 )
 EXPIRED = "This prediction's result is no longer stored. Predict again to get it."
-# What a server without the endpoint answers, unlike the endpoints' own 404s.
-ROUTE_MISSING = {"message": "Not Found", "error_code": "USER_ERROR"}
+# What a server without the endpoint answers, unlike the endpoints' own 404s:
+# the error code is NOT_FOUND since tabpfn-server#1384, USER_ERROR before.
+ROUTE_MISSING = pytest.mark.parametrize(
+    "route_missing",
+    [
+        {"message": "Not Found", "error_code": "NOT_FOUND"},
+        {"message": "Not Found", "error_code": "USER_ERROR"},
+    ],
+    ids=["route_missing", "route_missing_before_1384"],
+)
 NO_PREDICT_JOBS = (
     "This TabPFN server does not run predictions as background jobs; "
     "use predict() instead."
@@ -335,7 +343,11 @@ def _wait(**kwargs: Any) -> PredictionResult:
 
 
 def _sent(route: respx.Route) -> dict[str, Any]:
-    return json.loads(route.calls.last.request.content)
+    return _sent_in(route.calls.last)
+
+
+def _sent_in(call: Any) -> dict[str, Any]:
+    return json.loads(call.request.content)
 
 
 def _broke_off_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
@@ -889,10 +901,13 @@ class TestPredict:
         predict_route = router.post("/tabpfn/predict")
         predict_route.side_effect = [outcome]
 
-        with pytest.raises((httpx.HTTPError, RetryableServerError)):
+        with pytest.raises((httpx.HTTPError, RetryableServerError)) as exc_info:
             _predict()
 
         assert predict_route.call_count == 1
+        if isinstance(outcome, httpx.Response):
+            # `except RuntimeError` catches every failure the server reports.
+            assert isinstance(exc_info.value, RuntimeError)
 
     def test_rejects_an_invalid_mode_before_any_request(self, router):
         with pytest.raises(ValueError):
@@ -1059,14 +1074,17 @@ class TestPredictionJobs:
 
         assert submit_route.call_count == 1
 
-    def test_async_tries_a_job_on_a_server_whose_settings_are_unavailable(self, router):
+    @ROUTE_MISSING
+    def test_async_tries_a_job_on_a_server_whose_settings_are_unavailable(
+        self, router, route_missing
+    ):
         # A server that predates predict jobs: its settings don't validate.
         settings_route = router.get("/tabpfn/get_settings").respond(
             200, json=_settings_payload(thresholds=False)
         )
         _upload_route(router)
         submit_route = router.post("/tabpfn/submit_predict_job").respond(
-            404, json=ROUTE_MISSING
+            404, json=route_missing
         )
         predict_route = router.post("/tabpfn/predict").respond(
             200, json=_prediction(with_id=False)
@@ -1079,12 +1097,13 @@ class TestPredictionJobs:
         assert predict_route.call_count == 1
         np.testing.assert_array_equal(result.y_pred, PREDICTION)
 
+    @ROUTE_MISSING
     def test_predicts_with_one_request_when_the_server_has_no_submit_endpoint(
-        self, router, caplog
+        self, router, caplog, route_missing
     ):
         upload_route = _upload_route(router)
         submit_route = router.post("/tabpfn/submit_predict_job").respond(
-            404, json=ROUTE_MISSING
+            404, json=route_missing
         )
         predict_route = router.post("/tabpfn/predict").respond(
             200, json=_prediction(with_id=False)
@@ -1120,9 +1139,8 @@ class TestPredictionJobs:
         [
             ("Fitted train set not found", "NOT_FOUND"),
             ("x_test blob not found", "USER_ERROR"),
-            ("Not Found", "NOT_FOUND"),
         ],
-        ids=["unknown_fit", "missing_test_set", "not_found_code"],
+        ids=["unknown_fit", "missing_test_set"],
     )
     def test_the_submit_endpoints_own_404_is_raised(self, router, message, error_code):
         _cache_settings()
@@ -1192,10 +1210,13 @@ class TestPredictionJobs:
 
         assert fitted_test_set_id == PREDICTION_ID
 
-    def test_submit_predict_raises_when_the_server_has_no_submit_endpoint(self, router):
+    @ROUTE_MISSING
+    def test_submit_predict_raises_when_the_server_has_no_submit_endpoint(
+        self, router, route_missing
+    ):
         upload_route = _upload_route(router)
         submit_route = router.post("/tabpfn/submit_predict_job").respond(
-            404, json=ROUTE_MISSING
+            404, json=route_missing
         )
         settings_route = router.get("/tabpfn/get_settings").respond(
             200, json=_settings_payload(thresholds=False)
@@ -1310,8 +1331,10 @@ def _chunk_server(
         return _chunk_result(index)
 
     with (
-        patch.object(ServiceClient, "_start_predict", side_effect=start),
-        patch.object(ServiceClient, "_await_prediction", side_effect=wait),
+        patch.object(ServiceClient, "_start_predict", autospec=True, side_effect=start),
+        patch.object(
+            ServiceClient, "_await_prediction", autospec=True, side_effect=wait
+        ),
     ):
         yield events
 
@@ -1399,6 +1422,52 @@ class TestPredictChunks:
         assert len(warnings) == 2
         assert str(_job_id(0)) in warnings[0]
         assert str(_job_id(1)) in warnings[1]
+
+    def test_runs_each_test_set_through_the_server_in_order(self, router):
+        _cache_settings()
+        _upload_route(router)
+        job_ids = [_job_id(index) for index in range(5)]
+        submit_route = router.post("/tabpfn/submit_predict_job")
+        submit_route.side_effect = [
+            httpx.Response(200, json={"fitted_test_set_id": str(job_id)})
+            for job_id in job_ids
+        ]
+
+        def poll(request: httpx.Request) -> httpx.Response:
+            job_id = json.loads(request.content)["fitted_test_set_id"]
+            index = UUID(job_id).int - 0x100
+            return _json(200, _completed(prediction=[index], fitted_test_set_id=job_id))
+
+        poll_route = router.post("/tabpfn/get_predict_result")
+        poll_route.side_effect = poll
+        options = ClientOptions(timeout=42.0, headers={"sentry-trace": "abc"})
+
+        with _fake_clock():
+            results = ServiceClient.predict_chunks(
+                FIT_ID,
+                [X_TEST] * 5,
+                ClassifierConfig(),
+                options,
+                api_mode=ApiMode.ASYNC,
+            )
+
+        assert [r.fitted_test_set_id for r in results] == job_ids
+        assert [cast(np.ndarray, r.y_pred).tolist() for r in results] == [
+            [index] for index in range(5)
+        ]
+        assert [_sent_in(call)["fitted_test_set_id"] for call in poll_route.calls] == [
+            str(job_id) for job_id in job_ids
+        ]
+        for call in submit_route.calls:
+            assert _sent_in(call) == {
+                "test_set_upload_id": UPLOAD_ID,
+                "fitted_train_set_id": str(FIT_ID),
+                "task_config": {"task": "classification"},
+            }
+            assert call.request.headers["sentry-trace"] == "abc"
+            assert call.request.extensions["timeout"]["read"] == 42.0
+        for call in poll_route.calls:
+            assert call.request.headers["sentry-trace"] == "abc"
 
     def test_rejects_an_invalid_mode_before_any_request(self):
         with _chunk_server() as events, pytest.raises(ValueError):
@@ -1584,8 +1653,11 @@ class TestWaitForPredict:
         assert clock.sleeps == [0.5]
         assert route.call_count == 2
 
-    def test_stops_at_once_on_a_server_without_the_endpoint(self, router, caplog):
-        with _polling(router, [_json(404, ROUTE_MISSING)]) as (clock, route):
+    @ROUTE_MISSING
+    def test_stops_at_once_on_a_server_without_the_endpoint(
+        self, router, caplog, route_missing
+    ):
+        with _polling(router, [_json(404, route_missing)]) as (clock, route):
             with pytest.raises(RuntimeError) as exc_info:
                 _wait()
 
@@ -1986,6 +2058,31 @@ class TestInferenceClient:
 
         kwargs = predict.call_args.kwargs
         assert kwargs["x_test"] is X_TEST
+        assert kwargs["fitted_train_set_id"] == FIT_ID
+        assert kwargs["task_config"] is task_config
+        assert kwargs["client_options"] is options
+        assert kwargs["api_mode"] is ApiMode.AUTO
+        assert kwargs["n_train_rows"] == 7
+        assert kwargs["thinking"] is True
+
+    def test_predict_chunks_passes_everything_through(self):
+        options = ClientOptions()
+        task_config = ClassifierConfig()
+        x_chunks = [X_TEST, X_TEST]
+
+        with patch.object(ServiceClient, "predict_chunks", return_value=[]) as chunks:
+            InferenceClient.predict_chunks(
+                x_chunks,
+                fitted_train_set_id=FIT_ID,
+                task_config=task_config,
+                client_options=options,
+                api_mode=ApiMode.AUTO,
+                n_train_rows=7,
+                thinking=True,
+            )
+
+        kwargs = chunks.call_args.kwargs
+        assert kwargs["x_chunks"] is x_chunks
         assert kwargs["fitted_train_set_id"] == FIT_ID
         assert kwargs["task_config"] is task_config
         assert kwargs["client_options"] is options

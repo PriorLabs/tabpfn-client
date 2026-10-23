@@ -260,13 +260,24 @@ class TestWaitForFit:
             with pytest.raises(NotFittedError):
                 nothing_to_do(clf)
 
-    @pytest.mark.parametrize("stop", [KeyboardInterrupt, TimeoutError])
+    @pytest.mark.parametrize(
+        "stop",
+        [
+            KeyboardInterrupt(),
+            TimeoutError(),
+            # Polling failed: the fit itself may still complete.
+            RuntimeError(
+                f"Polling fit {FIT_ID} failed 4 times in a row: [HTTP 500] boom"
+            ),
+        ],
+        ids=["interrupt", "timeout", "poll_failures"],
+    )
     def test_a_wait_that_stops_keeps_the_fit_pending(self, stop):
         clf = _submitted()
 
         with _offline_server() as server:
             server.wait.side_effect = stop
-            with pytest.raises(stop):
+            with pytest.raises(type(stop)):
                 clf.wait_for_fit()
             assert clf.save_model()["fit_status"] == "pending"
 
@@ -320,7 +331,18 @@ class TestFit:
         check_is_fitted(model)
 
     @ESTIMATORS
-    @pytest.mark.parametrize("stop", [KeyboardInterrupt, TimeoutError])
+    @pytest.mark.parametrize(
+        "stop",
+        [
+            KeyboardInterrupt(),
+            TimeoutError(),
+            # Polling failed: the fit itself may still complete.
+            RuntimeError(
+                f"Polling fit {NEW_FIT_ID} failed 4 times in a row: [HTTP 500] boom"
+            ),
+        ],
+        ids=["interrupt", "timeout", "poll_failures"],
+    )
     def test_a_poll_that_stops_leaves_the_model_pending_on_the_new_fit(
         self, estimator_cls, y, stop
     ):
@@ -331,7 +353,7 @@ class TestFit:
                 fitted_train_set_id=NEW_FIT_ID, status=FitStatus.PENDING
             )
             server.wait.side_effect = stop
-            with pytest.raises(stop):
+            with pytest.raises(type(stop)):
                 model.fit(X_TRAIN, y)
 
             assert server.fit.call_args.kwargs["wait"] is False

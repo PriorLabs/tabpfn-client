@@ -1,13 +1,18 @@
 """Exceptions raised by the TabPFN client."""
 
 
-class RetryableServerError(Exception):
-    """Base exception for retryable server-side HTTP errors (typically 5xx)."""
+class RetryableServerError(RuntimeError):
+    """Base exception for retryable server-side HTTP errors (typically 5xx).
+
+    A `RuntimeError`, like every other error a failed request raises, so that
+    `except RuntimeError` also catches one that is not retried, or whose
+    retries ran out.
+    """
 
     pass
 
 
-class CappedRetryableServerError(Exception):
+class CappedRetryableServerError(RuntimeError):
     """Retryable error, with retries capped over consecutive errors of this type."""
 
     pass

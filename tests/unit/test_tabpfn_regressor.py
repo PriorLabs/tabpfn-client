@@ -982,6 +982,7 @@ def _serving(fake_predict: Callable[..., PredictionResult]) -> Iterator[None]:
         patch.object(
             ServiceClient,
             "_start_predict",
+            autospec=True,
             side_effect=lambda fitted_train_set_id, X, *args, **kwargs: fake_predict(X),
         ),
     ):

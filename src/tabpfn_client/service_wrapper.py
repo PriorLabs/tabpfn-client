@@ -351,7 +351,31 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         description: str | None,
         text_handling: TextHandling = "advanced",
     ) -> UUID:
-        """Same as `fit_with_result`, returning only the fitted train set id."""
+        """Upload a train set to the server, fit it, and wait for the fit.
+
+        Same as `fit_with_result`, returning only the fitted train set id.
+
+        Args:
+            X: The training input samples, of shape (n_samples, n_features).
+            y: The target values, of shape (n_samples,) or (n_samples, n_outputs).
+            task_config: The configuration for the fit task.
+            tabpfn_systems: The systems to use for the fit.
+            thinking_config: The configuration for the thinking mode.
+            api_mode: The API mode to use for the fit: SYNC, ASYNC, or AUTO.
+            client_options: Client specific options (e.g. timeout, headers).
+            description: Description of the dataset and task for the server.
+            text_handling: Text-processing preset, ``"advanced"`` or ``"simple"``.
+
+        Returns:
+            The unique ID of the fitted train set.
+
+        Raises:
+            ValueError: If ``text_handling`` is invalid or the in-memory size of
+                ``X`` or ``y`` exceeds the server limit.
+            FitFailedError: If the server reports that the fit failed.
+            TimeoutError: If the fit has not completed within
+                `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds.
+        """
         return ServiceClient.fit(
             X,
             y,
@@ -540,10 +564,10 @@ class InferenceClient(ServiceClientWrapper, Singleton):
                 within the poll timeout.
         """
         return ServiceClient.predict_chunks(
-            fitted_train_set_id,
-            x_chunks,
-            task_config,
-            client_options,
+            fitted_train_set_id=fitted_train_set_id,
+            x_chunks=x_chunks,
+            task_config=task_config,
+            client_options=client_options,
             api_mode=api_mode,
             n_train_rows=n_train_rows,
             thinking=thinking,
