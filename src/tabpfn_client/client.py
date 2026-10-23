@@ -245,6 +245,19 @@ def _prediction_gone(
     )
 
 
+def _malformed_poll_body(
+    method_name: str, error: ValidationError
+) -> CappedRetryableServerError:
+    """Build the error for a poll answered with a body that fails validation.
+
+    Capped rather than fatal: such a body comes from a broken or foreign
+    response, which a later poll may not repeat.
+    """
+    return CappedRetryableServerError(
+        f"Fail to call {method_name}: the server sent a malformed body: {error}"
+    )
+
+
 def _resume_hint(fitted_test_set_id: UUID) -> str:
     """Say how any process gets the result of a prediction, for a log message."""
     return (
@@ -729,11 +742,10 @@ class ServiceClient(Singleton):
                 )
             return status_resp.status == FitStatus.COMPLETED
 
+        req = GetFitStatusRequest(fitted_train_set_id=fitted_train_set_id)
         return cls._poll_until_done(
             lambda: cls._get_fit_status(
-                req=GetFitStatusRequest(fitted_train_set_id=fitted_train_set_id),
-                timeout=_FIT_STATUS_POLL_TIMEOUT_SECS,
-                headers=headers,
+                req=req, timeout=_FIT_STATUS_POLL_TIMEOUT_SECS, headers=headers
             ),
             is_done,
             subject=f"fit {fitted_train_set_id}",
@@ -780,8 +792,7 @@ class ServiceClient(Singleton):
             transient_errors: Poll errors that are logged and retried until
                 the deadline.
             capped_errors: Poll errors that are logged and retried up to 3
-                times in a row. A malformed response, which fails validation,
-                always counts as one.
+                times in a row.
             first_poll_delay_secs: Seconds to wait before the first poll.
 
         Returns:
@@ -798,9 +809,6 @@ class ServiceClient(Singleton):
         deadline = time.monotonic() + total_timeout
         fallback_retry_in_secs = 5.0
         retry_in_secs = fallback_retry_in_secs  # until the server sends a hint
-        # A malformed body can only come from a broken or foreign response,
-        # which a later poll may not repeat.
-        capped_errors = (*capped_errors, ValidationError)
         # Most recent poll error; reset on every successful poll so the
         # TimeoutError only chains it if polls were failing at the end.
         last_error: Exception | None = None
@@ -885,8 +893,8 @@ class ServiceClient(Singleton):
 
         Raises:
             FittedModelNotFoundError: If the server has no fit with this ID.
-            CappedRetryableServerError: On HTTP 429 or 500, or an empty
-                success body (treated as a 500).
+            CappedRetryableServerError: On HTTP 429 or 500, or an empty or
+                malformed success body (treated as a 500).
         """
         res = cls.httpx_client.post(
             url="/tabpfn/get_fit_status",
@@ -911,6 +919,8 @@ class ServiceClient(Singleton):
             )
         except EmptyResponseError as exc:
             raise CappedRetryableServerError(str(exc)) from exc
+        except ValidationError as exc:
+            raise _malformed_poll_body("get_fit_status", exc) from exc
         if isinstance(status_resp, NotFoundErrorResponse):
             raise _fitted_model_not_found(req.fitted_train_set_id, status_resp)
         return status_resp
@@ -1406,12 +1416,9 @@ class ServiceClient(Singleton):
             # counts as still running.
             return result_resp.status == PredictStatus.COMPLETED
 
+        req = GetPredictResultRequest(fitted_test_set_id=fitted_test_set_id)
         return cls._poll_until_done(
-            lambda: cls._get_predict_result(
-                req=GetPredictResultRequest(fitted_test_set_id=fitted_test_set_id),
-                timeout=timeout,
-                headers=headers,
-            ),
+            lambda: cls._get_predict_result(req=req, timeout=timeout, headers=headers),
             is_done,
             subject=f"prediction {fitted_test_set_id}",
             transient_errors=(
@@ -1444,8 +1451,8 @@ class ServiceClient(Singleton):
             RuntimeError: If the server has no such endpoint, as it runs no
                 predictions as background jobs, or on another status no retry
                 can clear.
-            CappedRetryableServerError: On HTTP 429 or 500, or an empty
-                success body (treated as a 500).
+            CappedRetryableServerError: On HTTP 429 or 500, or an empty or
+                malformed success body (treated as a 500).
             RetryableServerError: On HTTP 408, 502, 503, or 504.
         """
         res = cls.httpx_client.post(
@@ -1473,6 +1480,8 @@ class ServiceClient(Singleton):
             )
         except EmptyResponseError as exc:
             raise CappedRetryableServerError(str(exc)) from exc
+        except ValidationError as exc:
+            raise _malformed_poll_body("get_predict_result", exc) from exc
         except StreamedServerError as exc:
             # An error the server hit after its keepalive pings started is
             # classified by its status, exactly as a fast one.

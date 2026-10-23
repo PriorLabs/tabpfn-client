@@ -1329,7 +1329,9 @@ class TestWaitForPredict:
         assert str(exc_info.value).startswith(
             f"Polling prediction {PREDICTION_ID} failed 4 times in a row:"
         )
-        assert isinstance(exc_info.value.__cause__, ValidationError)
+        cause = exc_info.value.__cause__
+        assert isinstance(cause, CappedRetryableServerError)
+        assert isinstance(cause.__cause__, ValidationError)
 
     def test_a_status_this_client_does_not_know_counts_as_still_running(self, router):
         unknown = {**_pending(1.0), "status": "queued"}
