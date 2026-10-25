@@ -159,7 +159,7 @@ Notes:
 - A thinking-mode fit always runs as a background job, whatever `api_mode` is.
 - A prediction that takes longer than the server waits on one request continues as a background job, which the client polls.
 - Against a server that does not run predictions as background jobs, `predict()` sends one request in every mode, and `submit_predict()` raises `RuntimeError`.
-- `predict()` raises `PredictFailedError` when the client polls for a prediction and the server reports that it failed. A failure that the server reports in answer to the prediction request itself raises `RuntimeError`. `PredictFailedError` is a `RuntimeError`, so `except RuntimeError` handles both. If the fitted model can no longer predict, for example because an earlier version of the service fitted it, `predict()` raises `RefitRequiredError`, a subclass of `PredictFailedError`: call `fit()` again.
+- `predict()` raises `PredictFailedError` when the server reports that a prediction it created failed, in answer to the prediction request or to a poll for it. Its `fitted_test_set_id` is the id of the prediction. Another failed request raises `RuntimeError`. `PredictFailedError` is a `RuntimeError`, so `except RuntimeError` handles both. If the fitted model can no longer predict, for example because an earlier version of the service fitted it, `predict()` raises `RefitRequiredError`, a subclass of `PredictFailedError`: call `fit()` again.
 - The server runs and bills a background job even if the wait for it stops, for example with a timeout or an interrupt. The client then logs the id of the prediction as a warning, and the server keeps its result for about a day: see [Fetching a prediction by its id](#fetching-a-prediction-by-its-id).
 
 ### Fetching a prediction by its id

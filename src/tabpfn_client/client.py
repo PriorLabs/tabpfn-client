@@ -77,6 +77,7 @@ from tabpfn_client.api_models import (
     PredictRequest,
     Metadata,
     PredictResponse,
+    PredictFailedErrorResponse,
     PredictPendingResponse,
     PredictStatus,
     PredictTimings,
@@ -199,44 +200,87 @@ _NO_PREDICT_JOBS = (
     "use predict() instead."
 )
 
-# The server books a stale or missing KV cache as a USER_ERROR, without a code
-# of its own, so its message is the only sign that the model must be fitted
-# again. Drop this text match once the server gives these failures their own
-# error code.
+# The error codes of a failed prediction that only a new fit can fix: a fit
+# from an earlier version of the service, and a fit whose cache can no longer
+# be loaded. The API models name them only in the description of
+# `PredictFailedErrorResponse.error_code`.
+_REFIT_ERROR_CODES = frozenset({"NEEDS_REFITTING", "KV_CACHE_INVALID"})
+
+# A server that predates KV_CACHE_INVALID books a stale or missing KV cache as a
+# USER_ERROR, and streams it, once its keepalive started, with no code at all:
+# only the message tells that the model must be fitted again. The fallback
+# applies to these codes alone, as a server with the refit codes sends one of
+# them for every refit. Drop it once no such server is left.
+_LEGACY_REFIT_CODES: frozenset[str | None] = frozenset({None, "USER_ERROR"})
 _REFIT_TEXT = "call fit() again"
 
 
 def _requires_refit(
+    error_code: str | None,
     message: str | None,
     *,
-    error_code: str | None = None,
     status_code: int | None = None,
 ) -> bool:
-    """Whether a failed prediction means the model must be fitted again.
+    """Return whether a failed prediction means the model must be fitted again.
 
-    ``status_code`` is the HTTP status of a failed ``/tabpfn/predict``, every
-    409 of which asks for a new fit.
+    The error code decides. A failure with a code from a server that predates
+    the refit codes falls back to the status and the message.
+
+    Args:
+        error_code: The server's error code, or None if it sent none.
+        message: The server's reason, or None if it sent none.
+        status_code: The HTTP status of a failed ``/tabpfn/predict`` whose
+            body does not name the prediction, or None. Such a server predates
+            ``PredictFailedErrorResponse``, and every 409 it answers asks for
+            a new fit.
+
+    Returns:
+        True if the model must be fitted again.
     """
-    return (
-        error_code == "NEEDS_REFITTING"
-        or status_code == 409
-        or (message is not None and _REFIT_TEXT in message)
-    )
+    if error_code in _REFIT_ERROR_CODES:
+        return True
+    if error_code not in _LEGACY_REFIT_CODES:
+        return False
+    return status_code == 409 or (message is not None and _REFIT_TEXT in message)
 
 
 def _prediction_failed(
-    fitted_test_set_id: UUID, error: str | None, error_code: str | None
+    fitted_test_set_id: UUID,
+    error: str | None,
+    error_code: str | None,
+    *,
+    trace_id: UUID | None = None,
 ) -> PredictFailedError:
-    """Build the error for a prediction the server reports as failed."""
+    """Build the error for a prediction the server reports as failed.
+
+    Args:
+        fitted_test_set_id: The id of the prediction.
+        error: The server's reason, or None if it sent none.
+        error_code: The server's error code, or None if it sent none.
+        trace_id: The trace id of the request the server answered with the
+            failure, or None if it sent none, as a poll does not.
+
+    Returns:
+        A ``RefitRequiredError`` if the model must be fitted again, else a
+        ``PredictFailedError``.
+    """
     message = (
         f"Prediction {fitted_test_set_id} failed: "
         f"{error or 'no error message provided'}"
     )
     if error_code:
         message += f" (error code {error_code})"
-    if _requires_refit(error, error_code=error_code):
-        return RefitRequiredError(message)
-    return PredictFailedError(message)
+    if trace_id:
+        message += f" Report trace ID: {trace_id}."
+    if _requires_refit(error_code, error):
+        return RefitRequiredError(message, fitted_test_set_id=fitted_test_set_id)
+    return PredictFailedError(message, fitted_test_set_id=fitted_test_set_id)
+
+
+# A prediction that failed once the server had created it is named in the error
+# body, whatever the status. A body without the id fails validation and falls
+# through to the generic error of its status.
+_PREDICT_FAILED_ERRORS = dict.fromkeys(range(400, 600), PredictFailedErrorResponse)
 
 
 def _prediction_gone(
@@ -1059,9 +1103,8 @@ class ServiceClient(Singleton):
             ValueError: If the in-memory size of ``x_test`` exceeds the server
                 limit, or ``api_mode`` is not a valid mode.
             FittedModelNotFoundError: If the fitted train set is not found.
-            PredictFailedError: If the client polls for the prediction and the
-                server reports that it failed. A failure the server reports in
-                answer to the prediction request itself raises RuntimeError.
+            PredictFailedError: If the server reports that the prediction
+                failed, in answer to the prediction request or to a poll for it.
             RefitRequiredError: If the fitted model can no longer predict and
                 must be fitted again.
             TimeoutError: If a prediction the client polls for has not completed
@@ -1119,8 +1162,8 @@ class ServiceClient(Singleton):
             ValueError: If the in-memory size of a test set exceeds the server
                 limit, or ``api_mode`` is not a valid mode.
             FittedModelNotFoundError: If the fitted train set is not found.
-            PredictFailedError: If the client polls for a prediction and the
-                server reports that it failed.
+            PredictFailedError: If the server reports that a prediction
+                failed, in answer to its request or to a poll for it.
             RefitRequiredError: If the fitted model can no longer predict and
                 must be fitted again.
             TimeoutError: If a prediction the client polls for has not completed
@@ -1286,6 +1329,8 @@ class ServiceClient(Singleton):
                 jobs.
             ValueError: If the in-memory size of ``x_test`` exceeds the server limit.
             FittedModelNotFoundError: If the fitted train set is not found.
+            PredictFailedError: If the server reports that the prediction
+                failed at once, for example because it could not queue it.
         """
         client_options = client_options or ClientOptions()
         test_set_upload_id = cls._upload_test_set(
@@ -1490,7 +1535,8 @@ class ServiceClient(Singleton):
             # A failure like any other: a later poll would answer the same.
             raise PredictFailedError(
                 f"The server reported prediction {fitted_test_set_id} as "
-                "completed, but sent no prediction."
+                "completed, but sent no prediction.",
+                fitted_test_set_id=fitted_test_set_id,
             )
         return cls._prediction_result(
             result_resp.prediction,
@@ -1663,6 +1709,10 @@ class ServiceClient(Singleton):
         Returns:
             The id of the job, or None if the server has no such endpoint: it
             runs no predictions as background jobs, and created no job.
+
+        Raises:
+            PredictFailedError: If the server created the job and it failed
+                at once, as when the server cannot queue it.
         """
         res = cls.httpx_client.post(
             url="/tabpfn/submit_predict_job",
@@ -1672,11 +1722,21 @@ class ServiceClient(Singleton):
         )
         if cls._is_route_missing(res):
             return None
-        return cls._validate_response(
+        resp = cls._validate_response(
             res,
             "submit_predict_job",
             success_model=SubmitPredictJobResponse,
+            error_models=_PREDICT_FAILED_ERRORS,
         )
+        if isinstance(resp, PredictFailedErrorResponse):
+            # What a poll for the job raises.
+            raise _prediction_failed(
+                resp.fitted_test_set_id,
+                resp.message,
+                resp.error_code,
+                trace_id=resp.trace_id,
+            )
+        return resp
 
     @classmethod
     # Every predict creates a new predict job, as a submit does, so the same
@@ -1703,6 +1763,8 @@ class ServiceClient(Singleton):
         """Request a prediction for an uploaded test set.
 
         Raises:
+            PredictFailedError: If the server reports that the prediction it
+                created for the request failed.
             RefitRequiredError: If the fitted model can no longer predict and
                 must be fitted again.
         """
@@ -1712,35 +1774,47 @@ class ServiceClient(Singleton):
             timeout=timeout,
             headers=headers,
         )
-        # Every 409 asks for a new fit. So does a 400 with the refit text: a
-        # stale KV cache, as the server reports it from the failure it booked
-        # rather than from the worker's reply.
-        if res.status_code in (400, 409):
-            body, message = cls._read_json_body(res)
-            if _requires_refit(
-                message,
-                error_code=body.get("error_code"),
-                status_code=res.status_code,
-            ):
-                # This response skips `_validate_response`, which checks the
-                # client version of every other one.
-                cls._check_version(res)
-                if trace_id := body.get("trace_id"):
-                    message += f" Report trace ID: {trace_id}."
-                raise RefitRequiredError(message)
         try:
             # The body, not the request, decides which model applies: a
-            # prediction, a download URL to follow, or a prediction the server
-            # is still running.
-            return cls._validate_response(
-                res, "predict", success_model=_PredictResponseUnion
+            # prediction, a download URL to follow, a prediction the server is
+            # still running, or one that failed.
+            resp = cls._validate_response(
+                res,
+                "predict",
+                success_model=_PredictResponseUnion,
+                error_models=_PREDICT_FAILED_ERRORS,
             )
+        # Both handlers recognize a refit on a server that predates
+        # `PredictFailedErrorResponse`: every 409 asks for a new fit, and so
+        # does a 400 with the refit text, a stale KV cache as the server reports
+        # it from the failure it booked rather than from the worker's reply.
         except StreamedServerError as exc:
             if exc.status_code in (400, 409) and _requires_refit(
-                exc.detail, status_code=exc.status_code
+                cls._read_json_body(res)[0].get("error_code"),
+                exc.detail,
+                status_code=exc.status_code,
             ):
                 raise RefitRequiredError(exc.detail) from exc
             raise
+        except RuntimeError as exc:
+            if res.status_code in (400, 409):
+                body, message = cls._read_json_body(res)
+                if _requires_refit(
+                    body.get("error_code"), message, status_code=res.status_code
+                ):
+                    if trace_id := body.get("trace_id"):
+                        message += f" Report trace ID: {trace_id}."
+                    raise RefitRequiredError(message) from exc
+            raise
+        if isinstance(resp, PredictFailedErrorResponse):
+            # What a poll for the prediction raises.
+            raise _prediction_failed(
+                resp.fitted_test_set_id,
+                resp.message,
+                resp.error_code,
+                trace_id=resp.trace_id,
+            )
+        return resp
 
     @classmethod
     @backoff.on_exception(
@@ -1984,13 +2058,16 @@ class ServiceClient(Singleton):
             response: The HTTP response.
             method_name: Name of the called method, used in error messages.
             success_model: Model or adapter the body is validated against on success.
-            error_models: Models to parse error bodies into, keyed by status code.
+            error_models: Models to parse error bodies into, keyed by status
+                code: the HTTP status, or the status a streamed error reports.
 
         Returns:
-            The validated success model, or the matching error model instance.
+            The validated success model, or the matching error model instance,
+            whether the error came as an HTTP status or in a streamed error.
 
         Raises:
-            StreamedServerError: On a streamed error.
+            StreamedServerError: On a streamed error without a matching error
+                model.
             RuntimeError: On an error status without a matching error model.
             RetryableServerError: On HTTP 408, 502, 503, or 504 without a
                 matching error model.
@@ -2009,6 +2086,16 @@ class ServiceClient(Singleton):
         # Streaming errors, should come before the success check.
         if body.get("_streamed_error"):
             streamed_status = body.get("status_code")
+            # The envelope holds the fields of the body the error has when it
+            # comes before the stream starts, beside its own keys, which the
+            # error models ignore.
+            if isinstance(streamed_status, int) and (
+                error_model := error_models.get(streamed_status)
+            ):
+                try:
+                    return error_model.model_validate(body)
+                except ValidationError:
+                    pass
             raise StreamedServerError(
                 f"Fail to call {method_name} with error: streamed, {message}",
                 status_code=streamed_status

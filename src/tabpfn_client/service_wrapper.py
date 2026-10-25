@@ -505,9 +505,8 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             ValueError: If the in-memory size of ``X`` exceeds the server
                 limit, or ``api_mode`` is not a valid mode.
             FittedModelNotFoundError: If the fitted train set is not found.
-            PredictFailedError: If the client polls for the prediction and the
-                server reports that it failed. A failure the server reports in
-                answer to the prediction request itself raises RuntimeError.
+            PredictFailedError: If the server reports that the prediction
+                failed, in answer to the prediction request or to a poll for it.
             RefitRequiredError: If the fitted model can no longer predict and
                 must be fitted again.
             TimeoutError: If a prediction the client polls for has not completed
@@ -556,8 +555,8 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             ValueError: If the in-memory size of a test set exceeds the server
                 limit, or ``api_mode`` is not a valid mode.
             FittedModelNotFoundError: If the fitted train set is not found.
-            PredictFailedError: If the client polls for a prediction and the
-                server reports that it failed.
+            PredictFailedError: If the server reports that a prediction
+                failed, in answer to its request or to a poll for it.
             RefitRequiredError: If the fitted model can no longer predict and
                 must be fitted again.
             TimeoutError: If a prediction the client polls for has not completed
@@ -599,6 +598,8 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             FittedModelNotFoundError: If the fitted train set is not found.
             RuntimeError: If the server does not run predictions as background
                 jobs.
+            PredictFailedError: If the server reports that the prediction
+                failed at once, for example because it could not queue it.
         """
         return ServiceClient.submit_predict(
             x_test=X,
