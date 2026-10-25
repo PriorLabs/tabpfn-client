@@ -1364,14 +1364,14 @@ class TestPredictChunks:
             "start 5",
             *(f"wait {i}" for i in range(2, 6)),
         ]
-        assert [int(r.y_pred[0]) for r in results] == list(range(6))
+        assert [int(cast(np.ndarray, r.y_pred)[0]) for r in results] == list(range(6))
 
     def test_a_test_set_predicted_with_one_request_keeps_its_place(self):
         with _chunk_server(sync=frozenset({1})) as events:
             results = _predict_chunks(3)
 
         assert events == ["start 0", "start 1", "start 2", "wait 0", "wait 2"]
-        assert [int(r.y_pred[0]) for r in results] == [0, 1, 2]
+        assert [int(cast(np.ndarray, r.y_pred)[0]) for r in results] == [0, 1, 2]
 
     def test_passes_the_mode_and_the_fit_to_every_test_set(self):
         with (
