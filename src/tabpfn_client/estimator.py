@@ -1767,6 +1767,20 @@ def _full_output_row_limit(model_path: str | None) -> int | None:
     return limit.test_set_max_rows_w_full_regression_output if limit else None
 
 
+def _test_row_limit(
+    limit: ModelLimit,
+    train_rows: int | None,
+    inference_config: dict[str, Any] | None,
+) -> int:
+    """Most test rows one predict call accepts, before the cell and byte limits."""
+    max_rows = limit.test_set_max_rows
+    subsample = (inference_config or {}).get("SUBSAMPLE_SAMPLES")
+    # The server validates context-dependent limits for subsampled requests.
+    if train_rows and subsample is None:
+        max_rows = min(max_rows, limit.predict_row_pairs_budget // train_rows)
+    return max_rows
+
+
 def validate_test_set(
     X: pd.DataFrame | np.ndarray,
     output_type: str | None,
@@ -1794,13 +1808,7 @@ def validate_test_set(
     if limit is None:
         return
 
-    max_rows = limit.test_set_max_rows
-    subsample = (inference_config or {}).get("SUBSAMPLE_SAMPLES")
-    # The server validates context-dependent limits for subsampled requests.
-    if train_rows and subsample is None:
-        budget = limit.predict_row_pairs_budget
-        max_rows = min(max_rows, budget // train_rows)
-
+    max_rows = _test_row_limit(limit, train_rows, inference_config)
     if X.shape[0] > max_rows:
         raise ValueError(
             f"The number of test rows ({X.shape[0]}) exceeds the maximum of {max_rows}. "
