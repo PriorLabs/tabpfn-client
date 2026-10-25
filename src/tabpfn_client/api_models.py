@@ -577,6 +577,20 @@ class NotFoundErrorResponse(BaseModel):
     trace_id: UUID | None = Field(default=None, description="Id to quote when reporting the error.")
 
 
+class PredictFailedErrorResponse(BaseModel):
+    """A prediction that failed after the server created it. get_predict_result
+    reports the same failure under its id.
+    """
+
+    message: str = Field(description="What went wrong.")
+    error_code: str = Field(
+        default="GENERAL_ERROR",
+        description="Machine-readable error category, such as `BUSY`. `NEEDS_REFITTING` and `KV_CACHE_INVALID` mean the fitted model has to be fit again.",
+    )
+    trace_id: UUID | None = Field(default=None, description="Id to quote when reporting the error.")
+    fitted_test_set_id: UUID = Field(description="Id of the prediction that failed.")
+
+
 class PredictPendingResponse(BaseModel):
     """A predict still running when the wait for it ended."""
 
