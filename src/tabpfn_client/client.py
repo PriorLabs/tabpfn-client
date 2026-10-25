@@ -181,6 +181,16 @@ def _get_crc32c_hash(data: bytes) -> str:
     return base64.b64encode(struct.pack(">I", crc32c_value)).decode("ascii")
 
 
+def _report_trace(trace_id: UUID | None) -> str:
+    """Return the sentence that asks to report ``trace_id``, or "" without one.
+
+    The server sends a trace id without dashes, as its logs and Sentry show it,
+    and the message keeps that form so that the id can be searched as it is.
+    ``str()`` of the parsed UUID would add the dashes.
+    """
+    return f" Report trace ID: {trace_id.hex}." if trace_id else ""
+
+
 def _fitted_model_not_found(
     fitted_train_set_id: UUID, response: NotFoundErrorResponse
 ) -> FittedModelNotFoundError:
@@ -190,8 +200,7 @@ def _fitted_model_not_found(
         "It may have been deleted (see UserDataClient), or it was fitted "
         "under a different account. Call fit() again to create a new one."
     )
-    if response.trace_id:
-        message += f" Report trace ID: {response.trace_id}."
+    message += _report_trace(response.trace_id)
     return FittedModelNotFoundError(message)
 
 
@@ -270,8 +279,7 @@ def _prediction_failed(
     )
     if error_code:
         message += f" (error code {error_code})"
-    if trace_id:
-        message += f" Report trace ID: {trace_id}."
+    message += _report_trace(trace_id)
     if _requires_refit(error_code, error):
         return RefitRequiredError(message, fitted_test_set_id=fitted_test_set_id)
     return PredictFailedError(message, fitted_test_set_id=fitted_test_set_id)

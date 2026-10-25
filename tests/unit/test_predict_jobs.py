@@ -59,7 +59,9 @@ from tests.unit.test_client import _api_settings_payload, _FakeTime
 FIT_ID = UUID("00000000-0000-0000-0000-000000000002")
 UPLOAD_ID = "00000000-0000-0000-0000-000000000003"
 PREDICTION_ID = UUID("00000000-0000-0000-0000-0000000000aa")
-TRACE_ID = "00000000-0000-0000-0000-00000000beef"
+# Without dashes, as the server sends a trace id: a message must quote it in
+# that form, which its logs and Sentry show.
+TRACE_ID = "0000000000000000000000000000beef"
 
 X_TEST = np.ones((3, 2))
 PREDICTION = [1, 0, 1]
