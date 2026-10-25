@@ -568,7 +568,7 @@ class TestPredict:
 
         with (
             _polling(router, outcomes) as (clock, poll_route),
-            caplog.at_level(logging.INFO, logger="tabpfn_client.client"),
+            caplog.at_level(logging.DEBUG, logger="tabpfn_client.client"),
         ):
             result = _predict()
 
