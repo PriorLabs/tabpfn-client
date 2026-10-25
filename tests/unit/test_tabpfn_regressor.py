@@ -1,6 +1,6 @@
 import time
 import unittest
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from typing import Any, cast
 from unittest.mock import patch
@@ -974,7 +974,7 @@ class TestTabPFNModelSelection(unittest.TestCase):
 
 
 @contextmanager
-def _serving(fake_predict: Callable[..., PredictionResult]) -> Iterator[None]:
+def _serving(fake_predict: Callable[..., PredictionResult]) -> Generator[None]:
     """Answer each predict request, split or not, with `fake_predict(X)`."""
     with (
         patch.object(InferenceClient, "predict", side_effect=fake_predict),
