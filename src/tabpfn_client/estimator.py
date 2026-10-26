@@ -792,10 +792,10 @@ class TabPFNClassifier(
         Raises:
             NotFittedError: If the model has no fit, or its fit is pending:
                 call `wait_for_fit()` first.
-            PredictFailedError: If the client polls for the prediction and the
-                server reports that it failed. A failure the server reports in
-                answer to the prediction request itself raises RuntimeError,
-                which `PredictFailedError` subclasses.
+            PredictFailedError: If the server reports that the prediction
+                failed, in answer to the prediction request or to a poll for it.
+                Another failed request raises RuntimeError, which
+                `PredictFailedError` subclasses.
             RefitRequiredError: If the fitted model can no longer predict:
                 call `fit()` again.
         """
@@ -814,10 +814,10 @@ class TabPFNClassifier(
         Raises:
             NotFittedError: If the model has no fit, or its fit is pending:
                 call `wait_for_fit()` first.
-            PredictFailedError: If the client polls for the prediction and the
-                server reports that it failed. A failure the server reports in
-                answer to the prediction request itself raises RuntimeError,
-                which `PredictFailedError` subclasses.
+            PredictFailedError: If the server reports that the prediction
+                failed, in answer to the prediction request or to a poll for it.
+                Another failed request raises RuntimeError, which
+                `PredictFailedError` subclasses.
             RefitRequiredError: If the fitted model can no longer predict:
                 call `fit()` again.
         """
@@ -852,6 +852,8 @@ class TabPFNClassifier(
                 exceeds the model limits or the group columns are invalid.
             RuntimeError: If the server does not run predictions as background
                 jobs.
+            PredictFailedError: If the server reports that the prediction
+                failed at once, for example because it could not queue it.
         """
         # IMPORTANT: self._get_predict_params() should be called first to make sure
         # we capture the original user-provided values.
@@ -1425,10 +1427,10 @@ class TabPFNRegressor(
                 the model limits or the group columns are invalid.
             RuntimeError: If a `"full"` prediction split across several requests
                 returns fields that cannot be combined.
-            PredictFailedError: If the client polls for the prediction and the
-                server reports that it failed. A failure the server reports in
-                answer to the prediction request itself raises RuntimeError,
-                which `PredictFailedError` subclasses.
+            PredictFailedError: If the server reports that the prediction
+                failed, in answer to the prediction request or to a poll for it.
+                Another failed request raises RuntimeError, which
+                `PredictFailedError` subclasses.
             RefitRequiredError: If the fitted model can no longer predict:
                 call `fit()` again.
         """
@@ -1502,6 +1504,8 @@ class TabPFNRegressor(
                 `"full"` output for `X` does not fit in one response.
             RuntimeError: If the server does not run predictions as background
                 jobs.
+            PredictFailedError: If the server reports that the prediction
+                failed at once, for example because it could not queue it.
         """
         # IMPORTANT: self._get_predict_params() should be called first to make sure
         # we capture the original user-provided values.

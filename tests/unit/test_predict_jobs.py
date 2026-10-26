@@ -37,6 +37,7 @@ from tabpfn_client.api_models import (
     FitResponse,
     GetSettingsResponse,
     PredictAsyncThresholds,
+    PredictFailedErrorResponse,
 )
 from tabpfn_client.client import (
     _MIN_RETRY_INTERVAL_SECS,
@@ -58,7 +59,9 @@ from tests.unit.test_client import _api_settings_payload, _FakeTime
 FIT_ID = UUID("00000000-0000-0000-0000-000000000002")
 UPLOAD_ID = "00000000-0000-0000-0000-000000000003"
 PREDICTION_ID = UUID("00000000-0000-0000-0000-0000000000aa")
-TRACE_ID = "00000000-0000-0000-0000-00000000beef"
+# Without dashes, as the server sends a trace id: a message must quote it in
+# that form, which its logs and Sentry show.
+TRACE_ID = "0000000000000000000000000000beef"
 
 X_TEST = np.ones((3, 2))
 PREDICTION = [1, 0, 1]
@@ -722,6 +725,29 @@ class TestPredict:
             ),
             (
                 STALE_KV_CACHE,
+                "KV_CACHE_INVALID",
+                RefitRequiredError,
+                f"Prediction {PREDICTION_ID} failed: {STALE_KV_CACHE} "
+                "(error code KV_CACHE_INVALID)",
+            ),
+            (
+                MISSING_KV_CACHE,
+                "KV_CACHE_INVALID",
+                RefitRequiredError,
+                f"Prediction {PREDICTION_ID} failed: {MISSING_KV_CACHE} "
+                "(error code KV_CACHE_INVALID)",
+            ),
+            (
+                None,
+                "KV_CACHE_INVALID",
+                RefitRequiredError,
+                f"Prediction {PREDICTION_ID} failed: no error message provided "
+                "(error code KV_CACHE_INVALID)",
+            ),
+            # A server without KV_CACHE_INVALID books a stale or missing cache
+            # as a USER_ERROR: only the message tells.
+            (
+                STALE_KV_CACHE,
                 "USER_ERROR",
                 RefitRequiredError,
                 f"Prediction {PREDICTION_ID} failed: {STALE_KV_CACHE} "
@@ -734,6 +760,15 @@ class TestPredict:
                 f"Prediction {PREDICTION_ID} failed: {MISSING_KV_CACHE} "
                 "(error code USER_ERROR)",
             ),
+            # The message counts only with a code a server without the refit
+            # codes books for a refit.
+            (
+                STALE_KV_CACHE,
+                "INTERNAL_ERROR",
+                PredictFailedError,
+                f"Prediction {PREDICTION_ID} failed: {STALE_KV_CACHE} "
+                "(error code INTERNAL_ERROR)",
+            ),
         ],
         ids=[
             "failed",
@@ -743,6 +778,10 @@ class TestPredict:
             "needs_refitting_without_a_message",
             "stale_kv_cache",
             "missing_kv_cache",
+            "kv_cache_invalid_without_a_message",
+            "stale_kv_cache_before_its_code",
+            "missing_kv_cache_before_its_code",
+            "refit_text_under_another_code",
         ],
     )
     def test_a_polled_prediction_that_fails_raises_what_the_server_reports(
@@ -761,6 +800,7 @@ class TestPredict:
 
         assert type(exc_info.value) is expected
         assert str(exc_info.value) == message
+        assert exc_info.value.fitted_test_set_id == PREDICTION_ID
         # The prediction has ended: there is nothing left to come back for.
         assert _broke_off_warnings(caplog) == []
 
@@ -786,6 +826,8 @@ class TestPredict:
     def test_a_model_that_can_no_longer_predict_raises_refit_required_error(
         self, router, status_code, message, error_code, streamed
     ):
+        # The bodies of a server that predates `PredictFailedErrorResponse`
+        # and KV_CACHE_INVALID: the status and the message tell.
         _upload_route(router)
         predict_route = router.post("/tabpfn/predict").mock(
             return_value=_error(
@@ -800,6 +842,8 @@ class TestPredict:
         assert str(exc_info.value) == (
             message if streamed else f"{message} Report trace ID: {TRACE_ID}."
         )
+        # Such a server does not name the prediction.
+        assert exc_info.value.fitted_test_set_id is None
         assert predict_route.call_count == 1
 
     @pytest.mark.parametrize(
@@ -912,6 +956,185 @@ class TestPredict:
     def test_rejects_an_invalid_mode_before_any_request(self, router):
         with pytest.raises(ValueError):
             _predict(api_mode=cast(Any, "SYNC"))
+
+
+def _job_failure(
+    status_code: int,
+    message: str,
+    error_code: str,
+    *,
+    streamed: bool = False,
+    headers: dict[str, str] | None = None,
+) -> httpx.Response:
+    """The failure of the job a `/predict` or a submit created, which names it."""
+    body = {
+        "message": message,
+        "error_code": error_code,
+        "trace_id": TRACE_ID,
+        "fitted_test_set_id": str(PREDICTION_ID),
+    }
+    if streamed:
+        # As the server streams it: the body's fields, then the envelope's own
+        # keys, with `detail` the message that older clients read.
+        envelope = {"_streamed_error": True, "status_code": status_code}
+        return _json(
+            200,
+            body | envelope | {"detail": message},
+            keepalive=b"   ",
+            headers=headers,
+        )
+    return _json(status_code, body, headers=headers)
+
+
+STREAMED = pytest.mark.parametrize("streamed", [False, True], ids=["fast", "streamed"])
+
+
+class TestAFailureReportedOnTheRequest:
+    """A job that fails before the request that created it is answered raises
+    what a poll for the job raises, with the job's id."""
+
+    @STREAMED
+    @pytest.mark.parametrize(
+        ("status_code", "message", "error_code", "expected"),
+        [
+            (500, "boom", "INTERNAL_ERROR", PredictFailedError),
+            (503, "Overloaded", "BUSY", PredictFailedError),
+            (504, "Too slow", "DEADLINE_EXCEEDED", PredictFailedError),
+            (
+                422,
+                "X_test has 3 features, expected 4",
+                "REQUEST_VALIDATION_ERROR",
+                PredictFailedError,
+            ),
+            (409, NEEDS_REFITTING, "NEEDS_REFITTING", RefitRequiredError),
+            (409, STALE_KV_CACHE, "KV_CACHE_INVALID", RefitRequiredError),
+            (409, MISSING_KV_CACHE, "KV_CACHE_INVALID", RefitRequiredError),
+            # The code decides, not the status.
+            (409, "Conflict", "USER_ERROR", PredictFailedError),
+            # A server whose worker predates KV_CACHE_INVALID, as it answers
+            # and as it books the failure: only the message tells.
+            (409, STALE_KV_CACHE, "USER_ERROR", RefitRequiredError),
+            (400, MISSING_KV_CACHE, "USER_ERROR", RefitRequiredError),
+        ],
+        ids=[
+            "internal_error",
+            "busy",
+            "deadline_exceeded",
+            "validation_error",
+            "needs_refitting",
+            "stale_kv_cache",
+            "missing_kv_cache",
+            "conflict_without_a_refit_code",
+            "kv_cache_from_an_older_worker",
+            "booked_kv_cache_from_an_older_worker",
+        ],
+    )
+    def test_a_failed_predict_raises_what_a_poll_raises(
+        self, router, caplog, status_code, message, error_code, expected, streamed
+    ):
+        _upload_route(router)
+        # No poll route: a poll would fail the test.
+        predict_route = router.post("/tabpfn/predict").mock(
+            return_value=_job_failure(
+                status_code, message, error_code, streamed=streamed
+            )
+        )
+
+        with pytest.raises(PredictFailedError) as exc_info:
+            _predict()
+
+        assert type(exc_info.value) is expected
+        assert str(exc_info.value) == (
+            f"Prediction {PREDICTION_ID} failed: {message} (error code "
+            f"{error_code}) Report trace ID: {TRACE_ID}."
+        )
+        assert exc_info.value.fitted_test_set_id == PREDICTION_ID
+        assert predict_route.call_count == 1
+        # The prediction has ended: there is nothing left to come back for.
+        assert _broke_off_warnings(caplog) == []
+
+    @STREAMED
+    def test_a_body_without_the_id_is_recognized_as_before(self, router, streamed):
+        # A server with KV_CACHE_INVALID that does not name the prediction.
+        _upload_route(router)
+        if streamed:
+            envelope = {"_streamed_error": True, "status_code": 409}
+            body = {"detail": STALE_KV_CACHE, "error_code": "KV_CACHE_INVALID"}
+            response = _json(200, envelope | body, keepalive=b"   ")
+        else:
+            response = _error(409, STALE_KV_CACHE, error_code="KV_CACHE_INVALID")
+        router.post("/tabpfn/predict").mock(return_value=response)
+
+        with pytest.raises(RefitRequiredError) as exc_info:
+            _predict()
+
+        assert exc_info.value.fitted_test_set_id is None
+
+    def test_warns_of_a_deprecated_client_on_a_failed_job(self, router):
+        _upload_route(router)
+        router.post("/tabpfn/predict").mock(
+            return_value=_job_failure(
+                503, "Overloaded", "BUSY", headers={"deprecation": "true"}
+            )
+        )
+
+        with (
+            pytest.warns(DeprecationWarning, match="tabpfn-client is deprecated"),
+            pytest.raises(PredictFailedError),
+        ):
+            _predict()
+
+    @pytest.mark.parametrize(
+        ("status_code", "message", "error_code"),
+        [
+            (503, "The service is overloaded.", "BUSY"),
+            (413, "The prediction request is too large.", "INVALID_REQUEST"),
+        ],
+        ids=["busy", "too_large"],
+    )
+    @pytest.mark.parametrize("call", ["predict", "submit_predict"])
+    def test_a_submitted_job_that_failed_at_once_raises_what_a_poll_raises(
+        self, router, caplog, status_code, message, error_code, call
+    ):
+        # The server created the job and could not queue it.
+        _cache_settings()
+        _upload_route(router)
+        # No /predict and no poll route: either would fail the test.
+        submit_route = router.post("/tabpfn/submit_predict_job").mock(
+            return_value=_job_failure(status_code, message, error_code)
+        )
+
+        with pytest.raises(PredictFailedError) as exc_info:
+            if call == "predict":
+                _predict(api_mode=ApiMode.ASYNC)
+            else:
+                ServiceClient.submit_predict(FIT_ID, X_TEST, ClassifierConfig())
+
+        assert type(exc_info.value) is PredictFailedError
+        assert str(exc_info.value) == (
+            f"Prediction {PREDICTION_ID} failed: {message} (error code "
+            f"{error_code}) Report trace ID: {TRACE_ID}."
+        )
+        assert exc_info.value.fitted_test_set_id == PREDICTION_ID
+        assert submit_route.call_count == 1
+        assert _broke_off_warnings(caplog) == []
+
+    def test_a_submit_answered_without_the_id_raises_as_before(self, router):
+        # A server that predates the id, or failed before it created the job.
+        _cache_settings()
+        _upload_route(router)
+        submit_route = router.post("/tabpfn/submit_predict_job").mock(
+            return_value=_error(503, "Overloaded", error_code="INTERNAL_ERROR")
+        )
+
+        with pytest.raises(RetryableServerError) as exc_info:
+            ServiceClient.submit_predict(FIT_ID, X_TEST, ClassifierConfig())
+
+        assert str(exc_info.value) == (
+            "Fail to call submit_predict_job: [HTTP 503] Overloaded. "
+            f"Report trace ID: {TRACE_ID}."
+        )
+        assert submit_route.call_count == 1
 
 
 class TestPredictionJobs:
@@ -1996,9 +2219,12 @@ class TestWaitForPredict:
         body = {**_completed(), missing: None}
 
         with _polling(router, [_json(200, body)]):
-            with pytest.raises(PredictFailedError, match="sent no prediction"):
+            with pytest.raises(
+                PredictFailedError, match="sent no prediction"
+            ) as exc_info:
                 _wait()
 
+        assert exc_info.value.fitted_test_set_id == PREDICTION_ID
         # A later poll would answer the same: nothing to come back for.
         assert _broke_off_warnings(caplog) == []
 
@@ -2164,6 +2390,69 @@ def test_a_streamed_error_keeps_the_status_it_reports(envelope, status_code, det
     assert str(exc_info.value) == f"Fail to call fit with error: streamed, {detail}"
 
 
+def _streamed(envelope: dict[str, Any]) -> httpx.Response:
+    return httpx.Response(
+        200,
+        request=httpx.Request("POST", "http://testserver/test"),
+        content=b"  " + json.dumps({"_streamed_error": True, **envelope}).encode(),
+    )
+
+
+def test_a_streamed_error_parses_into_the_error_model_of_its_status():
+    response = _streamed(
+        {
+            "message": "Overloaded",
+            "error_code": "BUSY",
+            "trace_id": TRACE_ID,
+            "fitted_test_set_id": str(PREDICTION_ID),
+            "status_code": 503,
+            "detail": "Overloaded",
+        }
+    )
+
+    parsed = ServiceClient._validate_response(
+        response,
+        "predict",
+        success_model=FitResponse,
+        error_models={503: PredictFailedErrorResponse},
+    )
+
+    assert parsed == PredictFailedErrorResponse(
+        message="Overloaded",
+        error_code="BUSY",
+        trace_id=UUID(TRACE_ID),
+        fitted_test_set_id=PREDICTION_ID,
+    )
+
+
+@pytest.mark.parametrize(
+    "envelope",
+    [
+        # From a server that streams no body fields.
+        {"status_code": 503, "detail": "Overloaded"},
+        # A status without an error model.
+        {
+            "message": "Overloaded",
+            "fitted_test_set_id": str(PREDICTION_ID),
+            "status_code": 502,
+            "detail": "Overloaded",
+        },
+    ],
+    ids=["without_the_fields", "another_status"],
+)
+def test_a_streamed_error_without_a_matching_model_still_raises(envelope):
+    with pytest.raises(StreamedServerError) as exc_info:
+        ServiceClient._validate_response(
+            _streamed(envelope),
+            "predict",
+            success_model=FitResponse,
+            error_models={503: PredictFailedErrorResponse},
+        )
+
+    assert exc_info.value.status_code == envelope["status_code"]
+    assert exc_info.value.detail == "Overloaded"
+
+
 @pytest.mark.parametrize(
     "error",
     [
@@ -2173,10 +2462,22 @@ def test_a_streamed_error_keeps_the_status_it_reports(envelope, status_code, det
             detail="Overloaded",
         ),
         PredictFailedError(f"Prediction {PREDICTION_ID} failed: boom"),
+        PredictFailedError(
+            f"Prediction {PREDICTION_ID} failed: boom",
+            fitted_test_set_id=PREDICTION_ID,
+        ),
         RefitRequiredError(NEEDS_REFITTING),
+        RefitRequiredError(NEEDS_REFITTING, fitted_test_set_id=PREDICTION_ID),
         PredictionGoneError(f"The server does not have prediction {PREDICTION_ID}"),
     ],
-    ids=["streamed", "failed", "refit_required", "gone"],
+    ids=[
+        "streamed",
+        "failed",
+        "failed_with_its_id",
+        "refit_required",
+        "refit_required_with_its_id",
+        "gone",
+    ],
 )
 @pytest.mark.parametrize(
     "duplicate",
@@ -2189,5 +2490,5 @@ def test_an_error_survives_pickle_and_copy(error, duplicate):
 
     assert type(duplicated) is type(error)
     assert str(duplicated) == str(error)
-    # The status and detail of a streamed error.
+    # The status and detail of a streamed error, the id of a failed prediction.
     assert vars(duplicated) == vars(error)

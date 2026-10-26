@@ -421,7 +421,7 @@ class TestWithServer:
             json={
                 "message": "Fitted train set not found",
                 "error_code": "NOT_FOUND",
-                "trace_id": "00000000-0000-0000-0000-00000000beef",
+                "trace_id": "0000000000000000000000000000beef",
             },
         )
         loaded = TabPFNRegressor.load_model(_fitted_regressor().save_model())
@@ -436,7 +436,7 @@ class TestWithServer:
         message = str(excinfo.value)
         assert str(MODEL_ID) in message
         assert "fit()" in message
-        assert "00000000-0000-0000-0000-00000000beef" in message
+        assert "0000000000000000000000000000beef" in message
 
     @with_mock_server()
     def test_fit_save_load_predict_across_runs(self, mock_server):

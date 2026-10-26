@@ -758,7 +758,7 @@ class TestServiceClient(unittest.TestCase):
             json={
                 "message": "Fitted train set not found",
                 "error_code": "NOT_FOUND",
-                "trace_id": "00000000-0000-0000-0000-00000000beef",
+                "trace_id": "0000000000000000000000000000beef",
             },
         )
         ServiceClient.authorize("dummy_access_token")
@@ -772,7 +772,7 @@ class TestServiceClient(unittest.TestCase):
         mock_sleep.assert_not_called()
 
         self.assertIn(str(fitted_train_set_id), str(cm.exception))
-        self.assertIn("00000000-0000-0000-0000-00000000beef", str(cm.exception))
+        self.assertIn("0000000000000000000000000000beef", str(cm.exception))
 
     @with_mock_server()
     def test_predict_with_same_test_set_calls_prepare_and_predict_each_time(
