@@ -215,43 +215,6 @@ _NO_PREDICT_JOBS = (
 # `PredictFailedErrorResponse.error_code`.
 _REFIT_ERROR_CODES = frozenset({"NEEDS_REFITTING", "KV_CACHE_INVALID"})
 
-# A server that predates KV_CACHE_INVALID books a stale or missing KV cache as a
-# USER_ERROR, and streams it, once its keepalive started, with no code at all:
-# only the message tells that the model must be fitted again. The fallback
-# applies to these codes alone, as a server with the refit codes sends one of
-# them for every refit. Drop it once no such server is left.
-_LEGACY_REFIT_CODES: frozenset[str | None] = frozenset({None, "USER_ERROR"})
-_REFIT_TEXT = "call fit() again"
-
-
-def _requires_refit(
-    error_code: str | None,
-    message: str | None,
-    *,
-    status_code: int | None = None,
-) -> bool:
-    """Return whether a failed prediction means the model must be fitted again.
-
-    The error code decides. A failure with a code from a server that predates
-    the refit codes falls back to the status and the message.
-
-    Args:
-        error_code: The server's error code, or None if it sent none.
-        message: The server's reason, or None if it sent none.
-        status_code: The HTTP status of a failed ``/tabpfn/predict`` whose
-            body does not name the prediction, or None. Such a server predates
-            ``PredictFailedErrorResponse``, and every 409 it answers asks for
-            a new fit.
-
-    Returns:
-        True if the model must be fitted again.
-    """
-    if error_code in _REFIT_ERROR_CODES:
-        return True
-    if error_code not in _LEGACY_REFIT_CODES:
-        return False
-    return status_code == 409 or (message is not None and _REFIT_TEXT in message)
-
 
 def _prediction_failed(
     fitted_test_set_id: UUID,
@@ -280,7 +243,7 @@ def _prediction_failed(
     if error_code:
         message += f" (error code {error_code})"
     message += _report_trace(trace_id)
-    if _requires_refit(error_code, error):
+    if error_code in _REFIT_ERROR_CODES:
         return RefitRequiredError(message, fitted_test_set_id=fitted_test_set_id)
     return PredictFailedError(message, fitted_test_set_id=fitted_test_set_id)
 
@@ -1782,38 +1745,16 @@ class ServiceClient(Singleton):
             timeout=timeout,
             headers=headers,
         )
-        try:
-            # The body, not the request, decides which model applies: a
-            # prediction, a download URL to follow, a prediction the server is
-            # still running, or one that failed.
-            resp = cls._validate_response(
-                res,
-                "predict",
-                success_model=_PredictResponseUnion,
-                error_models=_PREDICT_FAILED_ERRORS,
-            )
-        # Both handlers recognize a refit on a server that predates
-        # `PredictFailedErrorResponse`: every 409 asks for a new fit, and so
-        # does a 400 with the refit text, a stale KV cache as the server reports
-        # it from the failure it booked rather than from the worker's reply.
-        except StreamedServerError as exc:
-            if exc.status_code in (400, 409) and _requires_refit(
-                cls._read_json_body(res)[0].get("error_code"),
-                exc.detail,
-                status_code=exc.status_code,
-            ):
-                raise RefitRequiredError(exc.detail) from exc
-            raise
-        except RuntimeError as exc:
-            if res.status_code in (400, 409):
-                body, message = cls._read_json_body(res)
-                if _requires_refit(
-                    body.get("error_code"), message, status_code=res.status_code
-                ):
-                    if trace_id := body.get("trace_id"):
-                        message += f" Report trace ID: {trace_id}."
-                    raise RefitRequiredError(message) from exc
-            raise
+        # The body, not the request, decides which model applies: a prediction,
+        # a download URL to follow, a prediction the server is still running,
+        # or one that failed. A refit is a failure like any other: the server
+        # names the prediction and gives a refit code.
+        resp = cls._validate_response(
+            res,
+            "predict",
+            success_model=_PredictResponseUnion,
+            error_models=_PREDICT_FAILED_ERRORS,
+        )
         if isinstance(resp, PredictFailedErrorResponse):
             # What a poll for the prediction raises.
             raise _prediction_failed(

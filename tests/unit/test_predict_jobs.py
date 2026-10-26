@@ -744,30 +744,13 @@ class TestPredict:
                 f"Prediction {PREDICTION_ID} failed: no error message provided "
                 "(error code KV_CACHE_INVALID)",
             ),
-            # A server without KV_CACHE_INVALID books a stale or missing cache
-            # as a USER_ERROR: only the message tells.
+            # The code decides, not the message.
             (
                 STALE_KV_CACHE,
                 "USER_ERROR",
-                RefitRequiredError,
-                f"Prediction {PREDICTION_ID} failed: {STALE_KV_CACHE} "
-                "(error code USER_ERROR)",
-            ),
-            (
-                MISSING_KV_CACHE,
-                "USER_ERROR",
-                RefitRequiredError,
-                f"Prediction {PREDICTION_ID} failed: {MISSING_KV_CACHE} "
-                "(error code USER_ERROR)",
-            ),
-            # The message counts only with a code a server without the refit
-            # codes books for a refit.
-            (
-                STALE_KV_CACHE,
-                "INTERNAL_ERROR",
                 PredictFailedError,
                 f"Prediction {PREDICTION_ID} failed: {STALE_KV_CACHE} "
-                "(error code INTERNAL_ERROR)",
+                "(error code USER_ERROR)",
             ),
         ],
         ids=[
@@ -779,9 +762,7 @@ class TestPredict:
             "stale_kv_cache",
             "missing_kv_cache",
             "kv_cache_invalid_without_a_message",
-            "stale_kv_cache_before_its_code",
-            "missing_kv_cache_before_its_code",
-            "refit_text_under_another_code",
+            "refit_text_without_a_refit_code",
         ],
     )
     def test_a_polled_prediction_that_fails_raises_what_the_server_reports(
@@ -803,72 +784,6 @@ class TestPredict:
         assert exc_info.value.fitted_test_set_id == PREDICTION_ID
         # The prediction has ended: there is nothing left to come back for.
         assert _broke_off_warnings(caplog) == []
-
-    @pytest.mark.parametrize(
-        ("status_code", "message", "error_code", "streamed"),
-        [
-            (409, NEEDS_REFITTING, "NEEDS_REFITTING", False),
-            (409, NEEDS_REFITTING, "", True),
-            (409, STALE_KV_CACHE, "USER_ERROR", False),
-            (409, MISSING_KV_CACHE, "", True),
-            (400, STALE_KV_CACHE, "USER_ERROR", False),
-            (400, MISSING_KV_CACHE, "", True),
-        ],
-        ids=[
-            "needs_refitting",
-            "needs_refitting_streamed",
-            "kv_cache",
-            "kv_cache_streamed",
-            "booked_kv_cache",
-            "booked_kv_cache_streamed",
-        ],
-    )
-    def test_a_model_that_can_no_longer_predict_raises_refit_required_error(
-        self, router, status_code, message, error_code, streamed
-    ):
-        # The bodies of a server that predates `PredictFailedErrorResponse`
-        # and KV_CACHE_INVALID: the status and the message tell.
-        _upload_route(router)
-        predict_route = router.post("/tabpfn/predict").mock(
-            return_value=_error(
-                status_code, message, streamed=streamed, error_code=error_code
-            )
-        )
-
-        with pytest.raises(RefitRequiredError) as exc_info:
-            _predict()
-
-        # Only a fast error carries a trace id.
-        assert str(exc_info.value) == (
-            message if streamed else f"{message} Report trace ID: {TRACE_ID}."
-        )
-        # Such a server does not name the prediction.
-        assert exc_info.value.fitted_test_set_id is None
-        assert predict_route.call_count == 1
-
-    @pytest.mark.parametrize(
-        ("status_code", "message", "error_code"),
-        [
-            (409, NEEDS_REFITTING, "NEEDS_REFITTING"),
-            (400, STALE_KV_CACHE, "USER_ERROR"),
-        ],
-        ids=["needs_refitting", "booked_kv_cache"],
-    )
-    def test_warns_of_a_deprecated_client_on_a_refit_answer(
-        self, router, status_code, message, error_code
-    ):
-        _upload_route(router)
-        router.post("/tabpfn/predict").respond(
-            status_code,
-            json={"message": message, "error_code": error_code},
-            headers={"deprecation": "true"},
-        )
-
-        with (
-            pytest.warns(DeprecationWarning, match="tabpfn-client is deprecated"),
-            pytest.raises(RefitRequiredError),
-        ):
-            _predict()
 
     @pytest.mark.parametrize(
         ("status_code", "message", "streamed", "expected"),
@@ -899,8 +814,30 @@ class TestPredict:
                 True,
                 "Fail to call predict with error: streamed, Internal server error.",
             ),
+            # A refit names the prediction: neither the status nor the refit
+            # text makes one of a body that does not.
+            (
+                409,
+                STALE_KV_CACHE,
+                False,
+                f"Fail to call predict: [HTTP 409] {STALE_KV_CACHE}. Report trace "
+                f"ID: {TRACE_ID}.",
+            ),
+            (
+                409,
+                STALE_KV_CACHE,
+                True,
+                f"Fail to call predict with error: streamed, {STALE_KV_CACHE}",
+            ),
         ],
-        ids=["fast_400", "fast_422", "streamed_400", "streamed_500"],
+        ids=[
+            "fast_400",
+            "fast_422",
+            "streamed_400",
+            "streamed_500",
+            "unnamed_refit",
+            "unnamed_refit_streamed",
+        ],
     )
     def test_other_errors_are_raised_as_before(
         self, router, status_code, message, streamed, expected
@@ -1009,12 +946,9 @@ class TestAFailureReportedOnTheRequest:
             (409, NEEDS_REFITTING, "NEEDS_REFITTING", RefitRequiredError),
             (409, STALE_KV_CACHE, "KV_CACHE_INVALID", RefitRequiredError),
             (409, MISSING_KV_CACHE, "KV_CACHE_INVALID", RefitRequiredError),
-            # The code decides, not the status.
+            # The code decides, not the status or the message.
             (409, "Conflict", "USER_ERROR", PredictFailedError),
-            # A server whose worker predates KV_CACHE_INVALID, as it answers
-            # and as it books the failure: only the message tells.
-            (409, STALE_KV_CACHE, "USER_ERROR", RefitRequiredError),
-            (400, MISSING_KV_CACHE, "USER_ERROR", RefitRequiredError),
+            (409, STALE_KV_CACHE, "USER_ERROR", PredictFailedError),
         ],
         ids=[
             "internal_error",
@@ -1025,8 +959,7 @@ class TestAFailureReportedOnTheRequest:
             "stale_kv_cache",
             "missing_kv_cache",
             "conflict_without_a_refit_code",
-            "kv_cache_from_an_older_worker",
-            "booked_kv_cache_from_an_older_worker",
+            "refit_text_without_a_refit_code",
         ],
     )
     def test_a_failed_predict_raises_what_a_poll_raises(
@@ -1053,34 +986,27 @@ class TestAFailureReportedOnTheRequest:
         # The prediction has ended: there is nothing left to come back for.
         assert _broke_off_warnings(caplog) == []
 
-    @STREAMED
-    def test_a_body_without_the_id_is_recognized_as_before(self, router, streamed):
-        # A server with KV_CACHE_INVALID that does not name the prediction.
-        _upload_route(router)
-        if streamed:
-            envelope = {"_streamed_error": True, "status_code": 409}
-            body = {"detail": STALE_KV_CACHE, "error_code": "KV_CACHE_INVALID"}
-            response = _json(200, envelope | body, keepalive=b"   ")
-        else:
-            response = _error(409, STALE_KV_CACHE, error_code="KV_CACHE_INVALID")
-        router.post("/tabpfn/predict").mock(return_value=response)
-
-        with pytest.raises(RefitRequiredError) as exc_info:
-            _predict()
-
-        assert exc_info.value.fitted_test_set_id is None
-
-    def test_warns_of_a_deprecated_client_on_a_failed_job(self, router):
+    @pytest.mark.parametrize(
+        ("status_code", "message", "error_code", "expected"),
+        [
+            (503, "Overloaded", "BUSY", PredictFailedError),
+            (409, NEEDS_REFITTING, "NEEDS_REFITTING", RefitRequiredError),
+        ],
+        ids=["busy", "needs_refitting"],
+    )
+    def test_warns_of_a_deprecated_client_on_a_failed_job(
+        self, router, status_code, message, error_code, expected
+    ):
         _upload_route(router)
         router.post("/tabpfn/predict").mock(
             return_value=_job_failure(
-                503, "Overloaded", "BUSY", headers={"deprecation": "true"}
+                status_code, message, error_code, headers={"deprecation": "true"}
             )
         )
 
         with (
             pytest.warns(DeprecationWarning, match="tabpfn-client is deprecated"),
-            pytest.raises(PredictFailedError),
+            pytest.raises(expected),
         ):
             _predict()
 

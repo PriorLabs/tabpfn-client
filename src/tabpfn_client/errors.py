@@ -61,7 +61,7 @@ class PredictFailedError(RuntimeError):
     whether the server reports the failure in answer to the prediction request
     itself or to a poll for the prediction. The message holds the server's
     reason and its error code, and ``fitted_test_set_id`` the id of the
-    prediction, or None if the server did not name it.
+    prediction.
     """
 
     # The default lets pickle and copy rebuild the error from its message, as
@@ -73,7 +73,7 @@ class PredictFailedError(RuntimeError):
         Args:
             message: The error message.
             fitted_test_set_id: The id of the prediction that failed, or None if
-                the server did not name it.
+                it is not known.
         """
         super().__init__(message)
         self.fitted_test_set_id = fitted_test_set_id
@@ -85,10 +85,8 @@ class RefitRequiredError(PredictFailedError):
     Raised by ``predict()``, ``submit_predict()`` and ``wait_for_predict()``
     when the server cannot predict with the fit ``model_id_`` refers to: an
     earlier version of the service created it, or its cached state is no longer
-    valid. The message holds the server's reason. A server that predates
-    ``PredictFailedErrorResponse`` does not name the prediction when it asks for
-    a new fit in answer to the prediction request, so ``fitted_test_set_id`` can
-    be None.
+    valid. The server's error code says which: ``NEEDS_REFITTING`` or
+    ``KV_CACHE_INVALID``. The message holds the server's reason.
     """
 
     pass
