@@ -140,42 +140,6 @@ Notes:
 - Predictions are the same either way — caching changes the speed, not the model.
 - Not compatible with thinking mode.
 
-## API Mode
-
-`api_mode` sets how `fit()` and `predict()` run on the server. In every mode they return once the work is done.
-
-- `"sync"`: one request, which the client keeps open until the server answers.
-- `"async"`: the server runs the work as a background job, and the client polls it until it is done.
-- `"auto"` (the default): a fit runs as a background job when its training data is large. A prediction runs as a background job when the fit's training rows or the rows to predict reach thresholds that the server sets; a model fitted with `fit_mode="fit_with_cache"` predicts with one request.
-
-```python
-from tabpfn_client import TabPFNRegressor
-
-model = TabPFNRegressor(api_mode="async")
-```
-
-Notes:
-
-- A thinking-mode fit always runs as a background job, whatever `api_mode` is.
-- A prediction that takes longer than the server waits on one request continues as a background job, which the client polls.
-- Against a server that does not run predictions as background jobs, `predict()` sends one request in every mode, and `submit_predict()` raises `RuntimeError`.
-- `predict()` raises `PredictFailedError` when the server reports that a prediction it created failed, in answer to the prediction request or to a poll for it. Its `fitted_test_set_id` is the id of the prediction, or `None` if the server did not name it, as an older server does not when it asks for a new fit. Another failed request raises `RuntimeError`. `PredictFailedError` is a `RuntimeError`, so `except RuntimeError` handles both. If the fitted model can no longer predict, for example because an earlier version of the service fitted it, `predict()` raises `RefitRequiredError`, a subclass of `PredictFailedError`: call `fit()` again.
-- The server runs and bills a background job even if the wait for it stops, for example with a timeout or an interrupt. The client then logs the id of the prediction as a warning, and the server keeps its result for about a day: see [Fetching a prediction by its id](#fetching-a-prediction-by-its-id).
-
-### Fetching a prediction by its id
-
-The client logs the id of a prediction as a warning when it stops waiting for the prediction, or when a model drops a pending prediction. For about a day, `InferenceClient.wait_for_predict()` returns the result for that id, in any process:
-
-```python
-import tabpfn_client
-from tabpfn_client.service_wrapper import InferenceClient
-
-tabpfn_client.init()
-result = InferenceClient.wait_for_predict("<id>")  # the id from the warning
-```
-
-It returns a `PredictionResult` with the server's raw output in `result.y_pred`. For a regressor's `"quantiles"` and `"full"` outputs, this output is not shaped as `predict()` shapes it. While a model still holds the prediction, after a `TimeoutError` or an interrupt in its `wait_for_predict()`, call `model.wait_for_predict()` again instead: see [Submitting a prediction and waiting for it later](#submitting-a-prediction-and-waiting-for-it-later).
-
 ## Saving and Loading Fitted Models
 
 A fit lives on the TabPFN server, so a fitted estimator can be saved without its training data and loaded in a later run — or on another machine — to predict without fitting again. This pays off most when the fit was expensive (thinking mode) or when you predict many times against one fit (`fit_mode="fit_with_cache"`).
@@ -256,19 +220,10 @@ model = TabPFNClassifier.load_model("model.json")
 # Returns without waiting for the prediction.
 model.submit_predict(X_test, output_type="probas")
 # ... other work ...
-probabilities = model.wait_for_predict()  # what model.predict_proba(X_test) returns
+predictions = model.wait_for_predict()  # what model.predict_proba(X_test) returns
 ```
 
 `submit_predict()` takes the arguments of `predict()` (a classifier's also takes `output_type`), and `wait_for_predict()` returns what `predict()` returns for them. A classifier's `output_type` is `"preds"` (the default: the class labels) or `"probas"` (what `predict_proba()` returns).
-
-Notes:
-
-- `submit_predict()` checks and uploads the data as `predict()` does, and needs a completed fit. The server always runs a submitted prediction as a background job, whatever `api_mode` is.
-- A model holds one pending prediction. A new `submit_predict()` replaces it, and a new fit drops it; both log the id of the dropped prediction as a warning, which [Fetching a prediction by its id](#fetching-a-prediction-by-its-id) uses. The server runs and bills a prediction whether or not anyone waits for it.
-- The server keeps the result of a prediction for about a day. A pickled or copied model keeps its pending prediction; `save_model()` and `clone()` do not.
-- If the server reports that the prediction failed, `wait_for_predict()` raises `PredictFailedError`, or `RefitRequiredError` if the model must be fitted again. `submit_predict()` raises them too, if the server reports the failure at once, for example because it could not queue the prediction. If the server no longer has the prediction, for example because its result is no longer stored, `wait_for_predict()` raises `RuntimeError`. In these cases, the model no longer holds the prediction. After any other error, such as a `TimeoutError` or an interrupt, the model still holds it: call `wait_for_predict()` again.
-- For a regressor's `"full"` output that the server cannot send in one response, `submit_predict()` raises `ValueError`; `predict()` splits such an output over several requests.
-- `submit_predict()` and `wait_for_predict()` are not part of the scikit-learn API.
 
 ## Timings
 
