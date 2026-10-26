@@ -517,9 +517,7 @@ class TestResolvePredictMode:
             ("auto", 1, ApiMode.SYNC),
         ],
     )
-    def test_takes_the_mode_as_the_plain_string_load_model_restores(
-        self, api_mode, n_train_rows, expected
-    ):
+    def test_takes_the_mode_as_a_plain_string(self, api_mode, n_train_rows, expected):
         mode = _resolve(api_mode, n_train_rows=n_train_rows)
 
         assert mode is expected

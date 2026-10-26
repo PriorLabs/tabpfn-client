@@ -42,12 +42,16 @@ from typing_extensions import Self
 
 from tabpfn_client.api_models import FitStatus, PredictionTask
 
-# Constructor params that describe the connection rather than the model. They
-# are left out of the record, and a record that carries them is rejected:
-# `client_options` holds per-session headers and timeouts (and is not JSON), and
-# a loaded estimator should run with the defaults of the process it is loaded
-# into.
-_TRANSPORT_PARAMS = frozenset({"client_options"})
+# Constructor params that describe the connection rather than the model: they
+# change how the client talks to the server, never what the server computes.
+# They are left out of the record, so that a loaded estimator runs with the
+# defaults of the process it is loaded into. `client_options` holds per-session
+# headers and timeouts (and is not JSON), and `api_mode` how the client sends
+# requests.
+_TRANSPORT_PARAMS = frozenset({"client_options", "api_mode"})
+# The ones a record may still carry, which loading drops: tabpfn-client 0.6
+# saved `api_mode`. A record that carries any other is rejected.
+_DROPPED_TRANSPORT_PARAMS = frozenset({"api_mode"})
 
 
 @dataclass(frozen=True)
@@ -219,7 +223,9 @@ class ModelPersistenceMixin(BaseEstimator):
         The fit itself lives on the TabPFN server; what is saved is a small,
         human-readable record: the id the server assigned to the fit
         (`model_id_`), the estimator's hyperparameters, a classifier's class
-        labels and the training-set size. No training data is included.
+        labels and the training-set size. No training data is included, nor
+        `api_mode` and `client_options`, which describe how the client talks to
+        the server: the loading process sets its own.
 
         `load_model()` turns the record back into a fitted estimator, in a
         later run or on another machine. Fitted models are only visible to the
@@ -275,7 +281,10 @@ class ModelPersistenceMixin(BaseEstimator):
         """Re-create a fitted estimator from a record written by `save_model()`.
 
         The estimator comes back with the saved hyperparameters and fitted
-        state, ready to `predict()` without calling `fit()`. No request is made
+        state, ready to `predict()` without calling `fit()`, and with the
+        default `api_mode` and `client_options`: set them on the loaded
+        estimator to change them. A record from tabpfn-client 0.6 that holds
+        `api_mode` loads too, without it. No request is made
         here; the first `predict()` authenticates (like `fit()` would) and
         raises `FittedModelNotFoundError` if the server no longer has the model.
 
@@ -304,7 +313,10 @@ class ModelPersistenceMixin(BaseEstimator):
             raise ValueError(
                 f"Cannot load a {record.task.value} model into {cls.__name__}."
             )
-        transport = _TRANSPORT_PARAMS & set(record.params)
+        params = {
+            k: v for k, v in record.params.items() if k not in _DROPPED_TRANSPORT_PARAMS
+        }
+        transport = _TRANSPORT_PARAMS & set(params)
         if transport:
             raise ValueError(
                 f"Cannot load this model into {cls.__name__}: {sorted(transport)} "
@@ -319,7 +331,7 @@ class ModelPersistenceMixin(BaseEstimator):
         # server computes. Dropping it would give different predictions from the
         # ones the user validated when saving, with no signal. Unlike xgboost or
         # CatBoost files, nothing else (no weights) pins the behaviour.
-        unknown = set(record.params) - set(cls._get_param_names())
+        unknown = set(params) - set(cls._get_param_names())
         if unknown:
             advice = "Drop them from the record."
             installed = _installed_version()
@@ -335,7 +347,7 @@ class ModelPersistenceMixin(BaseEstimator):
             )
         # Deep-copied so that estimators loaded from the same dict share nothing
         # mutable with it, or with each other (as `sklearn.base.clone` does).
-        estimator = cls(**copy.deepcopy(record.params))
+        estimator = cls(**copy.deepcopy(params))
         estimator.model_id_ = record.model_id
         estimator._n_train_rows = record.n_train_rows
         if record.classes is not None:

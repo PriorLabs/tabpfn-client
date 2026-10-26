@@ -490,8 +490,8 @@ class ServiceClient(Singleton):
         when the server's settings are unavailable.
 
         Args:
-            api_mode: The requested mode; a plain string works too, as
-                `load_model()` restores the estimator's `api_mode` as one.
+            api_mode: The requested mode; a plain string works too, as an
+                estimator keeps the `api_mode` it is given, `"auto"` say.
             n_train_rows: The fit's train rows, or None if unknown, in which
                 case the test rows decide alone.
             n_test_rows: The number of rows to predict.

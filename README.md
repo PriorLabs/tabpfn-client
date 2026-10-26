@@ -156,7 +156,7 @@ model = TabPFNClassifier.load_model("model.json")
 model.predict(X_test)
 ```
 
-`save_model()` writes a small JSON record: the id of the fitted model, the hyperparameters, the class labels and the training-set size, and whether the fit or a prediction is still pending. It also returns that record as a dict, so it can be kept elsewhere (a database, an experiment tracker) and passed to `load_model()` directly.
+`save_model()` writes a small JSON record: the id of the fitted model, the hyperparameters, the class labels and the training-set size, and whether the fit or a prediction is still pending. It leaves out `api_mode` and `client_options`, which describe how the client talks to the server: a loaded model uses those of the process that loads it. `save_model()` also returns that record as a dict, so it can be kept elsewhere (a database, an experiment tracker) and passed to `load_model()` directly.
 
 Notes:
 

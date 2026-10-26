@@ -295,6 +295,8 @@ class TestFit:
         model = _submitted(estimator_cls, y, api_mode=ApiMode.SYNC)
         if pending == "loaded":
             model = estimator_cls.load_model(model.save_model())
+            # The record leaves the mode to the process that loads it.
+            model.set_params(api_mode=ApiMode.SYNC)
 
         with _offline_server() as server:
             server.fit.side_effect = lambda *args, **kwargs: FitResponse(
