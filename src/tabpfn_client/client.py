@@ -1298,7 +1298,7 @@ class ServiceClient(Singleton):
                     predict_resp.fitted_test_set_id,
                 )
             case PredictPendingResponse():
-                logger.info(
+                logger.debug(
                     f"Prediction {predict_resp.fitted_test_set_id} is still "
                     "running on the server; polling for its result."
                 )
