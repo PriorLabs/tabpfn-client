@@ -279,8 +279,8 @@ def _malformed_poll_body(
 def _resume_hint(fitted_test_set_id: UUID) -> str:
     """Say how any process gets the result of a prediction, for a log message."""
     return (
-        "its result stays on the server for about a day: call "
-        "tabpfn_client.init(), then tabpfn_client.service_wrapper."
+        "its result stays on the server for at least a day after it completes: "
+        "call tabpfn_client.init(), then tabpfn_client.service_wrapper."
         f'InferenceClient.wait_for_predict("{fitted_test_set_id}")'
     )
 
@@ -294,7 +294,8 @@ def _warn_stopped_waiting(fitted_test_set_id: UUID) -> None:
     logger.warning(
         f"Stopped waiting for prediction {fitted_test_set_id}. If it is "
         "still running, the server completes it and bills it even if "
-        f"nobody waits for it; {_resume_hint(fitted_test_set_id)}"
+        "nobody waits for it. A model that holds it as pending waits for it "
+        f"again with wait_for_predict(); otherwise, {_resume_hint(fitted_test_set_id)}"
     )
 
 
@@ -350,6 +351,20 @@ class ResolvedAsyncSettings:
 
     use_above_trainset_size_bytes: int
     poll_timeout_secs: float
+
+
+@dataclass(frozen=True)
+class _PredictJob:
+    """A prediction the server runs as a background job, for the client to poll.
+
+    Attributes:
+        fitted_test_set_id: The id of the prediction.
+        first_poll_delay_secs: How long to wait before the first poll: what a
+            pending answer advises, or 0 for a job just submitted.
+    """
+
+    fitted_test_set_id: UUID
+    first_poll_delay_secs: float = 0.0
 
 
 class ServiceClient(Singleton):
@@ -1045,6 +1060,7 @@ class ServiceClient(Singleton):
         api_mode: ApiMode = ApiMode.SYNC,
         n_train_rows: int | None = None,
         thinking: bool = False,
+        on_accepted: Callable[[UUID | None], None] | None = None,
     ) -> PredictionResult:
         """Upload a test set and predict it with a fitted train set.
 
@@ -1065,6 +1081,10 @@ class ServiceClient(Singleton):
             api_mode: The API mode to use for the prediction: SYNC, ASYNC, or AUTO.
             n_train_rows: The fit's train rows, for AUTO; None if unknown.
             thinking: Whether the fit runs in thinking mode, for AUTO.
+            on_accepted: Called once the server has accepted the prediction:
+                with its id before the client polls for it, when it runs as a
+                background job, or with None once the server has answered with
+                the prediction itself. Not called if the request fails first.
 
         Returns:
             The result from the predict API call containing the prediction,
@@ -1091,8 +1111,16 @@ class ServiceClient(Singleton):
             n_train_rows=n_train_rows,
             thinking=thinking,
         )
-        if isinstance(started, UUID):
-            return cls._await_prediction(started, client_options)
+        if isinstance(started, _PredictJob):
+            if on_accepted is not None:
+                on_accepted(started.fitted_test_set_id)
+            return cls._await_prediction(
+                started.fitted_test_set_id,
+                client_options,
+                first_poll_delay_secs=started.first_poll_delay_secs,
+            )
+        if on_accepted is not None:
+            on_accepted(None)
         return started
 
     @classmethod
@@ -1106,6 +1134,7 @@ class ServiceClient(Singleton):
         api_mode: ApiMode = ApiMode.SYNC,
         n_train_rows: int | None = None,
         thinking: bool = False,
+        on_accepted: Callable[[UUID | None], None] | None = None,
     ) -> list[PredictionResult]:
         """Predict several test sets with one fitted train set, as `predict` does each.
 
@@ -1125,6 +1154,8 @@ class ServiceClient(Singleton):
             api_mode: The API mode for each test set: SYNC, ASYNC, or AUTO.
             n_train_rows: The fit's train rows, for AUTO; None if unknown.
             thinking: Whether the fit runs in thinking mode, for AUTO.
+            on_accepted: Called once the server has accepted each test set's
+                prediction, as `predict` calls it.
 
         Returns:
             One result per test set, in the order of ``x_chunks``.
@@ -1162,9 +1193,15 @@ class ServiceClient(Singleton):
                     n_train_rows=n_train_rows,
                     thinking=thinking,
                 )
-                if isinstance(started, UUID):
-                    in_flight.append((index, started))
+                if isinstance(started, _PredictJob):
+                    if on_accepted is not None:
+                        on_accepted(started.fitted_test_set_id)
+                    # Polled in turn, after the jobs started before it: by then
+                    # the server's advice on when to poll first is out of date.
+                    in_flight.append((index, started.fitted_test_set_id))
                 else:
+                    if on_accepted is not None:
+                        on_accepted(None)
                     results[index] = started
             while in_flight:
                 oldest, fitted_test_set_id = in_flight.popleft()
@@ -1189,12 +1226,13 @@ class ServiceClient(Singleton):
         api_mode: ApiMode,
         n_train_rows: int | None,
         thinking: bool,
-    ) -> UUID | PredictionResult:
+    ) -> _PredictJob | PredictionResult:
         """Upload a test set, and predict it with one request or start it as a job.
 
         Returns:
-            The prediction, if predicted with one request, or else the id of
-            the background job to wait for.
+            The prediction, if the server answered with it, or else the
+            background job to wait for: one submitted as such, or one the
+            server answered was still running when it stopped waiting for it.
         """
         api_mode = ApiMode(api_mode)
         test_set_upload_id = cls._upload_test_set(
@@ -1221,7 +1259,7 @@ class ServiceClient(Singleton):
                 headers=client_options.headers,
             )
             if submit_resp is not None:
-                return submit_resp.fitted_test_set_id
+                return _PredictJob(submit_resp.fitted_test_set_id)
             # The cached settings promised background jobs that this server
             # (rolled back, say) does not run. It created no job, so one request
             # with the same upload predicts, and bills, once.
@@ -1265,9 +1303,8 @@ class ServiceClient(Singleton):
                     f"Prediction {predict_resp.fitted_test_set_id} is still "
                     "running on the server; polling for its result."
                 )
-                return cls._await_prediction(
+                return _PredictJob(
                     predict_resp.fitted_test_set_id,
-                    client_options,
                     first_poll_delay_secs=predict_resp.retry_in_secs,
                 )
             case _:
@@ -1331,9 +1368,10 @@ class ServiceClient(Singleton):
     ) -> PredictionResult:
         """Wait for a prediction the server accepted, and return it.
 
-        Polls the server until the prediction has completed. The server keeps a
-        prediction for about a day, so this also returns the result of a
-        prediction whose wait broke off, given its id.
+        Polls the server until the prediction has completed. The server keeps
+        the result for at least a day after the prediction completes, so this
+        also returns the result of a prediction whose wait broke off, given
+        its id.
 
         Args:
             fitted_test_set_id: The id of the prediction, as a UUID or a string.

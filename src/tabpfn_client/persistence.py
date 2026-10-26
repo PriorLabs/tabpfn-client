@@ -20,7 +20,8 @@ The same record lets a fit outlive the process that started it. The server
 assigns the id when it accepts a fit, before it runs it, so a model that
 `submit_fit()` left pending can be saved too. Its record says the fit is
 pending, and `load_model()` restores it as such, without asking the server
-about it, for `wait_for_fit()` to wait for.
+about it, for `wait_for_fit()` to wait for. A pending prediction travels the
+same way: the record holds its id, for `wait_for_predict()` to wait for.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID, uuid4
@@ -46,6 +48,22 @@ from tabpfn_client.api_models import FitStatus, PredictionTask
 # a loaded estimator should run with the defaults of the process it is loaded
 # into.
 _TRANSPORT_PARAMS = frozenset({"client_options"})
+
+
+@dataclass(frozen=True)
+class _PendingPredict:
+    """A prediction the model holds until `wait_for_predict()` returns it.
+
+    One `submit_predict()` started, or one `predict()` stopped waiting for.
+
+    Attributes:
+        fitted_test_set_id: The id of the prediction.
+        output_type: The output it was asked for, which shapes what
+            `wait_for_predict()` returns.
+    """
+
+    fitted_test_set_id: UUID
+    output_type: str
 
 
 class _ModelRecord(BaseModel):
@@ -69,6 +87,9 @@ class _ModelRecord(BaseModel):
     # is never saved. Records written before this field existed only held
     # completed fits.
     fit_status: Literal[FitStatus.PENDING, FitStatus.COMPLETED] = FitStatus.COMPLETED
+    # The prediction the model held when the record was saved, which the server
+    # may still be running. Records written before this field existed held none.
+    pending_prediction: _PendingPredict | None = None
 
 
 def _task_of(estimator_cls: type) -> PredictionTask:
@@ -178,6 +199,12 @@ class ModelPersistenceMixin(BaseEstimator):
     # fit, until `wait_for_fit()` sees the fit complete.
     _fit_pending: bool = False
 
+    # The prediction that `submit_predict()` started, or that `predict()`
+    # stopped waiting for, until `wait_for_predict()` returns it. Class-level
+    # default so estimators pickled before this attribute existed read it as
+    # None.
+    _pending_predict: _PendingPredict | None = None
+
     # NOTE: Some "*_" attributes may be assigned before a fit succeeds (it used
     # to be the case for `classes_`), so we override sklearn's default of
     # inferring fittedness from any "*_" attribute and use `model_id_` as the
@@ -201,9 +228,11 @@ class ModelPersistenceMixin(BaseEstimator):
         data remains on the server (see `UserDataClient` to delete it).
 
         A model `submit_fit()` left pending is saved too, as a pending fit, so
-        that a later run can load it and `wait_for_fit()`. A prediction
-        `submit_predict()` left pending is not saved: the loaded model has no
-        prediction to wait for.
+        that a later run can load it and `wait_for_fit()`. So is a pending
+        prediction, one `submit_predict()` started or `predict()` stopped
+        waiting for: a later run can load the model and `wait_for_predict()`,
+        for at least a day after the prediction completes, while the server
+        keeps its result.
 
         Args:
             path: Where to write the record as JSON. Nothing is written when
@@ -235,6 +264,7 @@ class ModelPersistenceMixin(BaseEstimator):
             n_train_rows=self._n_train_rows,
             classes=None if classes is None else np.asarray(classes).tolist(),
             fit_status=FitStatus.PENDING if self._fit_pending else FitStatus.COMPLETED,
+            pending_prediction=self._pending_predict,
         ).model_dump(mode="json")
         if path is not None:
             _write_record(path, record)
@@ -251,7 +281,8 @@ class ModelPersistenceMixin(BaseEstimator):
 
         A record of a fit that was still pending when it was saved comes back
         pending, as `submit_fit()` left it: call `wait_for_fit()` before
-        `predict()`.
+        `predict()`. A record that holds a pending prediction comes back
+        holding it, for `wait_for_predict()`.
 
         Args:
             source: The path of a file written by `save_model(path)`, or the
@@ -310,4 +341,6 @@ class ModelPersistenceMixin(BaseEstimator):
         if record.classes is not None:
             setattr(estimator, "classes_", np.asarray(record.classes))
         estimator._fit_pending = record.fit_status == FitStatus.PENDING
+        if record.pending_prediction is not None:
+            estimator._pending_predict = record.pending_prediction
         return estimator

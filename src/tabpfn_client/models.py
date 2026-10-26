@@ -39,7 +39,8 @@ class PredictionResult:
             reports none.
         fitted_test_set_id: The server's id of the prediction, which
             `InferenceClient.wait_for_predict()` takes to fetch it again for
-            about a day; None when the server reports none.
+            at least a day after it completes; None when the server reports
+            none.
     """
 
     y_pred: np.ndarray | list[np.ndarray] | dict[str, np.ndarray]

@@ -2,7 +2,8 @@
 #  Licensed under the Apache License, Version 2.0
 """`submit_predict()` / `wait_for_predict()`: a prediction started without
 waiting for it, the pending prediction the model holds until it is waited for,
-and what `predict()` gives the client to route each prediction by.
+which `predict()` replaces and holds while it waits as `fit()` holds a fit, and
+what `predict()` gives the client to route each prediction by.
 
 Hermetic by default: `init` and the `InferenceClient` boundary are patched. The
 tests that take `mock_server` run the real HTTP layer: for poll answers that
@@ -48,6 +49,7 @@ from tabpfn_client.constants import CACHE_DIR
 from tabpfn_client.errors import PredictionGoneError
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
 from tabpfn_client.models import ApiMode, PredictionResult
+from tabpfn_client.persistence import _PendingPredict
 from tabpfn_client.service_wrapper import InferenceClient, UserAuthenticationClient
 from tests.mock_tabpfn_server import MockTabPFNServer
 from tests.unit.test_client import _api_settings_payload, _FakeTime
@@ -70,8 +72,9 @@ NEEDS_REFITTING = (
 )
 # What a new process runs to get a prediction the model no longer holds.
 RESUME_HINT = (
-    "its result stays on the server for about a day: call tabpfn_client.init(), "
-    "then tabpfn_client.service_wrapper.InferenceClient.wait_for_predict("
+    "its result stays on the server for at least a day after it completes: call "
+    "tabpfn_client.init(), then "
+    "tabpfn_client.service_wrapper.InferenceClient.wait_for_predict("
     f'"{PREDICTION_ID}")'
 )
 
@@ -150,10 +153,11 @@ def _offline_server(
     """Run the estimators with no network: no auth, mocked inference.
 
     The server fits every model as `FIT_ID`, completed unless it runs as a
-    background job, which waiting finds completed, and accepts every submitted prediction as `PREDICTION_ID`. A prediction,
-    whether predicted with one request or waited for, is `y_pred()` with
-    `METADATA` and `TIMINGS`. `settings` are what `get_settings` returns; None
-    leaves the model limits unchecked.
+    background job, which waiting finds completed, and accepts every submitted
+    prediction as `PREDICTION_ID`. `predict()` gets its prediction answered
+    with one request. A prediction, whether predicted with one request or
+    waited for, is `y_pred()` with `METADATA` and `TIMINGS`. `settings` are
+    what `get_settings` returns; None leaves the model limits unchecked.
     """
     use_server_before = Config.use_server
     Config.use_server = True
@@ -168,7 +172,13 @@ def _offline_server(
             fitted_train_set_id=fit_id, status=FitStatus.COMPLETED
         )
 
-    def prediction(*args: Any, **kwargs: Any) -> PredictionResult:
+    def prediction(
+        *args: Any,
+        on_accepted: Callable[[UUID | None], None] | None = None,
+        **kwargs: Any,
+    ) -> PredictionResult:
+        if on_accepted is not None:
+            on_accepted(None)
         return PredictionResult(y_pred=y_pred(), metadata=METADATA, timings=TIMINGS)
 
     try:
@@ -226,6 +236,24 @@ def _pending_id(model: Any) -> UUID | None:
     """The id of the prediction the model holds, or None if it holds none."""
     pending = model._pending_predict
     return None if pending is None else pending.fitted_test_set_id
+
+
+def _accepted_then(
+    outcome: BaseException | None,
+    fitted_test_set_id: UUID | None = NEW_PREDICTION_ID,
+) -> Callable[..., PredictionResult]:
+    """A predict request the server accepts, as `fitted_test_set_id` if it runs
+    as a background job, and whose wait then raises `outcome`, or returns."""
+
+    def predict(
+        *args: Any, on_accepted: Callable[[UUID | None], None], **kwargs: Any
+    ) -> PredictionResult:
+        on_accepted(fitted_test_set_id)
+        if outcome is not None:
+            raise outcome
+        return PredictionResult(y_pred=np.zeros(3), metadata=METADATA, timings=TIMINGS)
+
+    return predict
 
 
 def _dropped(caplog: pytest.LogCaptureFixture) -> list[str]:
@@ -442,6 +470,28 @@ class TestSubmitPredict:
         with _offline_server() as server:
             duplicate(model).wait_for_predict()
 
+        assert server.wait.call_args.args == (PREDICTION_ID,)
+
+    @OUTPUTS
+    @NO_CRITERION
+    def test_save_model_saves_the_pending_prediction(
+        self, estimator_cls, y, output_type, predict_kwargs, tmp_path
+    ):
+        model = _fitted(estimator_cls, y)
+        path = tmp_path / "model.json"
+        with _offline_server():
+            model.submit_predict(X_TEST, output_type=output_type, **predict_kwargs)
+        model.save_model(path)
+
+        loaded = estimator_cls.load_model(path)
+
+        assert _read(path)["pending_prediction"] == {
+            "fitted_test_set_id": str(PREDICTION_ID),
+            "output_type": output_type,
+        }
+        assert loaded._pending_predict == model._pending_predict
+        with _offline_server() as server:
+            loaded.wait_for_predict()
         assert server.wait.call_args.args == (PREDICTION_ID,)
 
     def test_a_clone_holds_no_pending_prediction(self):
@@ -704,15 +754,154 @@ class TestPredict:
         assert changed == {"_last_meta", "_last_timings"}
 
     @ESTIMATORS
-    def test_leaves_a_pending_prediction_alone(self, estimator_cls, y):
+    def test_replaces_the_pending_prediction(self, estimator_cls, y, caplog):
         model = _fitted(estimator_cls, y)
 
         with _offline_server() as server:
             model.submit_predict(X_TEST)
             model.predict(X_TEST)
+            with pytest.raises(RuntimeError, match="no prediction to wait for"):
+                model.wait_for_predict()
+
+        server.wait.assert_not_called()
+        [dropped] = _dropped(caplog)
+        assert dropped.startswith(
+            f"Prediction {PREDICTION_ID} is no longer pending on this "
+            f"{estimator_cls.__name__}: predict() started a new one."
+        )
+        assert dropped.endswith(RESUME_HINT)
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            RuntimeError("Fail to call predict: [HTTP 429] Too many."),
+            KeyboardInterrupt(),
+        ],
+        ids=["refused", "interrupted"],
+    )
+    def test_a_predict_the_server_did_not_accept_keeps_the_pending_prediction(
+        self, failure, caplog
+    ):
+        model = _fitted()
+
+        with _offline_server() as server:
+            model.submit_predict(X_TEST)
+            server.predict.side_effect = failure
+            with pytest.raises(type(failure)):
+                model.predict(X_TEST)
             model.wait_for_predict()
 
         assert server.wait.call_args.args == (PREDICTION_ID,)
+        assert _dropped(caplog) == []
+
+    @pytest.mark.parametrize(
+        ("estimator_cls", "y", "predict", "output_type"),
+        [
+            (TabPFNClassifier, Y_TRAIN, lambda m: m.predict_proba(X_TEST), "probas"),
+            (
+                TabPFNRegressor,
+                Y_TRAIN_REGRESSION,
+                lambda m: m.predict(X_TEST, output_type="median"),
+                "median",
+            ),
+        ],
+        ids=["classifier", "regressor"],
+    )
+    @pytest.mark.parametrize(
+        "stop",
+        [
+            TimeoutError("did not complete within the poll timeout"),
+            KeyboardInterrupt(),
+            RuntimeError("Polling prediction failed 4 times in a row"),
+        ],
+        ids=["timeout", "interrupt", "poll_errors"],
+    )
+    def test_a_wait_that_stops_leaves_its_prediction_pending(
+        self, estimator_cls, y, predict, output_type, stop, caplog
+    ):
+        model = _fitted(estimator_cls, y)
+
+        with _offline_server() as server:
+            model.submit_predict(X_TEST)
+            server.predict.side_effect = _accepted_then(stop)
+            with pytest.raises(type(stop)):
+                predict(model)
+
+            # As `fit()` leaves its fit pending, for `wait_for_fit()`.
+            assert model._pending_predict == _PendingPredict(
+                NEW_PREDICTION_ID, output_type
+            )
+            assert model.save_model()["pending_prediction"] == {
+                "fitted_test_set_id": str(NEW_PREDICTION_ID),
+                "output_type": output_type,
+            }
+            model.wait_for_predict()
+
+        assert server.wait.call_args.args == (NEW_PREDICTION_ID,)
+        assert _pending_id(model) is None
+        [dropped] = _dropped(caplog)
+        assert dropped.startswith(
+            f"Prediction {PREDICTION_ID} is no longer pending on this "
+            f"{estimator_cls.__name__}: predict() started a new one."
+        )
+
+    @ESTIMATORS
+    @pytest.mark.parametrize(
+        "outcome",
+        [
+            None,
+            PredictFailedError("failed", fitted_test_set_id=NEW_PREDICTION_ID),
+            RefitRequiredError("refit", fitted_test_set_id=NEW_PREDICTION_ID),
+            PredictionGoneError("gone"),
+        ],
+        ids=["completed", "failed", "refit", "gone"],
+    )
+    def test_a_prediction_with_nothing_left_to_wait_for_is_not_pending(
+        self, estimator_cls, y, outcome
+    ):
+        model = _fitted(estimator_cls, y)
+
+        with _offline_server() as server:
+            server.predict.side_effect = _accepted_then(outcome)
+            if outcome is None:
+                model.predict(X_TEST)
+            else:
+                with pytest.raises(type(outcome)):
+                    model.predict(X_TEST)
+
+        assert _pending_id(model) is None
+
+    @NO_CRITERION
+    def test_a_split_full_output_replaces_the_pending_prediction_but_holds_none(
+        self, caplog
+    ):
+        X = np.arange(10, dtype=float).reshape(5, 2)
+        model = _fitted(TabPFNRegressor, Y_TRAIN_REGRESSION, api_mode=ApiMode.ASYNC)
+        settings = _settings(test_set_max_rows_w_full_regression_output=2)
+
+        def predict_chunks(
+            x_chunks: Any, on_accepted: Callable[[UUID | None], None], **kwargs: Any
+        ) -> list[PredictionResult]:
+            on_accepted(NEW_PREDICTION_ID)
+            on_accepted(UUID(int=NEW_PREDICTION_ID.int + 1))
+            raise TimeoutError("did not complete within the poll timeout")
+
+        with (
+            _offline_server(settings=settings),
+            patch.object(InferenceClient, "predict_chunks", side_effect=predict_chunks),
+        ):
+            model.submit_predict(X_TEST)
+            with pytest.raises(TimeoutError):
+                model.predict(X, output_type="full")
+
+        # Several predictions, which one pending prediction cannot stand for:
+        # the client logs their ids instead.
+        assert _pending_id(model) is None
+        [dropped] = _dropped(caplog)
+        assert dropped.startswith(
+            f"Prediction {PREDICTION_ID} is no longer pending on this "
+            "TabPFNRegressor: predict() started a new one."
+        )
 
     @NO_CRITERION
     def test_splits_a_full_output_into_one_request_per_chunk_in_order(self):
@@ -841,7 +1030,7 @@ class TestWithServer:
         ServiceClient._api_settings_ts = 0.0
         shutil.rmtree(CACHE_DIR, ignore_errors=True)
 
-    def test_a_model_fitted_in_one_run_predicts_as_a_background_job_in_a_later_one(
+    def test_a_prediction_submitted_in_one_run_is_waited_for_in_a_later_one(
         self,
         mock_server: MockTabPFNServer,
         tmp_path: Path,
@@ -928,25 +1117,37 @@ class TestWithServer:
             ),
         ]
 
+        def new_process() -> None:
+            Config.is_initialized = False
+            ServiceClient.reset_authorization()
+            ServiceClient._api_settings = None
+
         with patch("tabpfn_client.client.time.sleep") as sleep:
             # A run that fits the model, saves it and ends.
             init(use_server=True)
             TabPFNClassifier().fit(X_TRAIN, Y_TRAIN).save_model(path)
 
             # A later run, in a new process: loading asks nothing, and
-            # submit_predict() returns once the server accepted the prediction.
-            Config.is_initialized = False
-            ServiceClient.reset_authorization()
-            ServiceClient._api_settings = None
+            # submit_predict() returns once the server accepted the prediction,
+            # which save_model() then saves with the model.
+            new_process()
             clf = TabPFNClassifier.load_model(path)
             assert auth_route.call_count == 1
             clf.submit_predict(X_TEST, output_type="probas")
             assert result_route.call_count == 0
-            assert clf.save_model() == _read(path), "a pending prediction isn't saved"
+            clf.save_model(path)
+
+            # A run after that loads the model and waits for its prediction.
+            new_process()
+            clf = TabPFNClassifier.load_model(path)
+            assert _read(path)["pending_prediction"] == {
+                "fitted_test_set_id": prediction_id,
+                "output_type": "probas",
+            }
             result = clf.wait_for_predict()
 
         np.testing.assert_array_equal(result, probabilities)
-        assert auth_route.call_count == 2, "each run authenticates once"
+        assert auth_route.call_count == 3, "each run authenticates once"
         [submitted] = _sent(submit_route)
         assert submitted.keys() == {
             "test_set_upload_id",

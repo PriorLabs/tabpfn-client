@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 import numpy as np
 import pandas as pd
@@ -483,6 +483,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         api_mode: ApiMode = ApiMode.SYNC,
         n_train_rows: int | None = None,
         thinking: bool = False,
+        on_accepted: Callable[[UUID | None], None] | None = None,
     ) -> PredictionResult:
         """Predict on a test set with a fitted train set.
 
@@ -496,6 +497,10 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             api_mode: The API mode to use for the prediction: SYNC, ASYNC, or AUTO.
             n_train_rows: The fit's train rows, for AUTO; None if unknown.
             thinking: Whether the fit runs in thinking mode, for AUTO.
+            on_accepted: Called once the server has accepted the prediction:
+                with its id before the client polls for it, when it runs as a
+                background job, or with None once the server has answered with
+                the prediction itself.
 
         Returns:
             The prediction, its metadata, the server-reported timings and the
@@ -520,6 +525,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             api_mode=api_mode,
             n_train_rows=n_train_rows,
             thinking=thinking,
+            on_accepted=on_accepted,
         )
 
     @classmethod
@@ -533,6 +539,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         api_mode: ApiMode = ApiMode.SYNC,
         n_train_rows: int | None = None,
         thinking: bool = False,
+        on_accepted: Callable[[UUID | None], None] | None = None,
     ) -> list[PredictionResult]:
         """Predict several test sets with one fitted train set.
 
@@ -547,6 +554,8 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             api_mode: The API mode for each test set: SYNC, ASYNC, or AUTO.
             n_train_rows: The fit's train rows, for AUTO; None if unknown.
             thinking: Whether the fit runs in thinking mode, for AUTO.
+            on_accepted: Called once the server has accepted each test set's
+                prediction, as `predict` calls it.
 
         Returns:
             One result per test set, in the order of ``x_chunks``.
@@ -570,6 +579,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             api_mode=api_mode,
             n_train_rows=n_train_rows,
             thinking=thinking,
+            on_accepted=on_accepted,
         )
 
     @classmethod
@@ -616,8 +626,9 @@ class InferenceClient(ServiceClientWrapper, Singleton):
     ) -> PredictionResult:
         """Wait for a prediction the server accepted, and return it.
 
-        Also returns, for about a day, the result of a prediction whose wait
-        broke off, given the id it logged. See `ServiceClient.wait_for_predict`.
+        Also returns, for at least a day after it completes, the result of a
+        prediction whose wait broke off, given the id it logged. See
+        `ServiceClient.wait_for_predict`.
 
         Args:
             fitted_test_set_id: The id of the prediction, as a UUID or a string.

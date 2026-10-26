@@ -43,6 +43,7 @@ from tabpfn_client.client import (
     _MIN_RETRY_INTERVAL_SECS,
     ResolvedAsyncSettings,
     ServiceClient,
+    _PredictJob,
 )
 from tabpfn_client.errors import (
     CappedRetryableServerError,
@@ -112,9 +113,11 @@ NO_PREDICT_JOBS = (
 )
 WAIT_BROKE_OFF = (
     f"Stopped waiting for prediction {PREDICTION_ID}. If it is still running, "
-    "the server completes it and bills it even if nobody waits for it; its "
-    "result stays on the server for about a day: call tabpfn_client.init(), "
-    "then tabpfn_client.service_wrapper.InferenceClient.wait_for_predict("
+    "the server completes it and bills it even if nobody waits for it. A model "
+    "that holds it as pending waits for it again with wait_for_predict(); "
+    "otherwise, its result stays on the server for at least a day after it "
+    "completes: call tabpfn_client.init(), then "
+    "tabpfn_client.service_wrapper.InferenceClient.wait_for_predict("
     f'"{PREDICTION_ID}")'
 )
 
@@ -548,6 +551,48 @@ class TestPredict:
             "fitted_train_set_id": str(FIT_ID),
             "task_config": {"task": "classification"},
         }
+
+    def test_reports_a_prediction_answered_at_once_as_accepted_without_an_id(
+        self, router
+    ):
+        _upload_route(router)
+        router.post("/tabpfn/predict").respond(200, json=_prediction())
+        accepted: list[UUID | None] = []
+
+        _predict(on_accepted=accepted.append)
+
+        # Nothing is left to wait for.
+        assert accepted == [None]
+
+    def test_reports_a_prediction_still_running_as_accepted_before_polling(
+        self, router
+    ):
+        _upload_route(router)
+        router.post("/tabpfn/predict").mock(
+            return_value=_json(200, _predict_pending(4.0))
+        )
+        accepted: list[tuple[UUID | None, int]] = []
+
+        with _polling(router, [_json(200, _completed())]) as (clock, poll_route):
+            _predict(
+                on_accepted=lambda fitted_test_set_id: accepted.append(
+                    (fitted_test_set_id, poll_route.call_count)
+                )
+            )
+
+        assert accepted == [(PREDICTION_ID, 0)]
+        # The first poll still waits for the hint of the pending answer.
+        assert clock.sleeps == [4.0]
+
+    def test_a_request_that_fails_reports_nothing_accepted(self, router):
+        _upload_route(router)
+        router.post("/tabpfn/predict").mock(return_value=_error(422, "invalid"))
+        accepted: list[UUID | None] = []
+
+        with pytest.raises(RuntimeError):
+            _predict(on_accepted=accepted.append)
+
+        assert accepted == []
 
     def test_skips_the_keepalive_pings_before_the_prediction(self, router):
         _upload_route(router)
@@ -1092,6 +1137,24 @@ class TestPredictionJobs:
         assert result.timings == TIMINGS
         assert result.fitted_test_set_id == PREDICTION_ID
 
+    def test_async_reports_the_job_as_accepted_before_polling(self, router):
+        _cache_settings()
+        _upload_route(router)
+        router.post("/tabpfn/submit_predict_job").respond(
+            200, json={"fitted_test_set_id": str(PREDICTION_ID)}
+        )
+        accepted: list[tuple[UUID | None, int]] = []
+
+        with _polling(router, [_json(200, _completed())]) as (_, poll_route):
+            _predict(
+                api_mode=ApiMode.ASYNC,
+                on_accepted=lambda fitted_test_set_id: accepted.append(
+                    (fitted_test_set_id, poll_route.call_count)
+                ),
+            )
+
+        assert accepted == [(PREDICTION_ID, 0)]
+
     def test_a_job_is_submitted_and_polled_with_the_request_timeout_and_headers(
         self, router
     ):
@@ -1470,7 +1533,7 @@ def _chunk_server(
         events.append(f"start {index}")
         if index in (stop_start or {}):
             raise (stop_start or {})[index]
-        return _chunk_result(index) if index in sync else _job_id(index)
+        return _chunk_result(index) if index in sync else _PredictJob(_job_id(index))
 
     def wait(fitted_test_set_id: UUID, *args: Any, **kwargs: Any) -> PredictionResult:
         index = fitted_test_set_id.int - 0x100
@@ -1521,6 +1584,20 @@ class TestPredictChunks:
 
         assert events == ["start 0", "start 1", "start 2", "wait 0", "wait 2"]
         assert [int(cast(np.ndarray, r.y_pred)[0]) for r in results] == [0, 1, 2]
+
+    def test_reports_each_test_set_it_got_accepted_in_order(self):
+        accepted: list[UUID | None] = []
+
+        with _chunk_server(sync=frozenset({1})):
+            ServiceClient.predict_chunks(
+                FIT_ID,
+                (np.full((1, 2), index) for index in range(3)),
+                ClassifierConfig(),
+                api_mode=ApiMode.ASYNC,
+                on_accepted=accepted.append,
+            )
+
+        assert accepted == [_job_id(0), None, _job_id(2)]
 
     def test_passes_the_mode_and_the_fit_to_every_test_set(self):
         with (
@@ -2192,10 +2269,14 @@ class TestInferenceClient:
         assert kwargs["api_mode"] is ApiMode.SYNC
         assert kwargs["n_train_rows"] is None
         assert kwargs["thinking"] is False
+        assert kwargs["on_accepted"] is None
 
     def test_predict_passes_the_mode_and_what_auto_decides_on(self):
         options = ClientOptions()
         task_config = ClassifierConfig()
+
+        def on_accepted(fitted_test_set_id: UUID | None) -> None:
+            pass
 
         with patch.object(ServiceClient, "predict") as predict:
             InferenceClient.predict(
@@ -2206,6 +2287,7 @@ class TestInferenceClient:
                 api_mode=ApiMode.AUTO,
                 n_train_rows=7,
                 thinking=True,
+                on_accepted=on_accepted,
             )
 
         kwargs = predict.call_args.kwargs
@@ -2216,11 +2298,15 @@ class TestInferenceClient:
         assert kwargs["api_mode"] is ApiMode.AUTO
         assert kwargs["n_train_rows"] == 7
         assert kwargs["thinking"] is True
+        assert kwargs["on_accepted"] is on_accepted
 
     def test_predict_chunks_passes_everything_through(self):
         options = ClientOptions()
         task_config = ClassifierConfig()
         x_chunks = [X_TEST, X_TEST]
+
+        def on_accepted(fitted_test_set_id: UUID | None) -> None:
+            pass
 
         with patch.object(ServiceClient, "predict_chunks", return_value=[]) as chunks:
             InferenceClient.predict_chunks(
@@ -2231,6 +2317,7 @@ class TestInferenceClient:
                 api_mode=ApiMode.AUTO,
                 n_train_rows=7,
                 thinking=True,
+                on_accepted=on_accepted,
             )
 
         kwargs = chunks.call_args.kwargs
@@ -2241,6 +2328,7 @@ class TestInferenceClient:
         assert kwargs["api_mode"] is ApiMode.AUTO
         assert kwargs["n_train_rows"] == 7
         assert kwargs["thinking"] is True
+        assert kwargs["on_accepted"] is on_accepted
 
     def test_submit_predict_returns_the_id(self):
         options = ClientOptions()

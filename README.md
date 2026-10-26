@@ -156,7 +156,7 @@ model = TabPFNClassifier.load_model("model.json")
 model.predict(X_test)
 ```
 
-`save_model()` writes a small JSON record: the id of the fitted model, the hyperparameters, the class labels and the training-set size. It also returns that record as a dict, so it can be kept elsewhere (a database, an experiment tracker) and passed to `load_model()` directly.
+`save_model()` writes a small JSON record: the id of the fitted model, the hyperparameters, the class labels and the training-set size, and whether the fit or a prediction is still pending. It also returns that record as a dict, so it can be kept elsewhere (a database, an experiment tracker) and passed to `load_model()` directly.
 
 Notes:
 
@@ -211,7 +211,7 @@ Notes:
 
 ### Submitting a prediction and waiting for it later
 
-A large prediction can take a while too. `submit_predict()` starts it and returns as soon as the server has accepted it, so the process can do other work in the meantime. `wait_for_predict()` then waits for the prediction and returns it:
+A large prediction can take a while too. `submit_predict()` starts it and returns as soon as the server has accepted it, so the process can do other work in the meantime. `wait_for_predict()` then waits for the prediction and returns it. The model holds the pending prediction until then, and `save_model()` saves it, so a later run can load the model and wait for the same prediction:
 
 ```python
 from tabpfn_client import TabPFNClassifier
@@ -219,11 +219,16 @@ from tabpfn_client import TabPFNClassifier
 model = TabPFNClassifier.load_model("model.json")
 # Returns without waiting for the prediction.
 model.submit_predict(X_test, output_type="probas")
-# ... other work ...
+model.save_model("model.json")  # saves the pending prediction too
+# ... other work, or a later run that loads "model.json" again ...
 predictions = model.wait_for_predict()  # what model.predict_proba(X_test) returns
 ```
 
 `submit_predict()` takes the arguments of `predict()` (a classifier's also takes `output_type`), and `wait_for_predict()` returns what `predict()` returns for them. A classifier's `output_type` is `"preds"` (the default: the class labels) or `"probas"` (what `predict_proba()` returns).
+
+A model holds one pending prediction. A new `submit_predict()` or `predict()` replaces it once the server has accepted the new prediction, and a new fit drops it; the id of a dropped prediction is logged as a warning. The server keeps the result of a prediction for at least a day after it completes.
+
+`predict()` holds its own prediction the way `fit()` holds its fit: while it waits for a prediction that the server runs as a background job, the model holds it. If that wait stops, for a timeout or an interrupt, call `wait_for_predict()` to wait for the same prediction instead of starting a new one, or `save_model()` to wait for it in a later run. A regressor's `"full"` output split over several requests is not held; its ids are logged instead.
 
 ## Timings
 

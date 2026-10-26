@@ -133,6 +133,7 @@ class TestRecord:
             "n_train_rows",
             "classes",
             "fit_status",
+            "pending_prediction",
         }
         assert record["tabpfn_client_version"] == __version__
         assert record["task"] == "regression"
@@ -140,6 +141,7 @@ class TestRecord:
         assert record["n_train_rows"] == N_TRAIN_ROWS
         assert record["classes"] is None
         assert record["fit_status"] == "completed"
+        assert record["pending_prediction"] is None
         assert record["params"] == _model_params(reg)
         assert "client_options" not in record["params"]
         json.dumps(record)  # JSON-serialisable as returned
@@ -153,6 +155,16 @@ class TestRecord:
 
         check_is_fitted(loaded)
         assert loaded.save_model()["fit_status"] == "completed"
+
+    def test_a_record_from_before_pending_prediction_holds_none(self):
+        # Records written before `pending_prediction` existed held none.
+        record = _fitted_regressor().save_model()
+        del record["pending_prediction"]
+
+        loaded = TabPFNRegressor.load_model(record)
+
+        assert loaded._pending_predict is None
+        assert loaded.save_model()["pending_prediction"] is None
 
     def test_none_valued_params_survive(self):
         # `random_state=None` asks for a fresh seed each run and differs from
