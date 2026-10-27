@@ -18,9 +18,10 @@ from tabpfn_client.estimator import (
     _test_row_limit,
 )
 
-# Rows per call for a backend whose limits are unknown: 100 float features
-# then take 80 MB per batch.
-DEFAULT_BATCH_SIZE = 100_000
+# Most rows per call. The API charges more tokens per predicted row as a request
+# grows, and much smaller requests pay the minimum charge per request. See
+# `estimate_cost`. 100 float features take 40 MB per batch.
+DEFAULT_BATCH_SIZE = 50_000
 
 
 @dataclass
@@ -99,9 +100,9 @@ def permutation_shap(
         batch_size: Most masked rows per call of `predict_fn`, and at least
             `len(background)`. Memory holds one batch of masked rows, plus a
             part that grows with `len(X) * n_permutations * n_features`. None
-            picks the most rows the API accepts in one request
-            when `predict_fn` is a method of a fitted `TabPFNClassifier` or
-            `TabPFNRegressor`, and `DEFAULT_BATCH_SIZE` otherwise. The byte
+            uses `DEFAULT_BATCH_SIZE`, or fewer rows when `predict_fn` is a
+            method of a fitted `TabPFNClassifier` or `TabPFNRegressor` and the
+            API accepts fewer in one request. The byte
             limit is estimated from the average row size, so very uneven text
             columns can still exceed it.
         random_state: Seed for the sampled feature orderings.
@@ -272,7 +273,7 @@ def _default_batch_size(
     X: pd.DataFrame,
     background: pd.DataFrame,
 ) -> int:
-    """Most masked rows one request of a client estimator accepts, else the default."""
+    """The default, or fewer if one request of a client estimator accepts fewer."""
     match getattr(predict_fn, "__self__", None):
         case TabPFNClassifier() | TabPFNRegressor() as model:
             api_settings = ServiceClient.get_settings()
@@ -291,6 +292,7 @@ def _default_batch_size(
                 api_settings.dataset_max_size_bytes - pd.RangeIndex(0).memory_usage()
             )
             return min(
+                DEFAULT_BATCH_SIZE,
                 _test_row_limit(
                     limit, model._n_train_rows, tabpfn_config.inference_config
                 ),
