@@ -69,8 +69,8 @@ def permutation_shap(
     X: pd.DataFrame | np.ndarray,
     *,
     background: pd.DataFrame | np.ndarray,
-    n_background: int | None = 20,
-    n_permutations: int = 10,
+    n_background: int | None = 100,
+    n_permutations: int = 2,
     batch_size: int | None = None,
     random_state: int | None = None,
 ) -> ShapExplanation:
@@ -95,10 +95,12 @@ def permutation_shap(
         background: Rows to sample the values of hidden features from, usually
             the training data. It must have the same columns and dtypes as `X`.
         n_background: Rows sampled from `background` without replacement. The
-            cost grows linearly with it, and 20 to 100 is usual. None, or a
-            value of at least `len(background)`, uses every row.
+            cost grows linearly with it. None, or a value of at least
+            `len(background)`, uses every row.
         n_permutations: Feature orderings sampled per explained row. Each one
-            is also evaluated in reverse.
+            is also evaluated in reverse. The cost grows linearly with it. For
+            the same cost, more background rows reduce the error more than
+            more orderings, up to about 100 background rows.
         batch_size: Most masked rows per call of `predict_fn`, and at least
             `n_background`. Memory holds one batch of masked rows, plus a
             part that grows with `len(X) * n_permutations * n_features`. None
