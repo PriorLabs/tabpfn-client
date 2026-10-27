@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tabpfn_client import TabPFNClassifier
+from tabpfn_client import TabPFNClassifier, explain
 from tabpfn_client.api_models import GetSettingsResponse
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.explain import permutation_shap
@@ -243,6 +243,27 @@ def test_client_estimator_batches_fit_the_api_limits(
 
     assert max(call_sizes) == rows_per_call
     assert len(call_sizes) > 1
+
+
+def test_client_estimator_batches_stop_at_the_default(monkeypatch) -> None:
+    monkeypatch.setattr(explain, "DEFAULT_BATCH_SIZE", 25)
+    rng = np.random.default_rng(7)
+    X, background = rng.normal(size=(3, 4)), rng.normal(size=(5, 4))
+    model = TabPFNClassifier()
+    model._n_train_rows = 1_000
+    call_sizes: list[int] = []
+
+    def predict_proba(self, rows) -> np.ndarray:
+        call_sizes.append(len(rows))
+        return np.zeros((len(rows), 2))
+
+    with (
+        patch.object(ServiceClient, "get_settings", return_value=_settings()),
+        patch.object(TabPFNClassifier, "predict_proba", predict_proba),
+    ):
+        permutation_shap(model.predict_proba, X, background, n_permutations=2)
+
+    assert max(call_sizes) == 25
 
 
 def test_api_limit_below_background_rows_raises() -> None:
