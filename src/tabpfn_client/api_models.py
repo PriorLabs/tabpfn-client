@@ -569,6 +569,13 @@ class GetSettingsResponse(BaseModel):
     ]
     dataset_max_size_bytes: int
     async_settings: AsyncSettings
+    inline_test_set_max_parquet_bytes: int | None = None
+
+
+class InlinePredictRequest(BaseModel):
+    fitted_train_set_id: UUID
+    task_config: TaskConfig
+    x_test_parquet_base64: str
 
 
 class NotFoundErrorResponse(BaseModel):
@@ -600,9 +607,9 @@ class PredictPendingResponse(BaseModel):
 
 
 class PredictRequest(BaseModel):
-    test_set_upload_id: UUID
     fitted_train_set_id: UUID
     task_config: TaskConfig
+    test_set_upload_id: UUID
 
 
 class PredictResponse(BaseModel):
