@@ -136,8 +136,11 @@ _PredictResponseUnion: TypeAdapter[PredictResponseUnion] = TypeAdapter(
 _RETRYABLE_STORAGE_STATUSES = frozenset({408, 429, 502, 503, 504})
 
 
-class _InlineTestSetRefused(Exception):
-    """The server does not accept this test set inline. Upload it instead."""
+class _UploadTestSetInstead(Exception):
+    """The server cannot take this test set inline: inline is off, the test set is
+    over its limit, or the server has no inline support. A test set the server
+    cannot read raises as an error instead.
+    """
 
 
 # avoid logging of httpx and httpcore on client side
@@ -207,8 +210,8 @@ def _report_trace(trace_id: UUID | None) -> str:
     return f" Report trace ID: {trace_id.hex}." if trace_id else ""
 
 
-def _refuses_inline_test_set(response: httpx.Response) -> bool:
-    """Whether the server refused an inline test set, so the client must upload it.
+def _asks_for_upload(response: httpx.Response) -> bool:
+    """Whether the server answered an inline test set by asking for an upload.
 
     This happens when the cached settings are older than a change to the server limit.
     """
@@ -1347,8 +1350,8 @@ class ServiceClient(Singleton):
                     timeout=client_options.timeout,
                     headers=client_options.headers,
                 )
-            except _InlineTestSetRefused:
-                logger.debug("Server refused the inline test set; uploading it.")
+            except _UploadTestSetInstead:
+                logger.debug("Server cannot take the test set inline; uploading it.")
                 # The cached limit is stale.
                 cls._drop_settings()
 
@@ -1944,7 +1947,7 @@ class ServiceClient(Singleton):
         """Request a prediction for an uploaded or inline test set.
 
         Raises:
-            _InlineTestSetRefused: If the server will not take the inline test set.
+            _UploadTestSetInstead: If the server cannot take the inline test set.
             FittedModelNotFoundError: If the fitted train set of an inline test set
                 is not found.
             PredictFailedError: If the server reports that the prediction it
@@ -1959,8 +1962,8 @@ class ServiceClient(Singleton):
             headers=headers,
         )
         inline = isinstance(req, InlinePredictRequest)
-        if inline and _refuses_inline_test_set(res):
-            raise _InlineTestSetRefused
+        if inline and _asks_for_upload(res):
+            raise _UploadTestSetInstead
         # The body, not the request, decides which model applies: a prediction,
         # a download URL to follow, a prediction the server is still running,
         # or one that failed. A refit is a failure like any other: the server
