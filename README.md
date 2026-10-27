@@ -156,7 +156,7 @@ model = TabPFNClassifier.load_model("model.json")
 model.predict(X_test)
 ```
 
-`save_model()` writes a small JSON record: the id of the fitted model, the hyperparameters, the class labels and the training-set size. It also returns that record as a dict, so it can be kept elsewhere (a database, an experiment tracker) and passed to `load_model()` directly.
+`save_model()` writes a small JSON record: the id of the fitted model, the hyperparameters, the class labels and the training-set size, and whether the fit or a prediction is still pending. It leaves out `api_mode` and `client_options`, which describe how the client talks to the server: a loaded model uses those of the process that loads it. `save_model()` also returns that record as a dict, so it can be kept elsewhere (a database, an experiment tracker) and passed to `load_model()` directly.
 
 Notes:
 
@@ -200,18 +200,30 @@ predictions = model.predict(X_test)
 
 Until `wait_for_fit()` has seen the fit complete, the model is pending, and `predict()` raises `NotFittedError` without asking the server. `wait_for_fit()` polls the server until the fit has completed, and returns at once if it already has.
 
-Notes:
+### Submitting a prediction and waiting for it later
 
-- `submit_fit()` checks and uploads the data as `fit()` does. The server always runs a submitted fit as a background job, whatever `api_mode` is.
-- The id of the fit is in `model_id_` as soon as `submit_fit()` returns, for logs or support requests.
-- `save_model()` records a pending model with `fit_status: "pending"`, and `load_model()` restores it as pending, without a request. Nothing updates the file when the fit completes; save the model again after `wait_for_fit()` to record it as completed.
-- If the server reports that the fit failed, or no longer has it, `wait_for_fit()` raises `FitFailedError` or `FittedModelNotFoundError` and leaves the model unfitted.
-- `fit()` always starts a new fit, also on a pending model.
-- `submit_fit()` and `wait_for_fit()` are not part of the scikit-learn API: pipelines and other meta-estimators call `fit()`, which fits and waits as usual.
+A large prediction can take a while too. `submit_predict()` starts it and returns as soon as the server has accepted it, so the process can do other work in the meantime. `wait_for_predict()` then waits for the prediction and returns it. The model holds the pending prediction until then, and `save_model()` saves it, so a later run can load the model and wait for the same prediction:
+
+```python
+from tabpfn_client import TabPFNClassifier
+
+model = TabPFNClassifier.load_model("model.json")
+# Returns without waiting for the prediction.
+model.submit_predict(X_test, output_type="probas")
+model.save_model("model.json")  # saves the pending prediction too
+# ... other work, or a later run that loads "model.json" again ...
+predictions = model.wait_for_predict()  # what model.predict_proba(X_test) returns
+```
+
+`submit_predict()` takes the arguments of `predict()` (a classifier's also takes `output_type`), and `wait_for_predict()` returns what `predict()` returns for them. A classifier's `output_type` is `"preds"` (the default: the class labels) or `"probas"` (what `predict_proba()` returns).
+
+A model holds one pending prediction. A new `submit_predict()` or `predict()` replaces it once the server has accepted the new prediction, and a new fit drops it; the id of a dropped prediction is logged as a warning. The server keeps the result of a prediction for at least a day after it completes.
+
+`predict()` holds its own prediction the way `fit()` holds its fit: while it waits for a prediction that the server runs as a background job, the model holds it. If that wait stops, for a timeout or an interrupt, call `wait_for_predict()` to wait for the same prediction instead of starting a new one, or `save_model()` to wait for it in a later run. A regressor's `"full"` output split over several requests is not held; its ids are logged instead.
 
 ## Timings
 
-After `fit()` and `predict()`, an estimator reports how many seconds the server spent on each stage:
+After `fit()` and `predict()` (or `wait_for_predict()`), an estimator reports how many seconds the server spent on each stage:
 
 ```python
 model = TabPFNClassifier()
@@ -226,7 +238,7 @@ model.get_timings()
 
 - A `*queue_wait_s` field is time spent waiting for the server to start the work; the other fields are time spent doing it.
 - The same values are available as `model.fit_timings_` and `model.last_predict_timings`.
-- A field is `None` when it does not apply, e.g. the test set transform when the same test set was sent before. Both entries are `None` when the server does not report timings.
+- A field is `None` when the server does not report it. Both entries are `None` when the server does not report timings.
 
 ## Plotting
 

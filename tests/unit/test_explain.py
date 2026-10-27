@@ -149,6 +149,11 @@ def _settings(
             "async_settings": {
                 "use_above_trainset_size_bytes": 10**9,
                 "poll_timeout_secs": 1.0,
+                "predict_use_above": {"train_rows": 10**9, "test_rows": 10**9},
+                "thinking_predict_use_above": {
+                    "train_rows": 10**9,
+                    "test_rows": 10**9,
+                },
             },
         }
     )

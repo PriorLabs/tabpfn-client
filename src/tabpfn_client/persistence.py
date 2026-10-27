@@ -20,7 +20,8 @@ The same record lets a fit outlive the process that started it. The server
 assigns the id when it accepts a fit, before it runs it, so a model that
 `submit_fit()` left pending can be saved too. Its record says the fit is
 pending, and `load_model()` restores it as such, without asking the server
-about it, for `wait_for_fit()` to wait for.
+about it, for `wait_for_fit()` to wait for. A pending prediction travels the
+same way: the record holds its id, for `wait_for_predict()` to wait for.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID, uuid4
@@ -40,12 +42,32 @@ from typing_extensions import Self
 
 from tabpfn_client.api_models import FitStatus, PredictionTask
 
-# Constructor params that describe the connection rather than the model. They
-# are left out of the record, and a record that carries them is rejected:
-# `client_options` holds per-session headers and timeouts (and is not JSON), and
-# a loaded estimator should run with the defaults of the process it is loaded
-# into.
-_TRANSPORT_PARAMS = frozenset({"client_options"})
+# Constructor params that describe the connection rather than the model: they
+# change how the client talks to the server, never what the server computes.
+# They are left out of the record, so that a loaded estimator runs with the
+# defaults of the process it is loaded into. `client_options` holds per-session
+# headers and timeouts (and is not JSON), and `api_mode` how the client sends
+# requests.
+_TRANSPORT_PARAMS = frozenset({"client_options", "api_mode"})
+# The ones a record may still carry, which loading drops: tabpfn-client 0.6
+# saved `api_mode`. A record that carries any other is rejected.
+_DROPPED_TRANSPORT_PARAMS = frozenset({"api_mode"})
+
+
+@dataclass(frozen=True)
+class _PendingPredict:
+    """A prediction the model holds until `wait_for_predict()` returns it.
+
+    One `submit_predict()` started, or one `predict()` stopped waiting for.
+
+    Attributes:
+        fitted_test_set_id: The id of the prediction.
+        output_type: The output it was asked for, which shapes what
+            `wait_for_predict()` returns.
+    """
+
+    fitted_test_set_id: UUID
+    output_type: str
 
 
 class _ModelRecord(BaseModel):
@@ -69,6 +91,9 @@ class _ModelRecord(BaseModel):
     # is never saved. Records written before this field existed only held
     # completed fits.
     fit_status: Literal[FitStatus.PENDING, FitStatus.COMPLETED] = FitStatus.COMPLETED
+    # The prediction the model held when the record was saved, which the server
+    # may still be running. Records written before this field existed held none.
+    pending_prediction: _PendingPredict | None = None
 
 
 def _task_of(estimator_cls: type) -> PredictionTask:
@@ -178,6 +203,12 @@ class ModelPersistenceMixin(BaseEstimator):
     # fit, until `wait_for_fit()` sees the fit complete.
     _fit_pending: bool = False
 
+    # The prediction that `submit_predict()` started, or that `predict()`
+    # stopped waiting for, until `wait_for_predict()` returns it. Class-level
+    # default so estimators pickled before this attribute existed read it as
+    # None.
+    _pending_predict: _PendingPredict | None = None
+
     # NOTE: Some "*_" attributes may be assigned before a fit succeeds (it used
     # to be the case for `classes_`), so we override sklearn's default of
     # inferring fittedness from any "*_" attribute and use `model_id_` as the
@@ -192,7 +223,9 @@ class ModelPersistenceMixin(BaseEstimator):
         The fit itself lives on the TabPFN server; what is saved is a small,
         human-readable record: the id the server assigned to the fit
         (`model_id_`), the estimator's hyperparameters, a classifier's class
-        labels and the training-set size. No training data is included.
+        labels and the training-set size. No training data is included, nor
+        `api_mode` and `client_options`, which describe how the client talks to
+        the server: the loading process sets its own.
 
         `load_model()` turns the record back into a fitted estimator, in a
         later run or on another machine. Fitted models are only visible to the
@@ -201,7 +234,11 @@ class ModelPersistenceMixin(BaseEstimator):
         data remains on the server (see `UserDataClient` to delete it).
 
         A model `submit_fit()` left pending is saved too, as a pending fit, so
-        that a later run can load it and `wait_for_fit()`.
+        that a later run can load it and `wait_for_fit()`. So is a pending
+        prediction, one `submit_predict()` started or `predict()` stopped
+        waiting for: a later run can load the model and `wait_for_predict()`,
+        for at least a day after the prediction completes, while the server
+        keeps its result.
 
         Args:
             path: Where to write the record as JSON. Nothing is written when
@@ -233,6 +270,7 @@ class ModelPersistenceMixin(BaseEstimator):
             n_train_rows=self._n_train_rows,
             classes=None if classes is None else np.asarray(classes).tolist(),
             fit_status=FitStatus.PENDING if self._fit_pending else FitStatus.COMPLETED,
+            pending_prediction=self._pending_predict,
         ).model_dump(mode="json")
         if path is not None:
             _write_record(path, record)
@@ -243,13 +281,17 @@ class ModelPersistenceMixin(BaseEstimator):
         """Re-create a fitted estimator from a record written by `save_model()`.
 
         The estimator comes back with the saved hyperparameters and fitted
-        state, ready to `predict()` without calling `fit()`. No request is made
+        state, ready to `predict()` without calling `fit()`, and with the
+        default `api_mode` and `client_options`: set them on the loaded
+        estimator to change them. A record from tabpfn-client 0.6 that holds
+        `api_mode` loads too, without it. No request is made
         here; the first `predict()` authenticates (like `fit()` would) and
         raises `FittedModelNotFoundError` if the server no longer has the model.
 
         A record of a fit that was still pending when it was saved comes back
         pending, as `submit_fit()` left it: call `wait_for_fit()` before
-        `predict()`.
+        `predict()`. A record that holds a pending prediction comes back
+        holding it, for `wait_for_predict()`.
 
         Args:
             source: The path of a file written by `save_model(path)`, or the
@@ -271,7 +313,10 @@ class ModelPersistenceMixin(BaseEstimator):
             raise ValueError(
                 f"Cannot load a {record.task.value} model into {cls.__name__}."
             )
-        transport = _TRANSPORT_PARAMS & set(record.params)
+        params = {
+            k: v for k, v in record.params.items() if k not in _DROPPED_TRANSPORT_PARAMS
+        }
+        transport = _TRANSPORT_PARAMS & set(params)
         if transport:
             raise ValueError(
                 f"Cannot load this model into {cls.__name__}: {sorted(transport)} "
@@ -286,7 +331,7 @@ class ModelPersistenceMixin(BaseEstimator):
         # server computes. Dropping it would give different predictions from the
         # ones the user validated when saving, with no signal. Unlike xgboost or
         # CatBoost files, nothing else (no weights) pins the behaviour.
-        unknown = set(record.params) - set(cls._get_param_names())
+        unknown = set(params) - set(cls._get_param_names())
         if unknown:
             advice = "Drop them from the record."
             installed = _installed_version()
@@ -302,10 +347,12 @@ class ModelPersistenceMixin(BaseEstimator):
             )
         # Deep-copied so that estimators loaded from the same dict share nothing
         # mutable with it, or with each other (as `sklearn.base.clone` does).
-        estimator = cls(**copy.deepcopy(record.params))
+        estimator = cls(**copy.deepcopy(params))
         estimator.model_id_ = record.model_id
         estimator._n_train_rows = record.n_train_rows
         if record.classes is not None:
             setattr(estimator, "classes_", np.asarray(record.classes))
         estimator._fit_pending = record.fit_status == FitStatus.PENDING
+        if record.pending_prediction is not None:
+            estimator._pending_predict = record.pending_prediction
         return estimator

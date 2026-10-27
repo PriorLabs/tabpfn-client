@@ -14,6 +14,7 @@ from sklearn.model_selection import train_test_split
 from tabpfn_client.client import (
     _MIN_RETRY_INTERVAL_SECS,
     GetSettingsResponse,
+    ResolvedAsyncSettings,
     RetryableServerError,
     ServiceClient,
 )
@@ -27,6 +28,7 @@ from tabpfn_client.models import ApiMode
 from tabpfn_client.api_models import (
     ClassifierConfig,
     DuplicateTrainSetErrorResponse,
+    FitRequest,
     FitResponse,
     FitStatus,
     GetFitStatusRequest,
@@ -34,7 +36,6 @@ from tabpfn_client.api_models import (
     RegressorConfig,
     RegressorOutputType,
     RegressorPredictParams,
-    AsyncSettings,
     ClassifierFitTaskConfig,
 )
 from tests.mock_tabpfn_server import with_mock_server
@@ -69,12 +70,14 @@ def _api_settings_payload(
         "async_settings": {
             "use_above_trainset_size_bytes": 50 * 1024 * 1024,
             "poll_timeout_secs": 7200.0,
+            "predict_use_above": {"train_rows": 50_000, "test_rows": 100_000},
+            "thinking_predict_use_above": {"train_rows": 25_000, "test_rows": 10_000},
         },
     }
 
 
-def _fast_poll_settings() -> AsyncSettings:
-    return AsyncSettings(
+def _fast_poll_settings() -> ResolvedAsyncSettings:
+    return ResolvedAsyncSettings(
         use_above_trainset_size_bytes=50 * 1024 * 1024,
         poll_timeout_secs=7200.0,
     )
@@ -506,6 +509,56 @@ class TestServiceClient(unittest.TestCase):
         self.assertEqual(prepare_route.call_count, 2)
         self.assertEqual(fit_route.call_count, 2)
 
+    def _sync_fit(self) -> FitResponse:
+        return ServiceClient._fit(
+            req=FitRequest(
+                train_set_upload_id=UUID("00000000-0000-0000-0000-000000000001"),
+                task_config=ClassifierFitTaskConfig(),
+                tabpfn_systems=["preprocessing", "text"],
+            ),
+            timeout=10.0,
+        )
+
+    @with_mock_server()
+    def test_sync_fit_that_never_reached_the_server_is_retried_once(self, mock_server):
+        fit_route = mock_server.router.post("/tabpfn/fit")
+        for error in (httpx.ConnectError, httpx.ConnectTimeout):
+            with self.subTest(error=error.__name__):
+                fit_route.reset()
+                fit_route.side_effect = [
+                    error("unreachable"),
+                    httpx.Response(
+                        200,
+                        json={
+                            "fitted_train_set_id": "00000000-0000-0000-0000-000000000002",
+                            "status": "completed",
+                        },
+                    ),
+                ]
+
+                response = self._sync_fit()
+
+                self.assertEqual(response.status, FitStatus.COMPLETED)
+                self.assertEqual(fit_route.call_count, 2)
+
+    @with_mock_server()
+    def test_sync_fit_the_server_may_have_run_is_not_retried(self, mock_server):
+        # Each /fit creates a fit job, which a retry would run and bill twice.
+        fit_route = mock_server.router.post("/tabpfn/fit")
+        for outcome in (
+            httpx.ReadTimeout("lost"),
+            httpx.RemoteProtocolError("cut off"),
+            httpx.Response(503, json={"message": "Overloaded"}),
+        ):
+            with self.subTest(outcome=type(outcome).__name__):
+                fit_route.reset()
+                fit_route.side_effect = [outcome]
+
+                with self.assertRaises((httpx.HTTPError, RetryableServerError)):
+                    self._sync_fit()
+
+                self.assertEqual(fit_route.call_count, 1)
+
     def test_fit_rejects_invalid_api_mode_before_any_request(self):
         # `api_mode` is coerced through the ApiMode enum up front, so a typo
         # fails fast with a clear ValueError instead of leaving `use_async`
@@ -705,7 +758,7 @@ class TestServiceClient(unittest.TestCase):
             json={
                 "message": "Fitted train set not found",
                 "error_code": "NOT_FOUND",
-                "trace_id": "00000000-0000-0000-0000-00000000beef",
+                "trace_id": "0000000000000000000000000000beef",
             },
         )
         ServiceClient.authorize("dummy_access_token")
@@ -719,7 +772,7 @@ class TestServiceClient(unittest.TestCase):
         mock_sleep.assert_not_called()
 
         self.assertIn(str(fitted_train_set_id), str(cm.exception))
-        self.assertIn("00000000-0000-0000-0000-00000000beef", str(cm.exception))
+        self.assertIn("0000000000000000000000000000beef", str(cm.exception))
 
     @with_mock_server()
     def test_predict_with_same_test_set_calls_prepare_and_predict_each_time(
@@ -928,7 +981,7 @@ class TestWaitForFit(unittest.TestCase):
         exceptions, a single exception (raised on every call), or a callable.
         """
         fake_time = _FakeTime()
-        settings = AsyncSettings(
+        settings = ResolvedAsyncSettings(
             use_above_trainset_size_bytes=50 * 1024 * 1024,
             poll_timeout_secs=poll_timeout,
         )
@@ -1049,3 +1102,64 @@ class TestWaitForFit(unittest.TestCase):
             ServiceClient._wait_for_fit(self.FIT_ID)
         self.assertEqual(mock.call_count, 2)
         self.assertEqual(fake_time.sleeps, [self.FALLBACK_INTERVAL])
+
+    def test_a_failed_poll_waits_at_least_the_fallback_despite_a_short_hint(self):
+        # Through an outage, a young fit's short hint would otherwise poll,
+        # and warn, twice a second.
+        with self._patched(
+            [
+                _fit_status(FitStatus.PENDING, retry_in_secs=1.0),
+                httpx.ConnectError("blip"),
+                _fit_status(FitStatus.PENDING, retry_in_secs=1.0),
+                _fit_status(FitStatus.COMPLETED),
+            ]
+        ) as (fake_time, _):
+            ServiceClient._wait_for_fit(self.FIT_ID)
+        self.assertEqual(fake_time.sleeps, [1.0, self.FALLBACK_INTERVAL, 1.0])
+
+    def test_the_fourth_capped_error_in_a_row_raises_a_runtime_error(self):
+        error = CappedRetryableServerError("HTTP 500")
+        with self._patched([error] * 4) as (fake_time, mock):
+            with self.assertRaises(RuntimeError) as cm:
+                ServiceClient._wait_for_fit(self.FIT_ID)
+        self.assertIs(cm.exception.__cause__, error)
+        self.assertIn(f"Polling fit {self.FIT_ID} failed 4 times", str(cm.exception))
+        self.assertEqual(mock.call_count, 4)
+        self.assertEqual(fake_time.sleeps, [self.FALLBACK_INTERVAL] * 3)
+
+    def test_a_success_resets_the_capped_error_count(self):
+        error = CappedRetryableServerError("HTTP 500")
+        with self._patched(
+            [error] * 3
+            + [_fit_status(FitStatus.PENDING)]
+            + [error] * 3
+            + [_fit_status(FitStatus.COMPLETED)]
+        ) as (_, mock):
+            ServiceClient._wait_for_fit(self.FIT_ID)
+        self.assertEqual(mock.call_count, 8)
+
+    @with_mock_server()
+    def test_a_malformed_status_body_is_a_capped_error(self, mock_server):
+        status_route = mock_server.router.post("/tabpfn/get_fit_status")
+        status_route.side_effect = [
+            httpx.Response(200, json={"unexpected": "shape"}),
+            httpx.Response(
+                200,
+                json={"fitted_train_set_id": str(self.FIT_ID), "status": "completed"},
+            ),
+        ]
+        fake_time = _FakeTime()
+        settings = ResolvedAsyncSettings(
+            use_above_trainset_size_bytes=50 * 1024 * 1024, poll_timeout_secs=100.0
+        )
+        with (
+            patch("tabpfn_client.client.time", fake_time),
+            patch.object(
+                ServiceClient, "_resolve_async_settings", return_value=settings
+            ),
+            self.assertLogs("tabpfn_client.client", level="WARNING") as logs,
+        ):
+            response = ServiceClient._wait_for_fit(self.FIT_ID)
+        self.assertEqual(response.status, FitStatus.COMPLETED)
+        self.assertEqual(status_route.call_count, 2)
+        self.assertIn("Unexpected error while polling status of fit", logs.output[0])
