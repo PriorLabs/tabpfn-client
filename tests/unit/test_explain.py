@@ -271,7 +271,9 @@ def test_client_estimator_batches_stop_at_the_default(
         warnings.catch_warnings(record=True) as caught,
     ):
         warnings.simplefilter("always")
-        permutation_shap(model.predict_proba, X, background=background, n_permutations=2)
+        permutation_shap(
+            model.predict_proba, X, background=background, n_permutations=2
+        )
 
     assert max(call_sizes) == rows_per_call
     warned = any("fit_with_cache" in str(w.message) for w in caught)
