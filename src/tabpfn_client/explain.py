@@ -171,6 +171,8 @@ def permutation_shap(
                 "Fit the model with the default fit_mode to explain it.",
                 stacklevel=2,
             )
+        case _:
+            pass
     n_background = len(background_df)
     if batch_size is None:
         batch_size = _default_batch_size(predict_fn, X_df, background_df)
