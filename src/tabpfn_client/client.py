@@ -1917,17 +1917,19 @@ class ServiceClient(Singleton):
         )
         if isinstance(resp, _InlinePredictNotFound):
             resp = resp.root
-        if isinstance(resp, NotFoundErrorResponse):
-            raise _fitted_model_not_found(req.fitted_train_set_id, resp)
-        if isinstance(resp, PredictFailedErrorResponse):
-            # What a poll for the prediction raises.
-            raise _prediction_failed(
-                resp.fitted_test_set_id,
-                resp.message,
-                resp.error_code,
-                trace_id=resp.trace_id,
-            )
-        return resp
+        match resp:
+            case NotFoundErrorResponse():
+                raise _fitted_model_not_found(req.fitted_train_set_id, resp)
+            case PredictFailedErrorResponse():
+                # What a poll for the prediction raises.
+                raise _prediction_failed(
+                    resp.fitted_test_set_id,
+                    resp.message,
+                    resp.error_code,
+                    trace_id=resp.trace_id,
+                )
+            case _:
+                return resp
 
     @classmethod
     @backoff.on_exception(
