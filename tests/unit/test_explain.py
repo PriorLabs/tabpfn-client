@@ -15,6 +15,7 @@ from tabpfn_client import TabPFNClassifier, explain
 from tabpfn_client.api_models import GetSettingsResponse
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.explain import permutation_shap
+from tabpfn_client.models import FitModeLiteral
 
 
 def _exact_shap(f, x: np.ndarray, background: np.ndarray) -> np.ndarray:
@@ -245,11 +246,17 @@ def test_client_estimator_batches_fit_the_api_limits(
     assert len(call_sizes) > 1
 
 
-def test_client_estimator_batches_stop_at_the_default(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("fit_mode", "rows_per_call"), [(None, 25), ("fit_with_cache", 15)]
+)
+def test_client_estimator_batches_stop_at_the_default(
+    monkeypatch, fit_mode: FitModeLiteral | None, rows_per_call: int
+) -> None:
     monkeypatch.setattr(explain, "DEFAULT_BATCH_SIZE", 25)
+    monkeypatch.setattr(explain, "CACHED_FIT_BATCH_SIZE", 15)
     rng = np.random.default_rng(7)
     X, background = rng.normal(size=(3, 4)), rng.normal(size=(5, 4))
-    model = TabPFNClassifier()
+    model = TabPFNClassifier(fit_mode=fit_mode)
     model._n_train_rows = 1_000
     call_sizes: list[int] = []
 
@@ -263,7 +270,7 @@ def test_client_estimator_batches_stop_at_the_default(monkeypatch) -> None:
     ):
         permutation_shap(model.predict_proba, X, background, n_permutations=2)
 
-    assert max(call_sizes) == 25
+    assert max(call_sizes) == rows_per_call
 
 
 def test_api_limit_below_background_rows_raises() -> None:

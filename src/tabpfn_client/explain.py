@@ -22,6 +22,8 @@ from tabpfn_client.estimator import (
 # grows, and much smaller requests pay the minimum charge per request. See
 # `estimate_cost`. 100 float features take 40 MB per batch.
 DEFAULT_BATCH_SIZE = 50_000
+# The API rejects a predict of more rows against a cached fit.
+CACHED_FIT_BATCH_SIZE = 10_000
 
 
 @dataclass
@@ -107,7 +109,8 @@ def permutation_shap(
             part that grows with `len(X) * n_permutations * n_features`. None
             uses `DEFAULT_BATCH_SIZE`, or fewer rows when `predict_fn` is a
             method of a fitted `TabPFNClassifier` or `TabPFNRegressor` and the
-            API accepts fewer in one request. The byte
+            API accepts fewer in one request. A model fitted with
+            `fit_mode="fit_with_cache"` gets `CACHED_FIT_BATCH_SIZE`. The byte
             limit is estimated from the average row size, so very uneven text
             columns can still exceed it.
         random_state: Seed for the sampled background rows and feature
@@ -289,11 +292,16 @@ def _default_batch_size(
     """The default, or fewer if one request of a client estimator accepts fewer."""
     match getattr(predict_fn, "__self__", None):
         case TabPFNClassifier() | TabPFNRegressor() as model:
+            default = (
+                CACHED_FIT_BATCH_SIZE
+                if model.fit_mode == "fit_with_cache"
+                else DEFAULT_BATCH_SIZE
+            )
             api_settings = ServiceClient.get_settings()
             tabpfn_config = model._get_tabpfn_config()
             limit = _limit_for_model_path(tabpfn_config.model_path)
             if api_settings is None or limit is None:
-                return DEFAULT_BATCH_SIZE
+                return default
             n_features = X.shape[1]
             # A masked row takes each value from X or background, so take the
             # larger average per column. The size check also counts the index.
@@ -305,7 +313,7 @@ def _default_batch_size(
                 api_settings.dataset_max_size_bytes - pd.RangeIndex(0).memory_usage()
             )
             return min(
-                DEFAULT_BATCH_SIZE,
+                default,
                 _test_row_limit(
                     limit, model._n_train_rows, tabpfn_config.inference_config
                 ),
