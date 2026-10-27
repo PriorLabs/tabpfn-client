@@ -25,6 +25,7 @@ from tests.mock_tabpfn_server import MockTabPFNServer
 from tests.unit.test_client import _api_settings_payload
 
 FIT_ID = UUID("00000000-0000-0000-0000-000000000002")
+PREDICTION_ID = UUID("00000000-0000-0000-0000-0000000000aa")
 DOWNLOAD_URL = "https://storage.example/predictions/result.json?X-Goog-Signature=abc"
 N_ROWS = 20
 X_TEST = np.random.RandomState(0).rand(N_ROWS, 3)
@@ -106,6 +107,20 @@ def test_downloads_the_prediction_from_the_signed_url(mock_server):
     assert "authorization" not in download_route.calls.last.request.headers
     np.testing.assert_array_equal(result.y_pred, np.ones(N_ROWS, dtype=int))
     assert result.metadata["task"] == "classification"
+    # A server older than predict jobs sends no id.
+    assert result.fitted_test_set_id is None
+
+
+def test_keeps_the_id_of_a_prediction_answered_with_a_signed_url(mock_server):
+    mock_server.router.post("/tabpfn/predict").respond(
+        200,
+        json=_uri_body("classification") | {"fitted_test_set_id": str(PREDICTION_ID)},
+    )
+    mock_server.router.get(DOWNLOAD_URL).respond(200, json=[1] * N_ROWS)
+
+    result = _predict(ClassifierConfig())
+
+    assert result.fitted_test_set_id == PREDICTION_ID
 
 
 def test_full_output_download_matches_the_inline_parsing(mock_server):

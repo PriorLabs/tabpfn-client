@@ -28,16 +28,23 @@ import respx
 
 import tabpfn_client
 from tabpfn_client import PredictFailedError, RefitRequiredError
+from pydantic import ValidationError
+
 from tabpfn_client.api_models import (
-    AsyncSettings,
     ClassifierConfig,
     ClassifierTabPFNConfig,
     FitMode,
     FitResponse,
     GetSettingsResponse,
     PredictAsyncThresholds,
+    PredictFailedErrorResponse,
 )
-from tabpfn_client.client import _MIN_RETRY_INTERVAL_SECS, ServiceClient
+from tabpfn_client.client import (
+    _MIN_RETRY_INTERVAL_SECS,
+    ResolvedAsyncSettings,
+    ServiceClient,
+    _PredictJob,
+)
 from tabpfn_client.errors import (
     CappedRetryableServerError,
     PredictionGoneError,
@@ -53,7 +60,9 @@ from tests.unit.test_client import _api_settings_payload, _FakeTime
 FIT_ID = UUID("00000000-0000-0000-0000-000000000002")
 UPLOAD_ID = "00000000-0000-0000-0000-000000000003"
 PREDICTION_ID = UUID("00000000-0000-0000-0000-0000000000aa")
-TRACE_ID = "00000000-0000-0000-0000-00000000beef"
+# Without dashes, as the server sends a trace id: a message must quote it in
+# that form, which its logs and Sentry show.
+TRACE_ID = "0000000000000000000000000000beef"
 
 X_TEST = np.ones((3, 2))
 PREDICTION = [1, 0, 1]
@@ -88,17 +97,27 @@ MISSING_KV_CACHE = (
     "the model (call fit() again) before predicting."
 )
 EXPIRED = "This prediction's result is no longer stored. Predict again to get it."
-# What a server without the endpoint answers, unlike the endpoints' own 404s.
-ROUTE_MISSING = {"message": "Not Found", "error_code": "USER_ERROR"}
+# What a server without the endpoint answers, unlike the endpoints' own 404s:
+# the error code is NOT_FOUND since tabpfn-server#1384, USER_ERROR before.
+ROUTE_MISSING = pytest.mark.parametrize(
+    "route_missing",
+    [
+        {"message": "Not Found", "error_code": "NOT_FOUND"},
+        {"message": "Not Found", "error_code": "USER_ERROR"},
+    ],
+    ids=["route_missing", "route_missing_before_1384"],
+)
 NO_PREDICT_JOBS = (
     "This TabPFN server does not run predictions as background jobs; "
     "use predict() instead."
 )
 WAIT_BROKE_OFF = (
     f"Stopped waiting for prediction {PREDICTION_ID}. If it is still running, "
-    "the server completes it and bills it even if nobody waits for it; its "
-    "result stays on the server for about a day: call tabpfn_client.init(), "
-    "then tabpfn_client.service_wrapper.InferenceClient.wait_for_predict("
+    "the server completes it and bills it even if nobody waits for it. A model "
+    "that holds it as pending waits for it again with wait_for_predict(); "
+    "otherwise, its result stays on the server for at least a day after it "
+    "completes: call tabpfn_client.init(), then "
+    "tabpfn_client.service_wrapper.InferenceClient.wait_for_predict("
     f'"{PREDICTION_ID}")'
 )
 
@@ -202,36 +221,32 @@ def _failed(error: str | None, error_code: str | None) -> dict[str, Any]:
 def _settings_payload(*, thresholds: bool = True) -> dict[str, Any]:
     """`get_settings`, from a server with predict jobs or from an older one."""
     payload = _api_settings_payload()
+    async_settings = payload["async_settings"]
     if thresholds:
-        payload["async_settings"] |= {
+        async_settings |= {
             "predict_use_above": THRESHOLDS,
             "thinking_predict_use_above": THINKING_THRESHOLDS,
         }
+    else:
+        del async_settings["predict_use_above"]
+        del async_settings["thinking_predict_use_above"]
     return payload
 
 
-def _cache_settings(*, thresholds: bool = True) -> None:
+def _server_settings() -> GetSettingsResponse:
+    return GetSettingsResponse.model_validate(_settings_payload())
+
+
+def _cache_settings() -> None:
     """Fill the settings cache, as `init()` does."""
-    ServiceClient._api_settings = GetSettingsResponse.model_validate(
-        _settings_payload(thresholds=thresholds)
-    )
+    ServiceClient._api_settings = _server_settings()
     ServiceClient._api_settings_ts = time.monotonic()
 
 
-def _async_settings(
-    *, thresholds: bool = True, thinking: bool = True, poll_timeout: float = 7200.0
-) -> AsyncSettings:
-    return AsyncSettings(
+def _async_settings(*, poll_timeout: float = 7200.0) -> ResolvedAsyncSettings:
+    return ResolvedAsyncSettings(
         use_above_trainset_size_bytes=50 * 1024 * 1024,
         poll_timeout_secs=poll_timeout,
-        predict_use_above=PredictAsyncThresholds.model_validate(THRESHOLDS)
-        if thresholds
-        else None,
-        thinking_predict_use_above=PredictAsyncThresholds.model_validate(
-            THINKING_THRESHOLDS
-        )
-        if thresholds and thinking
-        else None,
     )
 
 
@@ -289,15 +304,14 @@ def _fake_clock(fake_time: _FakeTime | None = None) -> Generator[_FakeTime]:
 
 
 @contextmanager
-def _settings_cached_minutes_after_boot(
-    *, thresholds: bool = True
-) -> Generator[_FakeTime]:
+def _settings_cached_minutes_after_boot() -> Generator[_FakeTime]:
     """Cache the settings a minute ago, on a fake clock two minutes after boot.
 
-    `time.monotonic()` counts from boot, so a cache expired with 0.0 rather than
-    -inf stays fresh here, as on a machine in its first hour of uptime.
+    `time.monotonic()` counts from boot, so a cache expired by setting its
+    timestamp to 0.0 would stay fresh here, as on a machine in its first hour
+    of uptime.
     """
-    _cache_settings(thresholds=thresholds)
+    _cache_settings()
     ServiceClient._api_settings_ts = 60.0
     with _fake_clock() as clock:
         clock.now = 120.0
@@ -335,7 +349,11 @@ def _wait(**kwargs: Any) -> PredictionResult:
 
 
 def _sent(route: respx.Route) -> dict[str, Any]:
-    return json.loads(route.calls.last.request.content)
+    return _sent_in(route.calls.last)
+
+
+def _sent_in(call: Any) -> dict[str, Any]:
+    return json.loads(call.request.content)
 
 
 def _broke_off_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
@@ -347,13 +365,16 @@ def _broke_off_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
 
 
 class TestAsyncSettings:
-    def test_settings_from_an_older_server_have_no_predict_thresholds(self):
-        settings = GetSettingsResponse.model_validate(
-            _settings_payload(thresholds=False)
+    def test_settings_from_an_older_server_do_not_validate(self):
+        with pytest.raises(ValidationError):
+            GetSettingsResponse.model_validate(_settings_payload(thresholds=False))
+
+    def test_an_older_servers_settings_are_unavailable(self, router):
+        router.get("/tabpfn/get_settings").respond(
+            200, json=_settings_payload(thresholds=False)
         )
 
-        assert settings.async_settings.predict_use_above is None
-        assert settings.async_settings.thinking_predict_use_above is None
+        assert ServiceClient.get_settings() is None
 
     def test_settings_carry_the_predict_thresholds(self):
         settings = GetSettingsResponse.model_validate(_settings_payload())
@@ -366,41 +387,29 @@ class TestAsyncSettings:
             == PredictAsyncThresholds(train_rows=25_000, test_rows=10_000)
         )
 
-    def test_resolved_settings_carry_the_servers_thresholds(self):
+    def test_dropped_settings_are_not_returned_when_a_refetch_fails(self, router):
         _cache_settings()
+        settings_route = router.get("/tabpfn/get_settings").respond(503)
 
-        resolved = ServiceClient._resolve_async_settings()
+        ServiceClient._drop_settings()
 
-        assert resolved.predict_use_above == PredictAsyncThresholds(
-            train_rows=50_000, test_rows=100_000
-        )
-        assert resolved.thinking_predict_use_above == PredictAsyncThresholds(
-            train_rows=25_000, test_rows=10_000
-        )
-
-    @pytest.mark.parametrize("server", ["older", "unreachable"])
-    def test_resolved_settings_have_no_thresholds_the_server_did_not_send(self, server):
-        if server == "older":
-            _cache_settings(thresholds=False)
-            resolved = ServiceClient._resolve_async_settings()
-        else:
-            with patch.object(ServiceClient, "get_settings", return_value=None):
-                resolved = ServiceClient._resolve_async_settings()
-
-        assert resolved.predict_use_above is None
-        assert resolved.thinking_predict_use_above is None
+        assert ServiceClient.get_settings() is None
+        assert settings_route.call_count == 1
 
 
 def _resolve(
     api_mode: ApiMode | str,
-    settings: AsyncSettings,
     *,
+    server: bool = True,
     n_train_rows: int | None = None,
     n_test_rows: int = 1,
     thinking: bool = False,
     fit_with_cache: bool = False,
 ) -> ApiMode:
-    with patch.object(ServiceClient, "_resolve_async_settings", return_value=settings):
+    """Resolve the mode with the settings of a server with predict jobs, or with
+    none, as when the server is unreachable or predates predict jobs."""
+    settings = _server_settings() if server else None
+    with patch.object(ServiceClient, "get_settings", return_value=settings):
         return ServiceClient._resolve_predict_mode(
             cast(Any, api_mode),
             n_train_rows=n_train_rows,
@@ -411,33 +420,22 @@ def _resolve(
 
 
 class TestResolvePredictMode:
-    @pytest.mark.parametrize("api_mode", list(ApiMode))
-    def test_a_server_without_predict_jobs_gets_one_request_in_every_mode(
-        self, api_mode, caplog
-    ):
+    def test_auto_predicts_with_one_request_without_settings(self, caplog):
         with caplog.at_level(logging.DEBUG, logger="tabpfn_client.client"):
             mode = _resolve(
-                api_mode,
-                _async_settings(thresholds=False),
-                n_train_rows=10**6,
-                n_test_rows=10**6,
+                ApiMode.AUTO, server=False, n_train_rows=10**6, n_test_rows=10**6
             )
 
         assert mode is ApiMode.SYNC
-        assert "runs no predictions as background jobs" in caplog.text
+        assert "No server settings; predicting with one request." in caplog.text
 
-    @pytest.mark.parametrize("api_mode", list(ApiMode))
-    def test_unreachable_settings_mean_one_request_in_every_mode(self, api_mode):
-        with patch.object(ServiceClient, "get_settings", return_value=None):
-            mode = ServiceClient._resolve_predict_mode(
-                api_mode,
-                n_train_rows=10**6,
-                n_test_rows=10**6,
-                thinking=False,
-                fit_with_cache=False,
-            )
+    @pytest.mark.parametrize("api_mode", [ApiMode.SYNC, ApiMode.ASYNC])
+    def test_sync_and_async_are_kept_without_settings(self, api_mode):
+        # ASYNC tries the job endpoint, and `predict()` falls back to one
+        # request if the server has none.
+        mode = _resolve(api_mode, server=False, n_train_rows=1, n_test_rows=1)
 
-        assert mode is ApiMode.SYNC
+        assert mode is api_mode
 
     @pytest.mark.parametrize(
         ("api_mode", "rows"), [(ApiMode.SYNC, 10**6), (ApiMode.ASYNC, 1)]
@@ -448,7 +446,6 @@ class TestResolvePredictMode:
     ):
         mode = _resolve(
             api_mode,
-            _async_settings(),
             n_train_rows=rows,
             n_test_rows=rows,
             thinking=True,
@@ -481,7 +478,6 @@ class TestResolvePredictMode:
     ):
         mode = _resolve(
             ApiMode.AUTO,
-            _async_settings(),
             n_train_rows=n_train_rows,
             n_test_rows=n_test_rows,
         )
@@ -491,7 +487,6 @@ class TestResolvePredictMode:
     def test_auto_predicts_a_fit_with_a_kv_cache_with_one_request(self):
         mode = _resolve(
             ApiMode.AUTO,
-            _async_settings(),
             n_train_rows=10**6,
             n_test_rows=10**6,
             fit_with_cache=True,
@@ -507,22 +502,11 @@ class TestResolvePredictMode:
     ):
         rows = {"n_train_rows": n_train_rows, "n_test_rows": n_test_rows}
 
-        thinking = _resolve(ApiMode.AUTO, _async_settings(), thinking=True, **rows)
-        standard = _resolve(ApiMode.AUTO, _async_settings(), thinking=False, **rows)
+        thinking = _resolve(ApiMode.AUTO, thinking=True, **rows)
+        standard = _resolve(ApiMode.AUTO, thinking=False, **rows)
 
         assert thinking is ApiMode.ASYNC
         assert standard is ApiMode.SYNC
-
-    def test_auto_uses_the_standard_thresholds_when_there_are_no_thinking_ones(
-        self,
-    ):
-        settings = _async_settings(thinking=False)
-
-        below = _resolve(ApiMode.AUTO, settings, n_train_rows=25_000, thinking=True)
-        reached = _resolve(ApiMode.AUTO, settings, n_train_rows=50_000, thinking=True)
-
-        assert below is ApiMode.SYNC
-        assert reached is ApiMode.ASYNC
 
     @pytest.mark.parametrize(
         ("api_mode", "n_train_rows", "expected"),
@@ -533,10 +517,8 @@ class TestResolvePredictMode:
             ("auto", 1, ApiMode.SYNC),
         ],
     )
-    def test_takes_the_mode_as_the_plain_string_load_model_restores(
-        self, api_mode, n_train_rows, expected
-    ):
-        mode = _resolve(api_mode, _async_settings(), n_train_rows=n_train_rows)
+    def test_takes_the_mode_as_a_plain_string(self, api_mode, n_train_rows, expected):
+        mode = _resolve(api_mode, n_train_rows=n_train_rows)
 
         assert mode is expected
 
@@ -568,6 +550,48 @@ class TestPredict:
             "task_config": {"task": "classification"},
         }
 
+    def test_reports_a_prediction_answered_at_once_as_accepted_without_an_id(
+        self, router
+    ):
+        _upload_route(router)
+        router.post("/tabpfn/predict").respond(200, json=_prediction())
+        accepted: list[UUID | None] = []
+
+        _predict(on_accepted=accepted.append)
+
+        # Nothing is left to wait for.
+        assert accepted == [None]
+
+    def test_reports_a_prediction_still_running_as_accepted_before_polling(
+        self, router
+    ):
+        _upload_route(router)
+        router.post("/tabpfn/predict").mock(
+            return_value=_json(200, _predict_pending(4.0))
+        )
+        accepted: list[tuple[UUID | None, int]] = []
+
+        with _polling(router, [_json(200, _completed())]) as (clock, poll_route):
+            _predict(
+                on_accepted=lambda fitted_test_set_id: accepted.append(
+                    (fitted_test_set_id, poll_route.call_count)
+                )
+            )
+
+        assert accepted == [(PREDICTION_ID, 0)]
+        # The first poll still waits for the hint of the pending answer.
+        assert clock.sleeps == [4.0]
+
+    def test_a_request_that_fails_reports_nothing_accepted(self, router):
+        _upload_route(router)
+        router.post("/tabpfn/predict").mock(return_value=_error(422, "invalid"))
+        accepted: list[UUID | None] = []
+
+        with pytest.raises(RuntimeError):
+            _predict(on_accepted=accepted.append)
+
+        assert accepted == []
+
     def test_skips_the_keepalive_pings_before_the_prediction(self, router):
         _upload_route(router)
         router.post("/tabpfn/predict").mock(
@@ -590,7 +614,7 @@ class TestPredict:
 
         with (
             _polling(router, outcomes) as (clock, poll_route),
-            caplog.at_level(logging.INFO, logger="tabpfn_client.client"),
+            caplog.at_level(logging.DEBUG, logger="tabpfn_client.client"),
         ):
             result = _predict()
 
@@ -744,16 +768,31 @@ class TestPredict:
             ),
             (
                 STALE_KV_CACHE,
-                "USER_ERROR",
+                "KV_CACHE_INVALID",
                 RefitRequiredError,
                 f"Prediction {PREDICTION_ID} failed: {STALE_KV_CACHE} "
-                "(error code USER_ERROR)",
+                "(error code KV_CACHE_INVALID)",
             ),
             (
                 MISSING_KV_CACHE,
-                "USER_ERROR",
+                "KV_CACHE_INVALID",
                 RefitRequiredError,
                 f"Prediction {PREDICTION_ID} failed: {MISSING_KV_CACHE} "
+                "(error code KV_CACHE_INVALID)",
+            ),
+            (
+                None,
+                "KV_CACHE_INVALID",
+                RefitRequiredError,
+                f"Prediction {PREDICTION_ID} failed: no error message provided "
+                "(error code KV_CACHE_INVALID)",
+            ),
+            # The code decides, not the message.
+            (
+                STALE_KV_CACHE,
+                "USER_ERROR",
+                PredictFailedError,
+                f"Prediction {PREDICTION_ID} failed: {STALE_KV_CACHE} "
                 "(error code USER_ERROR)",
             ),
         ],
@@ -765,6 +804,8 @@ class TestPredict:
             "needs_refitting_without_a_message",
             "stale_kv_cache",
             "missing_kv_cache",
+            "kv_cache_invalid_without_a_message",
+            "refit_text_without_a_refit_code",
         ],
     )
     def test_a_polled_prediction_that_fails_raises_what_the_server_reports(
@@ -783,70 +824,9 @@ class TestPredict:
 
         assert type(exc_info.value) is expected
         assert str(exc_info.value) == message
+        assert exc_info.value.fitted_test_set_id == PREDICTION_ID
         # The prediction has ended: there is nothing left to come back for.
         assert _broke_off_warnings(caplog) == []
-
-    @pytest.mark.parametrize(
-        ("status_code", "message", "error_code", "streamed"),
-        [
-            (409, NEEDS_REFITTING, "NEEDS_REFITTING", False),
-            (409, NEEDS_REFITTING, "", True),
-            (409, STALE_KV_CACHE, "USER_ERROR", False),
-            (409, MISSING_KV_CACHE, "", True),
-            (400, STALE_KV_CACHE, "USER_ERROR", False),
-            (400, MISSING_KV_CACHE, "", True),
-        ],
-        ids=[
-            "needs_refitting",
-            "needs_refitting_streamed",
-            "kv_cache",
-            "kv_cache_streamed",
-            "booked_kv_cache",
-            "booked_kv_cache_streamed",
-        ],
-    )
-    def test_a_model_that_can_no_longer_predict_raises_refit_required_error(
-        self, router, status_code, message, error_code, streamed
-    ):
-        _upload_route(router)
-        predict_route = router.post("/tabpfn/predict").mock(
-            return_value=_error(
-                status_code, message, streamed=streamed, error_code=error_code
-            )
-        )
-
-        with pytest.raises(RefitRequiredError) as exc_info:
-            _predict()
-
-        # Only a fast error carries a trace id.
-        assert str(exc_info.value) == (
-            message if streamed else f"{message} Report trace ID: {TRACE_ID}."
-        )
-        assert predict_route.call_count == 1
-
-    @pytest.mark.parametrize(
-        ("status_code", "message", "error_code"),
-        [
-            (409, NEEDS_REFITTING, "NEEDS_REFITTING"),
-            (400, STALE_KV_CACHE, "USER_ERROR"),
-        ],
-        ids=["needs_refitting", "booked_kv_cache"],
-    )
-    def test_warns_of_a_deprecated_client_on_a_refit_answer(
-        self, router, status_code, message, error_code
-    ):
-        _upload_route(router)
-        router.post("/tabpfn/predict").respond(
-            status_code,
-            json={"message": message, "error_code": error_code},
-            headers={"deprecation": "true"},
-        )
-
-        with (
-            pytest.warns(DeprecationWarning, match="tabpfn-client is deprecated"),
-            pytest.raises(RefitRequiredError),
-        ):
-            _predict()
 
     @pytest.mark.parametrize(
         ("status_code", "message", "streamed", "expected"),
@@ -877,8 +857,30 @@ class TestPredict:
                 True,
                 "Fail to call predict with error: streamed, Internal server error.",
             ),
+            # A refit names the prediction: neither the status nor the refit
+            # text makes one of a body that does not.
+            (
+                409,
+                STALE_KV_CACHE,
+                False,
+                f"Fail to call predict: [HTTP 409] {STALE_KV_CACHE}. Report trace "
+                f"ID: {TRACE_ID}.",
+            ),
+            (
+                409,
+                STALE_KV_CACHE,
+                True,
+                f"Fail to call predict with error: streamed, {STALE_KV_CACHE}",
+            ),
         ],
-        ids=["fast_400", "fast_422", "streamed_400", "streamed_500"],
+        ids=[
+            "fast_400",
+            "fast_422",
+            "streamed_400",
+            "streamed_500",
+            "unnamed_refit",
+            "unnamed_refit_streamed",
+        ],
     )
     def test_other_errors_are_raised_as_before(
         self, router, status_code, message, streamed, expected
@@ -895,22 +897,213 @@ class TestPredict:
         assert str(exc_info.value) == expected
         assert predict_route.call_count == 1
 
-    def test_a_retryable_status_is_still_retried_once(self, router):
+    @pytest.mark.parametrize("error", [httpx.ConnectError, httpx.ConnectTimeout])
+    def test_a_predict_that_never_reached_the_server_is_retried_once(
+        self, router, error
+    ):
         _upload_route(router)
         predict_route = router.post("/tabpfn/predict")
-        predict_route.side_effect = [
-            _error(503, "Overloaded"),
-            _json(200, _prediction()),
-        ]
+        predict_route.side_effect = [error("unreachable"), _json(200, _prediction())]
 
         result = _predict()
 
         assert predict_route.call_count == 2
         assert result.fitted_test_set_id == PREDICTION_ID
 
+    @pytest.mark.parametrize(
+        "outcome",
+        [
+            httpx.ReadTimeout("lost"),
+            httpx.RemoteProtocolError("cut off"),
+            _error(503, "Overloaded"),
+        ],
+        ids=["read_timeout", "cut_off", "503"],
+    )
+    def test_a_predict_the_server_may_have_run_is_not_retried(self, router, outcome):
+        # Each /predict creates a job; even a 503 can come after it completed.
+        _upload_route(router)
+        predict_route = router.post("/tabpfn/predict")
+        predict_route.side_effect = [outcome]
+
+        with pytest.raises((httpx.HTTPError, RetryableServerError)) as exc_info:
+            _predict()
+
+        assert predict_route.call_count == 1
+        if isinstance(outcome, httpx.Response):
+            # `except RuntimeError` catches every failure the server reports.
+            assert isinstance(exc_info.value, RuntimeError)
+
     def test_rejects_an_invalid_mode_before_any_request(self, router):
         with pytest.raises(ValueError):
             _predict(api_mode=cast(Any, "SYNC"))
+
+
+def _job_failure(
+    status_code: int,
+    message: str,
+    error_code: str,
+    *,
+    streamed: bool = False,
+    headers: dict[str, str] | None = None,
+) -> httpx.Response:
+    """The failure of the job a `/predict` or a submit created, which names it."""
+    body = {
+        "message": message,
+        "error_code": error_code,
+        "trace_id": TRACE_ID,
+        "fitted_test_set_id": str(PREDICTION_ID),
+    }
+    if streamed:
+        # As the server streams it: the body's fields, then the envelope's own
+        # keys, with `detail` the message that older clients read.
+        envelope = {"_streamed_error": True, "status_code": status_code}
+        return _json(
+            200,
+            body | envelope | {"detail": message},
+            keepalive=b"   ",
+            headers=headers,
+        )
+    return _json(status_code, body, headers=headers)
+
+
+STREAMED = pytest.mark.parametrize("streamed", [False, True], ids=["fast", "streamed"])
+
+
+class TestAFailureReportedOnTheRequest:
+    """A job that fails before the request that created it is answered raises
+    what a poll for the job raises, with the job's id."""
+
+    @STREAMED
+    @pytest.mark.parametrize(
+        ("status_code", "message", "error_code", "expected"),
+        [
+            (500, "boom", "INTERNAL_ERROR", PredictFailedError),
+            (503, "Overloaded", "BUSY", PredictFailedError),
+            (504, "Too slow", "DEADLINE_EXCEEDED", PredictFailedError),
+            (
+                422,
+                "X_test has 3 features, expected 4",
+                "REQUEST_VALIDATION_ERROR",
+                PredictFailedError,
+            ),
+            (409, NEEDS_REFITTING, "NEEDS_REFITTING", RefitRequiredError),
+            (409, STALE_KV_CACHE, "KV_CACHE_INVALID", RefitRequiredError),
+            (409, MISSING_KV_CACHE, "KV_CACHE_INVALID", RefitRequiredError),
+            # The code decides, not the status or the message.
+            (409, "Conflict", "USER_ERROR", PredictFailedError),
+            (409, STALE_KV_CACHE, "USER_ERROR", PredictFailedError),
+        ],
+        ids=[
+            "internal_error",
+            "busy",
+            "deadline_exceeded",
+            "validation_error",
+            "needs_refitting",
+            "stale_kv_cache",
+            "missing_kv_cache",
+            "conflict_without_a_refit_code",
+            "refit_text_without_a_refit_code",
+        ],
+    )
+    def test_a_failed_predict_raises_what_a_poll_raises(
+        self, router, caplog, status_code, message, error_code, expected, streamed
+    ):
+        _upload_route(router)
+        # No poll route: a poll would fail the test.
+        predict_route = router.post("/tabpfn/predict").mock(
+            return_value=_job_failure(
+                status_code, message, error_code, streamed=streamed
+            )
+        )
+
+        with pytest.raises(PredictFailedError) as exc_info:
+            _predict()
+
+        assert type(exc_info.value) is expected
+        assert str(exc_info.value) == (
+            f"Prediction {PREDICTION_ID} failed: {message} (error code "
+            f"{error_code}) Report trace ID: {TRACE_ID}."
+        )
+        assert exc_info.value.fitted_test_set_id == PREDICTION_ID
+        assert predict_route.call_count == 1
+        # The prediction has ended: there is nothing left to come back for.
+        assert _broke_off_warnings(caplog) == []
+
+    @pytest.mark.parametrize(
+        ("status_code", "message", "error_code", "expected"),
+        [
+            (503, "Overloaded", "BUSY", PredictFailedError),
+            (409, NEEDS_REFITTING, "NEEDS_REFITTING", RefitRequiredError),
+        ],
+        ids=["busy", "needs_refitting"],
+    )
+    def test_warns_of_a_deprecated_client_on_a_failed_job(
+        self, router, status_code, message, error_code, expected
+    ):
+        _upload_route(router)
+        router.post("/tabpfn/predict").mock(
+            return_value=_job_failure(
+                status_code, message, error_code, headers={"deprecation": "true"}
+            )
+        )
+
+        with (
+            pytest.warns(DeprecationWarning, match="tabpfn-client is deprecated"),
+            pytest.raises(expected),
+        ):
+            _predict()
+
+    @pytest.mark.parametrize(
+        ("status_code", "message", "error_code"),
+        [
+            (503, "The service is overloaded.", "BUSY"),
+            (413, "The prediction request is too large.", "INVALID_REQUEST"),
+        ],
+        ids=["busy", "too_large"],
+    )
+    @pytest.mark.parametrize("call", ["predict", "submit_predict"])
+    def test_a_submitted_job_that_failed_at_once_raises_what_a_poll_raises(
+        self, router, caplog, status_code, message, error_code, call
+    ):
+        # The server created the job and could not queue it.
+        _cache_settings()
+        _upload_route(router)
+        # No /predict and no poll route: either would fail the test.
+        submit_route = router.post("/tabpfn/submit_predict_job").mock(
+            return_value=_job_failure(status_code, message, error_code)
+        )
+
+        with pytest.raises(PredictFailedError) as exc_info:
+            if call == "predict":
+                _predict(api_mode=ApiMode.ASYNC)
+            else:
+                ServiceClient.submit_predict(FIT_ID, X_TEST, ClassifierConfig())
+
+        assert type(exc_info.value) is PredictFailedError
+        assert str(exc_info.value) == (
+            f"Prediction {PREDICTION_ID} failed: {message} (error code "
+            f"{error_code}) Report trace ID: {TRACE_ID}."
+        )
+        assert exc_info.value.fitted_test_set_id == PREDICTION_ID
+        assert submit_route.call_count == 1
+        assert _broke_off_warnings(caplog) == []
+
+    def test_a_submit_answered_without_the_id_raises_as_before(self, router):
+        # A server that predates the id, or failed before it created the job.
+        _cache_settings()
+        _upload_route(router)
+        submit_route = router.post("/tabpfn/submit_predict_job").mock(
+            return_value=_error(503, "Overloaded", error_code="INTERNAL_ERROR")
+        )
+
+        with pytest.raises(RetryableServerError) as exc_info:
+            ServiceClient.submit_predict(FIT_ID, X_TEST, ClassifierConfig())
+
+        assert str(exc_info.value) == (
+            "Fail to call submit_predict_job: [HTTP 503] Overloaded. "
+            f"Report trace ID: {TRACE_ID}."
+        )
+        assert submit_route.call_count == 1
 
 
 class TestPredictionJobs:
@@ -941,6 +1134,24 @@ class TestPredictionJobs:
         np.testing.assert_array_equal(result.y_pred, PREDICTION)
         assert result.timings == TIMINGS
         assert result.fitted_test_set_id == PREDICTION_ID
+
+    def test_async_reports_the_job_as_accepted_before_polling(self, router):
+        _cache_settings()
+        _upload_route(router)
+        router.post("/tabpfn/submit_predict_job").respond(
+            200, json={"fitted_test_set_id": str(PREDICTION_ID)}
+        )
+        accepted: list[tuple[UUID | None, int]] = []
+
+        with _polling(router, [_json(200, _completed())]) as (_, poll_route):
+            _predict(
+                api_mode=ApiMode.ASYNC,
+                on_accepted=lambda fitted_test_set_id: accepted.append(
+                    (fitted_test_set_id, poll_route.call_count)
+                ),
+            )
+
+        assert accepted == [(PREDICTION_ID, 0)]
 
     def test_a_job_is_submitted_and_polled_with_the_request_timeout_and_headers(
         self, router
@@ -1013,7 +1224,7 @@ class TestPredictionJobs:
     def test_decides_on_the_fit_and_the_rows_to_predict(
         self, router, fit_mode, fit_with_cache
     ):
-        _cache_settings(thresholds=False)
+        _cache_settings()
         _upload_route(router)
         router.post("/tabpfn/predict").respond(200, json=_prediction())
         task_config = ClassifierConfig(
@@ -1073,27 +1284,36 @@ class TestPredictionJobs:
 
         assert submit_route.call_count == 1
 
-    def test_async_predicts_with_one_request_on_a_server_without_predict_jobs(
-        self, router
+    @ROUTE_MISSING
+    def test_async_tries_a_job_on_a_server_whose_settings_are_unavailable(
+        self, router, route_missing
     ):
-        _cache_settings(thresholds=False)
+        # A server that predates predict jobs: its settings don't validate.
+        settings_route = router.get("/tabpfn/get_settings").respond(
+            200, json=_settings_payload(thresholds=False)
+        )
         _upload_route(router)
-        # No submit route: submitting would fail the test.
+        submit_route = router.post("/tabpfn/submit_predict_job").respond(
+            404, json=route_missing
+        )
         predict_route = router.post("/tabpfn/predict").respond(
             200, json=_prediction(with_id=False)
         )
 
         result = _predict(api_mode=ApiMode.ASYNC)
 
+        assert settings_route.called
+        assert submit_route.call_count == 1
         assert predict_route.call_count == 1
         np.testing.assert_array_equal(result.y_pred, PREDICTION)
 
+    @ROUTE_MISSING
     def test_predicts_with_one_request_when_the_server_has_no_submit_endpoint(
-        self, router, caplog
+        self, router, caplog, route_missing
     ):
         upload_route = _upload_route(router)
         submit_route = router.post("/tabpfn/submit_predict_job").respond(
-            404, json=ROUTE_MISSING
+            404, json=route_missing
         )
         predict_route = router.post("/tabpfn/predict").respond(
             200, json=_prediction(with_id=False)
@@ -1119,19 +1339,18 @@ class TestPredictionJobs:
         assert submit_route.call_count == 1
         assert _sent(predict_route) == _sent(submit_route)
         assert _sent(predict_route)["test_set_upload_id"] == UPLOAD_ID
-        # The settings that sent the prediction to the job endpoint expired.
+        # The settings that sent the prediction to the job endpoint are
+        # dropped, and the older server's own don't validate.
         assert settings_route.call_count == 1
-        assert settings is not None
-        assert settings.async_settings.predict_use_above is None
+        assert settings is None
 
     @pytest.mark.parametrize(
         ("message", "error_code"),
         [
             ("Fitted train set not found", "NOT_FOUND"),
             ("x_test blob not found", "USER_ERROR"),
-            ("Not Found", "NOT_FOUND"),
         ],
-        ids=["unknown_fit", "missing_test_set", "not_found_code"],
+        ids=["unknown_fit", "missing_test_set"],
     )
     def test_the_submit_endpoints_own_404_is_raised(self, router, message, error_code):
         _cache_settings()
@@ -1201,63 +1420,13 @@ class TestPredictionJobs:
 
         assert fitted_test_set_id == PREDICTION_ID
 
-    def test_submit_predict_refuses_a_server_without_predict_jobs_before_uploading(
-        self, router
+    @ROUTE_MISSING
+    def test_submit_predict_raises_when_the_server_has_no_submit_endpoint(
+        self, router, route_missing
     ):
-        # No upload route: an upload would fail the test.
-        settings_route = router.get("/tabpfn/get_settings").respond(
-            200, json=_settings_payload(thresholds=False)
-        )
-
-        with (
-            _settings_cached_minutes_after_boot(thresholds=False),
-            pytest.raises(RuntimeError) as exc_info,
-        ):
-            ServiceClient.submit_predict(FIT_ID, X_TEST, ClassifierConfig())
-
-        assert str(exc_info.value) == NO_PREDICT_JOBS
-        # Cached settings may predate the server's predict jobs, so the server
-        # is asked again before the refusal.
-        assert settings_route.call_count == 1
-
-    def test_submit_predict_refuses_on_the_cached_settings_it_cannot_refresh(
-        self, router
-    ):
-        # No upload route: an upload would fail the test.
-        settings_route = router.get("/tabpfn/get_settings").respond(503)
-
-        with (
-            _settings_cached_minutes_after_boot(thresholds=False),
-            pytest.raises(RuntimeError) as exc_info,
-        ):
-            ServiceClient.submit_predict(FIT_ID, X_TEST, ClassifierConfig())
-
-        assert str(exc_info.value) == NO_PREDICT_JOBS
-        # One refetch; once it fails, the cached settings decide.
-        assert settings_route.call_count == 1
-
-    def test_submit_predict_submits_once_fresh_settings_show_predict_jobs(self, router):
-        settings_route = router.get("/tabpfn/get_settings").respond(
-            200, json=_settings_payload()
-        )
-        _upload_route(router)
-        router.post("/tabpfn/submit_predict_job").respond(
-            200, json={"fitted_test_set_id": str(PREDICTION_ID)}
-        )
-
-        # Settings cached before the server started to run predict jobs.
-        with _settings_cached_minutes_after_boot(thresholds=False):
-            fitted_test_set_id = ServiceClient.submit_predict(
-                FIT_ID, X_TEST, ClassifierConfig()
-            )
-
-        assert fitted_test_set_id == PREDICTION_ID
-        assert settings_route.call_count == 1
-
-    def test_submit_predict_raises_when_the_server_has_no_submit_endpoint(self, router):
         upload_route = _upload_route(router)
         submit_route = router.post("/tabpfn/submit_predict_job").respond(
-            404, json=ROUTE_MISSING
+            404, json=route_missing
         )
         settings_route = router.get("/tabpfn/get_settings").respond(
             200, json=_settings_payload(thresholds=False)
@@ -1271,11 +1440,11 @@ class TestPredictionJobs:
                 ServiceClient.submit_predict(FIT_ID, X_TEST, ClassifierConfig())
 
         assert str(first.value) == str(second.value) == NO_PREDICT_JOBS
-        # The first call expired the settings, so the second asked the server
-        # again and refused before it uploaded.
+        assert upload_route.call_count == submit_route.call_count == 2
+        # The first call dropped the settings, and the older server's own
+        # don't validate.
+        assert ServiceClient.get_settings() is None
         assert settings_route.called
-        assert upload_route.call_count == 1
-        assert submit_route.call_count == 1
 
 
 def _capped_errors() -> list[tuple[Callable[[], Any], type[Exception]]]:
@@ -1334,6 +1503,205 @@ TRANSIENT_ERRORS = pytest.mark.parametrize(
 )
 
 
+def _job_id(index: int) -> UUID:
+    return UUID(int=0x100 + index)
+
+
+def _chunk_result(index: int) -> PredictionResult:
+    return PredictionResult(y_pred=np.array([index]), fitted_test_set_id=_job_id(index))
+
+
+@contextmanager
+def _chunk_server(
+    *,
+    sync: frozenset[int] = frozenset(),
+    stop_start: dict[int, BaseException] | None = None,
+    stop_wait: dict[int, BaseException] | None = None,
+) -> Generator[list[str]]:
+    """Serve `predict_chunks` for test sets whose cells hold their position.
+
+    Each starts as a job, except those in `sync`, predicted with one request.
+    Starting or waiting for the one at position i raises `stop_start[i]` or
+    `stop_wait[i]`. Yields the starts and waits, in order.
+    """
+    events: list[str] = []
+
+    def start(fitted_train_set_id: UUID, x_chunk: Any, *args: Any, **kwargs: Any):
+        index = int(x_chunk[0][0])
+        events.append(f"start {index}")
+        if index in (stop_start or {}):
+            raise (stop_start or {})[index]
+        return _chunk_result(index) if index in sync else _PredictJob(_job_id(index))
+
+    def wait(fitted_test_set_id: UUID, *args: Any, **kwargs: Any) -> PredictionResult:
+        index = fitted_test_set_id.int - 0x100
+        events.append(f"wait {index}")
+        if index in (stop_wait or {}):
+            raise (stop_wait or {})[index]
+        return _chunk_result(index)
+
+    with (
+        patch.object(ServiceClient, "_start_predict", autospec=True, side_effect=start),
+        patch.object(
+            ServiceClient, "_await_prediction", autospec=True, side_effect=wait
+        ),
+    ):
+        yield events
+
+
+def _predict_chunks(n_chunks: int) -> list[PredictionResult]:
+    return ServiceClient.predict_chunks(
+        FIT_ID,
+        (np.full((1, 2), index) for index in range(n_chunks)),
+        ClassifierConfig(),
+        api_mode=ApiMode.ASYNC,
+    )
+
+
+class TestPredictChunks:
+    """`ServiceClient.predict_chunks`, which a regressor's split full output
+    goes through: its background predictions overlap, up to 4 at once."""
+
+    def test_keeps_up_to_four_jobs_running_and_returns_them_in_order(self):
+        with _chunk_server() as events:
+            results = _predict_chunks(6)
+
+        assert events == [
+            *(f"start {i}" for i in range(4)),
+            "wait 0",
+            "start 4",
+            "wait 1",
+            "start 5",
+            *(f"wait {i}" for i in range(2, 6)),
+        ]
+        assert [int(cast(np.ndarray, r.y_pred)[0]) for r in results] == list(range(6))
+
+    def test_a_test_set_predicted_with_one_request_keeps_its_place(self):
+        with _chunk_server(sync=frozenset({1})) as events:
+            results = _predict_chunks(3)
+
+        assert events == ["start 0", "start 1", "start 2", "wait 0", "wait 2"]
+        assert [int(cast(np.ndarray, r.y_pred)[0]) for r in results] == [0, 1, 2]
+
+    def test_reports_each_test_set_it_got_accepted_in_order(self):
+        accepted: list[UUID | None] = []
+
+        with _chunk_server(sync=frozenset({1})):
+            ServiceClient.predict_chunks(
+                FIT_ID,
+                (np.full((1, 2), index) for index in range(3)),
+                ClassifierConfig(),
+                api_mode=ApiMode.ASYNC,
+                on_accepted=accepted.append,
+            )
+
+        assert accepted == [_job_id(0), None, _job_id(2)]
+
+    def test_passes_the_mode_and_the_fit_to_every_test_set(self):
+        with (
+            _chunk_server(),
+            patch.object(
+                ServiceClient,
+                "_start_predict",
+                side_effect=lambda *args, **kwargs: _chunk_result(0),
+            ) as start,
+        ):
+            ServiceClient.predict_chunks(
+                FIT_ID,
+                [X_TEST, X_TEST],
+                ClassifierConfig(),
+                api_mode=ApiMode.AUTO,
+                n_train_rows=7,
+                thinking=True,
+            )
+
+        assert start.call_count == 2
+        for call in start.call_args_list:
+            assert call.args[0] == FIT_ID
+            assert call.kwargs == {
+                "api_mode": ApiMode.AUTO,
+                "n_train_rows": 7,
+                "thinking": True,
+            }
+
+    def test_a_failed_prediction_stops_the_rest_and_logs_the_running_jobs(self, caplog):
+        with _chunk_server(stop_wait={0: PredictFailedError("boom")}) as events:
+            with pytest.raises(PredictFailedError):
+                _predict_chunks(6)
+
+        # Nothing starts after the failure.
+        assert events == [*(f"start {i}" for i in range(4)), "wait 0"]
+        warnings = _broke_off_warnings(caplog)
+        assert len(warnings) == 3
+        for index, warning in zip([1, 2, 3], warnings):
+            assert str(_job_id(index)) in warning
+
+    def test_an_interrupted_start_logs_the_running_jobs(self, caplog):
+        with _chunk_server(stop_start={2: KeyboardInterrupt()}) as events:
+            with pytest.raises(KeyboardInterrupt):
+                _predict_chunks(6)
+
+        assert events == ["start 0", "start 1", "start 2"]
+        warnings = _broke_off_warnings(caplog)
+        assert len(warnings) == 2
+        assert str(_job_id(0)) in warnings[0]
+        assert str(_job_id(1)) in warnings[1]
+
+    def test_runs_each_test_set_through_the_server_in_order(self, router):
+        _cache_settings()
+        _upload_route(router)
+        job_ids = [_job_id(index) for index in range(5)]
+        submit_route = router.post("/tabpfn/submit_predict_job")
+        submit_route.side_effect = [
+            httpx.Response(200, json={"fitted_test_set_id": str(job_id)})
+            for job_id in job_ids
+        ]
+
+        def poll(request: httpx.Request) -> httpx.Response:
+            job_id = json.loads(request.content)["fitted_test_set_id"]
+            index = UUID(job_id).int - 0x100
+            return _json(200, _completed(prediction=[index], fitted_test_set_id=job_id))
+
+        poll_route = router.post("/tabpfn/get_predict_result")
+        poll_route.side_effect = poll
+        options = ClientOptions(timeout=42.0, headers={"sentry-trace": "abc"})
+
+        with _fake_clock():
+            results = ServiceClient.predict_chunks(
+                FIT_ID,
+                [X_TEST] * 5,
+                ClassifierConfig(),
+                options,
+                api_mode=ApiMode.ASYNC,
+            )
+
+        assert [r.fitted_test_set_id for r in results] == job_ids
+        assert [cast(np.ndarray, r.y_pred).tolist() for r in results] == [
+            [index] for index in range(5)
+        ]
+        assert [_sent_in(call)["fitted_test_set_id"] for call in poll_route.calls] == [
+            str(job_id) for job_id in job_ids
+        ]
+        for call in submit_route.calls:
+            assert _sent_in(call) == {
+                "test_set_upload_id": UPLOAD_ID,
+                "fitted_train_set_id": str(FIT_ID),
+                "task_config": {"task": "classification"},
+            }
+            assert call.request.headers["sentry-trace"] == "abc"
+            assert call.request.extensions["timeout"]["read"] == 42.0
+        for call in poll_route.calls:
+            assert call.request.headers["sentry-trace"] == "abc"
+
+    def test_rejects_an_invalid_mode_before_any_request(self):
+        with _chunk_server() as events, pytest.raises(ValueError):
+            ServiceClient.predict_chunks(
+                FIT_ID, [X_TEST], ClassifierConfig(), api_mode=cast(Any, "ASYNC")
+            )
+
+        assert events == []
+
+
 class TestWaitForPredict:
     """The poll loop: `ServiceClient.wait_for_predict` and what it does with
     each answer a poll can get."""
@@ -1366,6 +1734,34 @@ class TestWaitForPredict:
         y_pred = cast("dict[str, np.ndarray]", result.y_pred)
         np.testing.assert_allclose(y_pred["borders"], [0.0, np.nan, 2.0])
         np.testing.assert_allclose(y_pred["logits"], [[1.0, np.nan], [np.nan, 4.0]])
+
+    def test_a_malformed_poll_body_is_retried_as_a_capped_error(self, router, caplog):
+        with (
+            _polling(
+                router,
+                [_json(200, {"unexpected": "shape"}), _json(200, _completed())],
+            ) as (clock, route),
+            caplog.at_level(logging.WARNING, logger="tabpfn_client.client"),
+        ):
+            result = _wait()
+
+        assert route.call_count == 2
+        assert clock.sleeps == [5.0]
+        assert result.fitted_test_set_id == PREDICTION_ID
+        assert "Unexpected error while polling status of prediction" in caplog.text
+
+    def test_the_fourth_malformed_poll_body_in_a_row_raises(self, router):
+        with _polling(router, [_json(200, {"unexpected": "shape"})] * 4) as (_, route):
+            with pytest.raises(RuntimeError) as exc_info:
+                _wait()
+
+        assert route.call_count == 4
+        assert str(exc_info.value).startswith(
+            f"Polling prediction {PREDICTION_ID} failed 4 times in a row:"
+        )
+        cause = exc_info.value.__cause__
+        assert isinstance(cause, CappedRetryableServerError)
+        assert isinstance(cause.__cause__, ValidationError)
 
     def test_a_status_this_client_does_not_know_counts_as_still_running(self, router):
         unknown = {**_pending(1.0), "status": "queued"}
@@ -1481,14 +1877,18 @@ class TestWaitForPredict:
         assert clock.sleeps == [0.5]
         assert route.call_count == 2
 
-    def test_stops_at_once_on_a_server_without_the_endpoint(self, router, caplog):
-        with _polling(router, [_json(404, ROUTE_MISSING)]) as (clock, route):
+    @ROUTE_MISSING
+    def test_stops_at_once_on_a_server_without_the_endpoint(
+        self, router, caplog, route_missing
+    ):
+        with _polling(router, [_json(404, route_missing)]) as (clock, route):
             with pytest.raises(RuntimeError) as exc_info:
                 _wait()
 
         assert str(exc_info.value) == (
             f"Cannot wait for prediction {PREDICTION_ID}: this TabPFN server does "
-            "not run predictions as background jobs."
+            "not run predictions as background jobs right now. Wait for it again "
+            "later: a server that runs them again may still complete it."
         )
         assert not isinstance(exc_info.value, PredictFailedError)
         assert clock.sleeps == []
@@ -1814,12 +2214,20 @@ class TestWaitForPredict:
         )
 
     @pytest.mark.parametrize("missing", ["prediction", "metadata"])
-    def test_a_completed_poll_without_the_prediction_raises(self, router, missing):
+    def test_a_completed_poll_without_the_prediction_fails_it(
+        self, router, missing, caplog
+    ):
         body = {**_completed(), missing: None}
 
         with _polling(router, [_json(200, body)]):
-            with pytest.raises(RuntimeError, match="sent no prediction"):
+            with pytest.raises(
+                PredictFailedError, match="sent no prediction"
+            ) as exc_info:
                 _wait()
+
+        assert exc_info.value.fitted_test_set_id == PREDICTION_ID
+        # A later poll would answer the same: nothing to come back for.
+        assert _broke_off_warnings(caplog) == []
 
     def test_a_malformed_id_raises_before_any_poll(self, router, caplog):
         # No poll route: a poll would fail the test.
@@ -1859,10 +2267,14 @@ class TestInferenceClient:
         assert kwargs["api_mode"] is ApiMode.SYNC
         assert kwargs["n_train_rows"] is None
         assert kwargs["thinking"] is False
+        assert kwargs["on_accepted"] is None
 
     def test_predict_passes_the_mode_and_what_auto_decides_on(self):
         options = ClientOptions()
         task_config = ClassifierConfig()
+
+        def on_accepted(fitted_test_set_id: UUID | None) -> None:
+            pass
 
         with patch.object(ServiceClient, "predict") as predict:
             InferenceClient.predict(
@@ -1873,6 +2285,7 @@ class TestInferenceClient:
                 api_mode=ApiMode.AUTO,
                 n_train_rows=7,
                 thinking=True,
+                on_accepted=on_accepted,
             )
 
         kwargs = predict.call_args.kwargs
@@ -1883,6 +2296,37 @@ class TestInferenceClient:
         assert kwargs["api_mode"] is ApiMode.AUTO
         assert kwargs["n_train_rows"] == 7
         assert kwargs["thinking"] is True
+        assert kwargs["on_accepted"] is on_accepted
+
+    def test_predict_chunks_passes_everything_through(self):
+        options = ClientOptions()
+        task_config = ClassifierConfig()
+        x_chunks = [X_TEST, X_TEST]
+
+        def on_accepted(fitted_test_set_id: UUID | None) -> None:
+            pass
+
+        with patch.object(ServiceClient, "predict_chunks", return_value=[]) as chunks:
+            InferenceClient.predict_chunks(
+                x_chunks,
+                fitted_train_set_id=FIT_ID,
+                task_config=task_config,
+                client_options=options,
+                api_mode=ApiMode.AUTO,
+                n_train_rows=7,
+                thinking=True,
+                on_accepted=on_accepted,
+            )
+
+        kwargs = chunks.call_args.kwargs
+        assert kwargs["x_chunks"] is x_chunks
+        assert kwargs["fitted_train_set_id"] == FIT_ID
+        assert kwargs["task_config"] is task_config
+        assert kwargs["client_options"] is options
+        assert kwargs["api_mode"] is ApiMode.AUTO
+        assert kwargs["n_train_rows"] == 7
+        assert kwargs["thinking"] is True
+        assert kwargs["on_accepted"] is on_accepted
 
     def test_submit_predict_returns_the_id(self):
         options = ClientOptions()
@@ -1958,6 +2402,69 @@ def test_a_streamed_error_keeps_the_status_it_reports(envelope, status_code, det
     assert str(exc_info.value) == f"Fail to call fit with error: streamed, {detail}"
 
 
+def _streamed(envelope: dict[str, Any]) -> httpx.Response:
+    return httpx.Response(
+        200,
+        request=httpx.Request("POST", "http://testserver/test"),
+        content=b"  " + json.dumps({"_streamed_error": True, **envelope}).encode(),
+    )
+
+
+def test_a_streamed_error_parses_into_the_error_model_of_its_status():
+    response = _streamed(
+        {
+            "message": "Overloaded",
+            "error_code": "BUSY",
+            "trace_id": TRACE_ID,
+            "fitted_test_set_id": str(PREDICTION_ID),
+            "status_code": 503,
+            "detail": "Overloaded",
+        }
+    )
+
+    parsed = ServiceClient._validate_response(
+        response,
+        "predict",
+        success_model=FitResponse,
+        error_models={503: PredictFailedErrorResponse},
+    )
+
+    assert parsed == PredictFailedErrorResponse(
+        message="Overloaded",
+        error_code="BUSY",
+        trace_id=UUID(TRACE_ID),
+        fitted_test_set_id=PREDICTION_ID,
+    )
+
+
+@pytest.mark.parametrize(
+    "envelope",
+    [
+        # From a server that streams no body fields.
+        {"status_code": 503, "detail": "Overloaded"},
+        # A status without an error model.
+        {
+            "message": "Overloaded",
+            "fitted_test_set_id": str(PREDICTION_ID),
+            "status_code": 502,
+            "detail": "Overloaded",
+        },
+    ],
+    ids=["without_the_fields", "another_status"],
+)
+def test_a_streamed_error_without_a_matching_model_still_raises(envelope):
+    with pytest.raises(StreamedServerError) as exc_info:
+        ServiceClient._validate_response(
+            _streamed(envelope),
+            "predict",
+            success_model=FitResponse,
+            error_models={503: PredictFailedErrorResponse},
+        )
+
+    assert exc_info.value.status_code == envelope["status_code"]
+    assert exc_info.value.detail == "Overloaded"
+
+
 @pytest.mark.parametrize(
     "error",
     [
@@ -1967,10 +2474,22 @@ def test_a_streamed_error_keeps_the_status_it_reports(envelope, status_code, det
             detail="Overloaded",
         ),
         PredictFailedError(f"Prediction {PREDICTION_ID} failed: boom"),
+        PredictFailedError(
+            f"Prediction {PREDICTION_ID} failed: boom",
+            fitted_test_set_id=PREDICTION_ID,
+        ),
         RefitRequiredError(NEEDS_REFITTING),
+        RefitRequiredError(NEEDS_REFITTING, fitted_test_set_id=PREDICTION_ID),
         PredictionGoneError(f"The server does not have prediction {PREDICTION_ID}"),
     ],
-    ids=["streamed", "failed", "refit_required", "gone"],
+    ids=[
+        "streamed",
+        "failed",
+        "failed_with_its_id",
+        "refit_required",
+        "refit_required_with_its_id",
+        "gone",
+    ],
 )
 @pytest.mark.parametrize(
     "duplicate",
@@ -1983,5 +2502,5 @@ def test_an_error_survives_pickle_and_copy(error, duplicate):
 
     assert type(duplicated) is type(error)
     assert str(duplicated) == str(error)
-    # The status and detail of a streamed error.
+    # The status and detail of a streamed error, the id of a failed prediction.
     assert vars(duplicated) == vars(error)

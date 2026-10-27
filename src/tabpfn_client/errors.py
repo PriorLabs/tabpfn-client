@@ -1,13 +1,20 @@
 """Exceptions raised by the TabPFN client."""
 
+from uuid import UUID
 
-class RetryableServerError(Exception):
-    """Base exception for retryable server-side HTTP errors (typically 5xx)."""
+
+class RetryableServerError(RuntimeError):
+    """Base exception for retryable server-side HTTP errors (typically 5xx).
+
+    A `RuntimeError`, like every other error a failed request raises, so that
+    `except RuntimeError` also catches one that is not retried, or whose
+    retries ran out.
+    """
 
     pass
 
 
-class CappedRetryableServerError(Exception):
+class CappedRetryableServerError(RuntimeError):
     """Retryable error, with retries capped over consecutive errors of this type."""
 
     pass
@@ -48,24 +55,38 @@ class FitFailedError(RuntimeError):
 
 
 class PredictFailedError(RuntimeError):
-    """The server reports that a prediction it accepted has failed.
+    """The server reports that a prediction it created has failed.
 
-    Raised by ``predict()`` and ``wait_for_predict()`` when they poll the server
-    for the outcome of a prediction, as ``predict()`` does when the prediction
-    runs as a background job. The message holds the server's reason and its
-    error code.
+    Raised by ``predict()``, ``submit_predict()`` and ``wait_for_predict()``,
+    whether the server reports the failure in answer to the prediction request
+    itself or to a poll for the prediction. The message holds the server's
+    reason and its error code, and ``fitted_test_set_id`` the id of the
+    prediction.
     """
 
-    pass
+    # The default lets pickle and copy rebuild the error from its message, as
+    # they rebuild any exception, and then restore the id. A process pool hands
+    # an error to its parent that way.
+    def __init__(self, message: str, *, fitted_test_set_id: UUID | None = None):
+        """Initialize the error.
+
+        Args:
+            message: The error message.
+            fitted_test_set_id: The id of the prediction that failed, or None if
+                it is not known.
+        """
+        super().__init__(message)
+        self.fitted_test_set_id = fitted_test_set_id
 
 
 class RefitRequiredError(PredictFailedError):
     """The fitted model can no longer predict: call ``fit()`` again.
 
-    Raised by ``predict()`` and ``wait_for_predict()`` when the server cannot
-    predict with the fit ``model_id_`` refers to: an earlier version of the
-    service created it, or its cached state is no longer valid. The message
-    holds the server's reason.
+    Raised by ``predict()``, ``submit_predict()`` and ``wait_for_predict()``
+    when the server cannot predict with the fit ``model_id_`` refers to: an
+    earlier version of the service created it, or its cached state is no longer
+    valid. The server's error code says which: ``NEEDS_REFITTING`` or
+    ``KV_CACHE_INVALID``. The message holds the server's reason.
     """
 
     pass
