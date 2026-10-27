@@ -50,10 +50,51 @@ def test_linear_model_values_are_exact(n_features: int) -> None:
     background = rng.normal(size=(7, n_features))
     w = rng.normal(size=n_features)
 
-    result = permutation_shap(lambda rows: rows.to_numpy() @ w, X, background)
+    result = permutation_shap(
+        lambda rows: rows.to_numpy() @ w, X, background=background
+    )
 
     np.testing.assert_allclose(result.values, w * (X - background.mean(axis=0)))
     np.testing.assert_allclose(result.base_values, (background @ w).mean())
+
+
+def test_background_is_sampled_to_n_background() -> None:
+    rng = np.random.default_rng(8)
+    X, background = rng.normal(size=(3, 4)), rng.normal(size=(50, 4))
+    w = rng.normal(size=4)
+    calls: list[np.ndarray] = []
+
+    def f(rows) -> np.ndarray:
+        calls.append(rows.to_numpy())
+        return rows.to_numpy() @ w
+
+    def run(n_background: int | None, random_state: int) -> np.ndarray:
+        return permutation_shap(
+            f,
+            X,
+            background=background,
+            n_background=n_background,
+            random_state=random_state,
+        ).base_values
+
+    sampled = run(7, random_state=0)
+    # The all-hidden rows come first, and they are the sampled background.
+    hidden = calls[0][:7]
+    assert len({tuple(row) for row in hidden}) == 7
+    assert all((background == row).all(axis=1).any() for row in hidden)
+    np.testing.assert_allclose(sampled, (hidden @ w).mean())
+    np.testing.assert_allclose(run(7, random_state=0), sampled)
+    assert not np.allclose(run(7, random_state=1), sampled)
+    np.testing.assert_allclose(run(None, random_state=0), (background @ w).mean())
+    np.testing.assert_allclose(run(50, random_state=0), (background @ w).mean())
+
+
+def test_n_background_below_one_raises() -> None:
+    X = np.zeros((2, 3))
+    with pytest.raises(ValueError, match="n_background"):
+        permutation_shap(
+            lambda rows: np.zeros(len(rows)), X, background=X, n_background=0
+        )
 
 
 def test_two_features_values_are_exact() -> None:
@@ -65,7 +106,9 @@ def test_two_features_values_are_exact() -> None:
         rows = np.asarray(rows)
         return rows[:, 0] * rows[:, 1] + rows[:, 0] ** 3
 
-    result = permutation_shap(f, X, background, n_permutations=1, random_state=0)
+    result = permutation_shap(
+        f, X, background=background, n_permutations=1, random_state=0
+    )
 
     for i in range(len(X)):
         np.testing.assert_allclose(result.values[i], _exact_shap(f, X[i], background))
@@ -76,7 +119,7 @@ def test_values_converge_to_exact_shap() -> None:
     X, background = rng.normal(size=(2, 4)), rng.normal(size=(5, 4))
 
     result = permutation_shap(
-        _interactions, X, background, n_permutations=500, random_state=0
+        _interactions, X, background=background, n_permutations=500, random_state=0
     )
 
     for i in range(len(X)):
@@ -92,7 +135,7 @@ def test_multi_output_values_add_up_to_predictions() -> None:
         p = 1 / (1 + np.exp(-_interactions(rows)))
         return np.stack([1 - p, p], axis=1)
 
-    result = permutation_shap(proba, X, background, n_permutations=3)
+    result = permutation_shap(proba, X, background=background, n_permutations=3)
 
     assert result.values.shape == (5, 4, 2)
     assert result.base_values.shape == (5, 2)
@@ -110,12 +153,19 @@ def test_batch_size_splits_calls_without_changing_values(batch_size: int) -> Non
         call_sizes.append(len(rows))
         return _interactions(rows)
 
-    whole = permutation_shap(f, X, background, n_permutations=2, random_state=0)
+    whole = permutation_shap(
+        f, X, background=background, n_permutations=2, random_state=0
+    )
     (n_masked,) = call_sizes
 
     call_sizes.clear()
     split = permutation_shap(
-        f, X, background, n_permutations=2, batch_size=batch_size, random_state=0
+        f,
+        X,
+        background=background,
+        n_permutations=2,
+        batch_size=batch_size,
+        random_state=0,
     )
     # Calls hold whole groups of 5 background rows.
     per_call = batch_size // 5 * 5
@@ -187,7 +237,9 @@ def test_client_estimator_batches_fit_the_api_limits(
         patch.object(ServiceClient, "get_settings", return_value=settings),
         patch.object(TabPFNClassifier, "predict_proba", predict_proba),
     ):
-        permutation_shap(model.predict_proba, X, background, n_permutations=2)
+        permutation_shap(
+            model.predict_proba, X, background=background, n_permutations=2
+        )
 
     assert max(call_sizes) == rows_per_call
     assert len(call_sizes) > 1
@@ -200,7 +252,7 @@ def test_api_limit_below_background_rows_raises() -> None:
         patch.object(ServiceClient, "get_settings", return_value=_settings(max_rows=1)),
         pytest.raises(ValueError, match="background rows"),
     ):
-        permutation_shap(model.predict_proba, X, X)
+        permutation_shap(model.predict_proba, X, background=X)
 
 
 def test_each_set_of_shown_features_is_predicted_once() -> None:
@@ -215,7 +267,7 @@ def test_each_set_of_shown_features_is_predicted_once() -> None:
         x = np.asarray(rows)
         return x[:, 0] * x[:, 1]
 
-    result = permutation_shap(f, X, background, n_permutations=20)
+    result = permutation_shap(f, X, background=background, n_permutations=20)
 
     assert call_sizes == [5 * (1 + 3 * 4)]
     for i in range(len(X)):
@@ -243,7 +295,7 @@ def test_dataframe_columns_and_dtypes_reach_predict_fn() -> None:
         seen.append(rows)
         return rows["size"].to_numpy() + (rows["colour"] == "red").to_numpy()
 
-    result = permutation_shap(f, X, background, n_permutations=2)
+    result = permutation_shap(f, X, background=background, n_permutations=2)
 
     assert (seen[0].dtypes == X.dtypes).all()
     assert set(seen[0]["label"]) == {"a", "b", "c"}
@@ -267,7 +319,7 @@ def test_background_dtype_mismatch_raises(x_column, background_column) -> None:
     background = pd.DataFrame({"a": background_column})
 
     with pytest.raises(ValueError, match="dtypes"):
-        permutation_shap(lambda rows: np.zeros(len(rows)), X, background)
+        permutation_shap(lambda rows: np.zeros(len(rows)), X, background=background)
 
 
 @pytest.mark.parametrize(
@@ -280,19 +332,21 @@ def test_background_dtype_mismatch_raises(x_column, background_column) -> None:
 )
 def test_invalid_columns_raise(X, match: str) -> None:
     with pytest.raises(ValueError, match=match):
-        permutation_shap(lambda rows: np.zeros(len(rows)), X, X)
+        permutation_shap(lambda rows: np.zeros(len(rows)), X, background=X)
 
 
 def test_batch_size_below_background_rows_raises() -> None:
     X = np.zeros((2, 3))
     with pytest.raises(ValueError, match="batch_size"):
-        permutation_shap(lambda rows: np.zeros(len(rows)), X, X, batch_size=1)
+        permutation_shap(
+            lambda rows: np.zeros(len(rows)), X, background=X, batch_size=1
+        )
 
 
 def test_wrong_prediction_count_raises() -> None:
     X = np.zeros((2, 3))
     with pytest.raises(ValueError, match="predictions"):
-        permutation_shap(lambda rows: np.zeros(1), X, X)
+        permutation_shap(lambda rows: np.zeros(1), X, background=X)
 
 
 def test_to_shap_keeps_values() -> None:
@@ -301,7 +355,9 @@ def test_to_shap_keeps_values() -> None:
     rng = np.random.default_rng(5)
     X, background = rng.normal(size=(2, 3)), rng.normal(size=(4, 3))
 
-    result = permutation_shap(lambda rows: rows.to_numpy().sum(axis=1), X, background)
+    result = permutation_shap(
+        lambda rows: rows.to_numpy().sum(axis=1), X, background=background
+    )
     explanation = result.to_shap()
 
     assert isinstance(explanation, shap.Explanation)
