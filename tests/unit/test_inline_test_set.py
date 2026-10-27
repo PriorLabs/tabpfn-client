@@ -11,10 +11,15 @@ from uuid import UUID
 import httpx
 import numpy as np
 
-from tabpfn_client.api_models import ClassifierConfig, GetSettingsResponse
+from tabpfn_client.api_models import (
+    ClassifierConfig,
+    ClassifierTabPFNConfig,
+    FitMode,
+    GetSettingsResponse,
+)
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.models import ApiMode
-from tabpfn_client.errors import FittedModelNotFoundError
+from tabpfn_client.errors import FittedModelNotFoundError, PredictFailedError
 from tests.mock_tabpfn_server import with_mock_server
 from tests.unit.test_client import _api_settings_payload
 
@@ -48,12 +53,6 @@ def _settings(inline_max_bytes: int | None) -> dict:
     return payload
 
 
-def _booted_a_minute_ago():
-    # `time.monotonic()` counts from boot: a fresh CI runner is far below the
-    # settings cache's lifetime.
-    return patch("tabpfn_client.client.time.monotonic", return_value=60.0)
-
-
 def _sent(route) -> list[dict]:
     return [json.loads(call.request.content) for call in route.calls]
 
@@ -71,13 +70,16 @@ class TestInlineTestSet(unittest.TestCase):
         ServiceClient._api_settings = GetSettingsResponse(**_settings(inline_max_bytes))
         ServiceClient._api_settings_ts = time.monotonic()
 
-    def _predict(self, X=None, api_mode=ApiMode.SYNC):
+    def _predict(
+        self, X=None, api_mode=ApiMode.SYNC, task_config=None, n_train_rows=None
+    ):
         with patch.object(ServiceClient, "_upload_to_gcs") as upload:
             ServiceClient.predict(
                 fitted_train_set_id=FIT_ID,
                 x_test=self.X if X is None else X,
-                task_config=ClassifierConfig(),
+                task_config=ClassifierConfig() if task_config is None else task_config,
                 api_mode=api_mode,
+                n_train_rows=n_train_rows,
             )
         return upload
 
@@ -151,9 +153,8 @@ class TestInlineTestSet(unittest.TestCase):
             httpx.Response(200, json=PREDICT_BODY),
         ]
 
-        with _booted_a_minute_ago():
-            self._predict()
-            self._predict()
+        self._predict()
+        self._predict()
 
         self.assertEqual(settings.call_count, 1)
         self.assertEqual(prepare.call_count, 2)
@@ -179,9 +180,8 @@ class TestInlineTestSet(unittest.TestCase):
             httpx.Response(200, json=PREDICT_BODY),
         ]
 
-        with _booted_a_minute_ago():
-            self._predict()
-            self._predict()
+        self._predict()
+        self._predict()
 
         self.assertEqual(prepare.call_count, 1)
         refused, uploaded, inline_again = _sent(predict)
@@ -190,13 +190,72 @@ class TestInlineTestSet(unittest.TestCase):
         self.assertIn("x_test_parquet_base64", inline_again)
 
     @with_mock_server()
+    def test_server_rolled_back_below_inline_gets_an_upload(self, mock_server):
+        # That server reads the request as an upload predict with no upload id,
+        # and its message repeats the request body.
+        prepare = mock_server.router.post("/tabpfn/prepare_test_set_upload").respond(
+            200, json=PREPARE_BODY
+        )
+        predict = mock_server.router.post("/tabpfn/predict")
+        predict.side_effect = [
+            httpx.Response(
+                422,
+                json={
+                    "message": "[{'type': 'missing', 'loc': ('body', 'test_set_upload_id'), "
+                    "'input': {'x_test_parquet_base64': 'SECRET'}}]",
+                    "error_code": "REQUEST_VALIDATION_ERROR",
+                },
+            ),
+            httpx.Response(200, json=PREDICT_BODY),
+        ]
+
+        self._predict()
+
+        self.assertEqual(prepare.call_count, 1)
+        _, uploaded = _sent(predict)
+        self.assertNotIn("x_test_parquet_base64", uploaded)
+        # The next predict asks the server for its settings again.
+        self.assertIsNone(ServiceClient._api_settings)
+
+    @with_mock_server()
     def test_other_errors_are_raised(self, mock_server):
+        predict = mock_server.router.post("/tabpfn/predict")
+        predict.side_effect = [
+            httpx.Response(
+                422, json={"message": "Not a Parquet file.", "error_code": "USER_ERROR"}
+            ),
+            httpx.Response(
+                422,
+                json={
+                    "message": "Bad task_config.",
+                    "error_code": "REQUEST_VALIDATION_ERROR",
+                },
+            ),
+            httpx.Response(
+                403, json={"message": "Forbidden.", "error_code": "USER_ERROR"}
+            ),
+        ]
+
+        for message in ("Not a Parquet file", "Bad task_config", "Forbidden"):
+            with self.assertRaisesRegex(RuntimeError, message):
+                self._predict()
+
+    @with_mock_server()
+    def test_failed_prediction_with_not_found_code_is_a_failed_prediction(
+        self, mock_server
+    ):
         mock_server.router.post("/tabpfn/predict").respond(
-            422, json={"message": "Not a Parquet file.", "error_code": "USER_ERROR"}
+            404,
+            json={
+                "message": "Gone.",
+                "error_code": "NOT_FOUND",
+                "fitted_test_set_id": PREDICTION_ID,
+            },
         )
 
-        with self.assertRaisesRegex(RuntimeError, "Not a Parquet file"):
+        with self.assertRaises(PredictFailedError) as raised:
             self._predict()
+        self.assertNotIsInstance(raised.exception, FittedModelNotFoundError)
 
     @with_mock_server()
     def test_unknown_fit_raises_fitted_model_not_found(self, mock_server):
@@ -250,3 +309,35 @@ class TestInlineTestSet(unittest.TestCase):
 
         upload.assert_not_called()
         self.assertEqual(result.call_count, 1)
+
+    @with_mock_server()
+    def test_auto_on_a_cached_fit_goes_inline(self, mock_server):
+        # A KV-cache fit predicts with one request whatever its train rows.
+        predict = mock_server.router.post("/tabpfn/predict").respond(
+            200, json=PREDICT_BODY
+        )
+
+        self._predict(
+            api_mode=ApiMode.AUTO,
+            task_config=ClassifierConfig(
+                tabpfn_config=ClassifierTabPFNConfig(fit_mode=FitMode.FIT_WITH_CACHE)
+            ),
+            n_train_rows=500_000,
+        )
+
+        (sent,) = _sent(predict)
+        self.assertIn("x_test_parquet_base64", sent)
+
+    @with_mock_server()
+    def test_auto_on_a_large_fit_uploads_to_a_job(self, mock_server):
+        prepare = mock_server.router.post("/tabpfn/prepare_test_set_upload").respond(
+            200, json=PREPARE_BODY
+        )
+        mock_server.router.post("/tabpfn/submit_predict_job").respond(
+            200, json={"fitted_test_set_id": PREDICTION_ID}
+        )
+        self._completed_result(mock_server)
+
+        self._predict(api_mode=ApiMode.AUTO, n_train_rows=500_000)
+
+        self.assertEqual(prepare.call_count, 1)

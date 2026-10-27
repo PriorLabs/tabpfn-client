@@ -20,8 +20,17 @@ import re
 import struct
 import time
 import warnings
-from pydantic import BaseModel, TypeAdapter, ValidationError
-from typing import Any, Callable, Iterable, cast, Mapping, NoReturn, TypeAlias
+from pydantic import BaseModel, Field, RootModel, TypeAdapter, ValidationError
+from typing import (
+    Annotated,
+    Any,
+    Callable,
+    Iterable,
+    cast,
+    Mapping,
+    NoReturn,
+    TypeAlias,
+)
 from typing_extensions import (
     Never,  # in `typing` only from Python 3.11
     TypeVar,  # supports default= on Python 3.10
@@ -209,6 +218,15 @@ def _refuses_inline_test_set(response: httpx.Response) -> bool:
         # Any 413: a proxy in front of the server can refuse a large body first.
         case 413:
             return True
+        # A server without inline test sets reads the request as an upload predict
+        # with no upload id. Its message repeats the request body, test set included,
+        # so it must never reach an error.
+        case 422:
+            body, message = ServiceClient._read_json_body(response)
+            return (
+                body.get("error_code") == "REQUEST_VALIDATION_ERROR"
+                and "test_set_upload_id" in message
+            )
         case _:
             return False
 
@@ -274,9 +292,24 @@ def _prediction_failed(
 # body, whatever the status. A body without the id fails validation and falls
 # through to the generic error of its status.
 _PREDICT_FAILED_ERRORS = dict.fromkeys(range(400, 600), PredictFailedErrorResponse)
-# An inline predict has no prepare call. For an upload, the prepare call reports
-# an unknown fit.
-_INLINE_PREDICT_ERRORS = {**_PREDICT_FAILED_ERRORS, 404: NotFoundErrorResponse}
+
+
+class _InlinePredictNotFound(
+    RootModel[
+        Annotated[
+            PredictFailedErrorResponse | NotFoundErrorResponse,
+            Field(union_mode="left_to_right"),
+        ]
+    ]
+):
+    """A 404 to an inline predict: a failed prediction, which names itself, or an
+    unknown fit. For an upload, the prepare call reports an unknown fit.
+    """
+
+
+_INLINE_PREDICT_ERRORS: dict[
+    int, type[PredictFailedErrorResponse | _InlinePredictNotFound]
+] = {**_PREDICT_FAILED_ERRORS, 404: _InlinePredictNotFound}
 
 
 def _prediction_gone(
@@ -1260,7 +1293,7 @@ class ServiceClient(Singleton):
             server answered was still running when it stopped waiting for it.
         """
         api_mode = ApiMode(api_mode)
-        x_test_bytes, x_test_crc32c_hash = cls._serialize_test_set(x_test)
+        x_test_bytes = cls._serialize_test_set(x_test)
         tabpfn_config = task_config.tabpfn_config
         predict_mode = cls._resolve_predict_mode(
             api_mode,
@@ -1290,16 +1323,12 @@ class ServiceClient(Singleton):
                 return cls._started_prediction(predict_resp, client_options)
             except _InlineTestSetRefused:
                 logger.debug("Server refused the inline test set; uploading it.")
-                # The cached limit is stale. Fetch the settings again on the next
-                # predict. Not 0.0: `time.monotonic()` counts from boot, so a host
-                # that started less than one cache lifetime ago keeps the stale
-                # settings.
-                cls._api_settings_ts = float("-inf")
+                # The cached limit is stale.
+                cls._drop_settings()
 
         test_set_upload_id = cls._upload_test_set(
             x_test_bytes,
             fitted_train_set_id=fitted_train_set_id,
-            x_test_crc32c_hash=x_test_crc32c_hash,
             client_options=client_options,
         )
         if predict_mode == ApiMode.ASYNC:
@@ -1404,11 +1433,9 @@ class ServiceClient(Singleton):
                 failed at once, for example because it could not queue it.
         """
         client_options = client_options or ClientOptions()
-        x_test_bytes, x_test_crc32c_hash = cls._serialize_test_set(x_test)
         test_set_upload_id = cls._upload_test_set(
-            x_test_bytes,
+            cls._serialize_test_set(x_test),
             fitted_train_set_id=fitted_train_set_id,
-            x_test_crc32c_hash=x_test_crc32c_hash,
             client_options=client_options,
         )
         submit_resp = cls._submit_predict_job(
@@ -1466,10 +1493,8 @@ class ServiceClient(Singleton):
         )
 
     @classmethod
-    def _serialize_test_set(
-        cls, x_test: pd.DataFrame | np.ndarray
-    ) -> tuple[bytes, str]:
-        """The test set as Parquet bytes, with their CRC32C hash.
+    def _serialize_test_set(cls, x_test: pd.DataFrame | np.ndarray) -> bytes:
+        """The test set as Parquet bytes.
 
         Raises:
             ValueError: If the in-memory size of ``x_test`` exceeds the server limit.
@@ -1485,7 +1510,8 @@ class ServiceClient(Singleton):
                     f"the server limit of {api_settings.dataset_max_size_bytes} bytes."
                 )
 
-        return _serialize_to_parquet(df_x_test)
+        x_test_bytes, _ = _serialize_to_parquet(df_x_test)
+        return x_test_bytes
 
     @classmethod
     def _inline_test_set(cls, x_test_bytes: bytes) -> str | None:
@@ -1507,7 +1533,6 @@ class ServiceClient(Singleton):
         x_test_bytes: bytes,
         *,
         fitted_train_set_id: UUID,
-        x_test_crc32c_hash: str,
         client_options: ClientOptions,
     ) -> UUID:
         """Upload a test set to predict with a fitted train set.
@@ -1520,7 +1545,7 @@ class ServiceClient(Singleton):
             FittedModelNotFoundError: If the fitted train set is not found.
         """
         if get_opts().TABPFN_CLIENT_DEDUP_DATASETS:
-            x_test_dedup_hash = x_test_crc32c_hash
+            x_test_dedup_hash = _get_crc32c_hash(x_test_bytes)
         else:
             x_test_dedup_hash = None
 
@@ -1884,15 +1909,14 @@ class ServiceClient(Singleton):
         # a download URL to follow, a prediction the server is still running,
         # or one that failed. A refit is a failure like any other: the server
         # names the prediction and gives a refit code.
-        error_models: dict[
-            int, type[PredictFailedErrorResponse | NotFoundErrorResponse]
-        ] = {**(_INLINE_PREDICT_ERRORS if inline else _PREDICT_FAILED_ERRORS)}
         resp = cls._validate_response(
             res,
             "predict",
             success_model=_PredictResponseUnion,
-            error_models=error_models,
+            error_models=_INLINE_PREDICT_ERRORS if inline else _PREDICT_FAILED_ERRORS,
         )
+        if isinstance(resp, _InlinePredictNotFound):
+            resp = resp.root
         if isinstance(resp, NotFoundErrorResponse):
             raise _fitted_model_not_found(req.fitted_train_set_id, resp)
         if isinstance(resp, PredictFailedErrorResponse):
@@ -2139,7 +2163,7 @@ class ServiceClient(Singleton):
         response: httpx.Response,
         method_name: str,
         success_model: type[SuccessT] | TypeAdapter[SuccessT],
-        error_models: dict[int, type[ErrorT]] | None = None,
+        error_models: Mapping[int, type[ErrorT]] | None = None,
     ) -> SuccessT | ErrorT:
         """Parse a response into its success or expected error model.
 
