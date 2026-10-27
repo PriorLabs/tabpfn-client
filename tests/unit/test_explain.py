@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import warnings
 from itertools import combinations
 from math import factorial
 from unittest.mock import patch
@@ -215,10 +216,14 @@ def test_client_estimator_batches_stop_at_the_default(
     with (
         patch.object(ServiceClient, "get_settings", return_value=_settings()),
         patch.object(TabPFNClassifier, "predict_proba", predict_proba),
+        warnings.catch_warnings(record=True) as caught,
     ):
+        warnings.simplefilter("always")
         permutation_shap(model.predict_proba, X, background, n_permutations=2)
 
     assert max(call_sizes) == rows_per_call
+    warned = any("fit_with_cache" in str(w.message) for w in caught)
+    assert warned == (fit_mode == "fit_with_cache")
 
 
 def test_api_limit_below_background_rows_raises() -> None:

@@ -3,6 +3,7 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 #  Licensed under the Apache License, Version 2.0
 
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -144,6 +145,18 @@ def permutation_shap(
         )
     if n_permutations < 1:
         raise ValueError("n_permutations must be at least 1.")
+    match getattr(predict_fn, "__self__", None):
+        case (
+            TabPFNClassifier(fit_mode="fit_with_cache")
+            | TabPFNRegressor(fit_mode="fit_with_cache")
+        ):
+            warnings.warn(
+                "The model uses fit_mode='fit_with_cache'. The API predicts at "
+                f"most {CACHED_FIT_BATCH_SIZE} rows per request against a cached "
+                "fit, so permutation_shap needs more requests and runs slower. "
+                "Fit the model with the default fit_mode to explain it.",
+                stacklevel=2,
+            )
     n_background = len(background_df)
     if batch_size is None:
         batch_size = _default_batch_size(predict_fn, X_df, background_df)
