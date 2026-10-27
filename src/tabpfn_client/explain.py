@@ -3,6 +3,7 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 #  Licensed under the Apache License, Version 2.0
 
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -18,9 +19,12 @@ from tabpfn_client.estimator import (
     _test_row_limit,
 )
 
-# Rows per call for a backend whose limits are unknown: 100 float features
-# then take 80 MB per batch.
-DEFAULT_BATCH_SIZE = 100_000
+# Most rows per call. The API charges more tokens per predicted row as a request
+# grows, and much smaller requests pay the minimum charge per request. See
+# `estimate_cost`. 100 float features take 40 MB per batch.
+DEFAULT_BATCH_SIZE = 50_000
+# The API rejects a predict of more rows against a cached fit.
+CACHED_FIT_BATCH_SIZE = 10_000
 
 
 @dataclass
@@ -67,9 +71,10 @@ class ShapExplanation:
 def permutation_shap(
     predict_fn: Callable[[pd.DataFrame], Any],
     X: pd.DataFrame | np.ndarray,
-    background: pd.DataFrame | np.ndarray,
     *,
-    n_permutations: int = 10,
+    background: pd.DataFrame | np.ndarray,
+    n_background: int | None = 100,
+    n_permutations: int = 2,
     batch_size: int | None = None,
     random_state: int | None = None,
 ) -> ShapExplanation:
@@ -84,27 +89,33 @@ def permutation_shap(
 
     Each set of shown features is predicted once per explained row, and the
     all-hidden set once in total. So the number of masked rows is at most
-    `len(background) * (1 + len(X) * (1 + 2 * n_permutations * (n_features - 1)))`,
+    `n_background * (1 + len(X) * (1 + 2 * n_permutations * (n_features - 1)))`,
     and fewer when orderings share sets, which is common with few features.
 
     Args:
         predict_fn: Maps a DataFrame with the columns of `X` to predictions of
             shape (n,) or (n, n_outputs), for example `model.predict_proba`.
         X: The rows to explain.
-        background: Rows that supply the values of hidden features, with the
-            same columns and dtypes as `X`. 20 to 100 rows sampled from the
-            training set is usual.
+        background: Rows to sample the values of hidden features from, usually
+            the training data. It must have the same columns and dtypes as `X`.
+        n_background: Rows sampled from `background` without replacement. The
+            cost grows linearly with it. None, or a value of at least
+            `len(background)`, uses every row.
         n_permutations: Feature orderings sampled per explained row. Each one
-            is also evaluated in reverse.
+            is also evaluated in reverse. The cost grows linearly with it. For
+            the same cost, more background rows reduce the error more than
+            more orderings, up to about 100 background rows.
         batch_size: Most masked rows per call of `predict_fn`, and at least
-            `len(background)`. Memory holds one batch of masked rows, plus a
+            `n_background`. Memory holds one batch of masked rows, plus a
             part that grows with `len(X) * n_permutations * n_features`. None
-            picks the most rows the API accepts in one request
-            when `predict_fn` is a method of a fitted `TabPFNClassifier` or
-            `TabPFNRegressor`, and `DEFAULT_BATCH_SIZE` otherwise. The byte
+            uses `DEFAULT_BATCH_SIZE`, or fewer rows when `predict_fn` is a
+            method of a fitted `TabPFNClassifier` or `TabPFNRegressor` and the
+            API accepts fewer in one request. A model fitted with
+            `fit_mode="fit_with_cache"` gets `CACHED_FIT_BATCH_SIZE`. The byte
             limit is estimated from the average row size, so very uneven text
             columns can still exceed it.
-        random_state: Seed for the sampled feature orderings.
+        random_state: Seed for the sampled background rows and feature
+            orderings.
 
     Returns:
         The SHAP values of each row of `X`.
@@ -140,16 +151,38 @@ def permutation_shap(
         )
     if n_permutations < 1:
         raise ValueError("n_permutations must be at least 1.")
+    if n_background is not None and n_background < 1:
+        raise ValueError("n_background must be at least 1.")
+
+    rng = np.random.default_rng(random_state)
+    if n_background is not None and n_background < len(background_df):
+        background_df = background_df.iloc[
+            rng.choice(len(background_df), n_background, replace=False)
+        ]
+    match getattr(predict_fn, "__self__", None):
+        case (
+            TabPFNClassifier(fit_mode="fit_with_cache")
+            | TabPFNRegressor(fit_mode="fit_with_cache")
+        ):
+            warnings.warn(
+                "The model uses fit_mode='fit_with_cache'. The API predicts at "
+                f"most {CACHED_FIT_BATCH_SIZE} rows per request against a cached "
+                "fit, so permutation_shap needs more requests and runs slower. "
+                "Fit the model with the default fit_mode to explain it.",
+                stacklevel=2,
+            )
+        case _:
+            pass
     n_background = len(background_df)
     if batch_size is None:
         batch_size = _default_batch_size(predict_fn, X_df, background_df)
         if batch_size < n_background:
             raise ValueError(
                 f"The API accepts {batch_size} rows per request, fewer than the "
-                f"{n_background} background rows. Use fewer background rows."
+                f"{n_background} background rows. Set a smaller n_background."
             )
     elif batch_size < n_background:
-        raise ValueError("batch_size must be at least len(background).")
+        raise ValueError("batch_size must be at least n_background.")
 
     n_rows, n_features = X_df.shape
     n_orderings = 2 * n_permutations
@@ -164,7 +197,6 @@ def permutation_shap(
         for start in range(0, n_rows, rows_per_chunk)
     ]
 
-    rng = np.random.default_rng(random_state)
     rank = np.empty(
         (n_rows, n_orderings, n_features), dtype=np.min_scalar_type(n_features - 1)
     )
@@ -272,14 +304,19 @@ def _default_batch_size(
     X: pd.DataFrame,
     background: pd.DataFrame,
 ) -> int:
-    """Most masked rows one request of a client estimator accepts, else the default."""
+    """The default, or fewer if one request of a client estimator accepts fewer."""
     match getattr(predict_fn, "__self__", None):
         case TabPFNClassifier() | TabPFNRegressor() as model:
+            default = (
+                CACHED_FIT_BATCH_SIZE
+                if model.fit_mode == "fit_with_cache"
+                else DEFAULT_BATCH_SIZE
+            )
             api_settings = ServiceClient.get_settings()
             tabpfn_config = model._get_tabpfn_config()
             limit = _limit_for_model_path(tabpfn_config.model_path)
             if api_settings is None or limit is None:
-                return DEFAULT_BATCH_SIZE
+                return default
             n_features = X.shape[1]
             # A masked row takes each value from X or background, so take the
             # larger average per column. The size check also counts the index.
@@ -291,6 +328,7 @@ def _default_batch_size(
                 api_settings.dataset_max_size_bytes - pd.RangeIndex(0).memory_usage()
             )
             return min(
+                default,
                 _test_row_limit(
                     limit, model._n_train_rows, tabpfn_config.inference_config
                 ),
