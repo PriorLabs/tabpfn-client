@@ -367,6 +367,11 @@ class _PredictJob:
     first_poll_delay_secs: float = 0.0
 
 
+# httpx closes a connection after 5 s idle by default, so a pause between two
+# calls costs a new TCP and TLS handshake. Keep connections open longer.
+_CONNECTION_LIMITS = httpx.Limits(keepalive_expiry=300)
+
+
 class ServiceClient(Singleton):
     """Singleton class for handling communication with the server.
 
@@ -398,7 +403,11 @@ class ServiceClient(Singleton):
         timeout=get_opts().TABPFN_CLIENT_TIMEOUT,
         headers={"Prior-Client-Version": get_client_version()},
         follow_redirects=True,
+        limits=_CONNECTION_LIMITS,
     )
+    # Signed URLs are their own credential, so the API bearer token set on
+    # `httpx_client` must never reach the object store.
+    storage_client = httpx.Client(limits=_CONNECTION_LIMITS)
     _access_token: str | None = None
     _api_settings: GetSettingsResponse | None = None
     _api_settings_ts: float = 0.0
@@ -1821,10 +1830,7 @@ class ServiceClient(Singleton):
     )
     def _download_prediction(cls, uri: str, timeout: float) -> Prediction:
         """Download a prediction from a signed URL."""
-        # The signed URL is the credential here, so the API bearer token on
-        # `httpx_client` has no business reaching the object store; use a bare
-        # request instead.
-        resp = httpx.get(uri, timeout=timeout)
+        resp = cls.storage_client.get(uri, timeout=timeout)
         if resp.status_code in _RETRYABLE_STORAGE_STATUSES:
             raise RetryableServerError(
                 f"Prediction download failed: {resp.status_code} {resp.text}"
@@ -1904,7 +1910,7 @@ class ServiceClient(Singleton):
         chunk_index: int = 0,
     ) -> None:
         """Upload one chunk to a signed URL."""
-        resp = cls.httpx_client.put(
+        resp = cls.storage_client.put(
             url,
             content=chunk,
             headers=headers,

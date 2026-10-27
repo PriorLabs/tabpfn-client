@@ -198,3 +198,18 @@ def test_transient_upload_error_is_retried(authorized_client, status):
             )
 
     assert upload_route.call_count == 2
+
+
+def test_upload_does_not_send_the_api_token(authorized_client):
+    with MockTabPFNServer() as server:
+        assert server.router is not None
+        upload_route = server.router.put("https://upload.example/x_test").respond(200)
+
+        ServiceClient._upload_single_chunk(
+            url="https://upload.example/x_test",
+            chunk=b"data",
+            headers={},
+            dataset="x_test",
+        )
+
+    assert "authorization" not in upload_route.calls.last.request.headers
