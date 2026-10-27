@@ -368,8 +368,11 @@ class _PredictJob:
 
 
 # httpx closes a connection after 5 s idle by default, so a pause between two
-# calls costs a new TCP and TLS handshake. Keep connections open longer.
-_CONNECTION_LIMITS = httpx.Limits(keepalive_expiry=300)
+# calls costs a new TCP and TLS handshake. Keep connections open longer. The
+# caps repeat httpx's defaults, which `httpx.Limits` otherwise leaves unlimited.
+_CONNECTION_LIMITS = httpx.Limits(
+    max_connections=100, max_keepalive_connections=20, keepalive_expiry=300
+)
 
 
 class ServiceClient(Singleton):
