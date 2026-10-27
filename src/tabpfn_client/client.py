@@ -26,6 +26,7 @@ from typing import (
     Any,
     Callable,
     Iterable,
+    Literal,
     cast,
     Mapping,
     NoReturn,
@@ -538,7 +539,7 @@ class ServiceClient(Singleton):
         n_test_rows: int,
         thinking: bool,
         fit_with_cache: bool,
-    ) -> ApiMode:
+    ) -> Literal[ApiMode.SYNC, ApiMode.ASYNC]:
         """Decide whether a prediction runs as one request or as a polled job.
 
         SYNC and ASYNC are kept. AUTO runs the prediction as a job once the
@@ -1285,7 +1286,7 @@ class ServiceClient(Singleton):
         n_train_rows: int | None,
         thinking: bool,
     ) -> _PredictJob | PredictionResult:
-        """Upload a test set, and predict it with one request or start it as a job.
+        """Predict a test set with one request, or start it as a background job.
 
         Returns:
             The prediction, if the server answered with it, or else the
@@ -1304,14 +1305,40 @@ class ServiceClient(Singleton):
             and tabpfn_config.fit_mode == FitMode.FIT_WITH_CACHE,
         )
 
-        # Only a single predict request takes an inline test set. A background
-        # job is not latency bound, so it uploads.
-        if (
-            predict_mode == ApiMode.SYNC
-            and (x_test_base64 := cls._inline_test_set(x_test_bytes)) is not None
-        ):
+        match predict_mode:
+            case ApiMode.SYNC:
+                resp = cls._sync_predict(
+                    x_test_bytes,
+                    fitted_train_set_id=fitted_train_set_id,
+                    task_config=task_config,
+                    client_options=client_options,
+                )
+            case ApiMode.ASYNC:
+                resp = cls._async_predict(
+                    x_test_bytes,
+                    fitted_train_set_id=fitted_train_set_id,
+                    task_config=task_config,
+                    client_options=client_options,
+                )
+            case _:
+                assert_never(predict_mode)
+        return cls._resolve_predict_response(resp, client_options)
+
+    @classmethod
+    def _sync_predict(
+        cls,
+        x_test_bytes: bytes,
+        *,
+        fitted_train_set_id: UUID,
+        task_config: ClassifierConfig | RegressorConfig,
+        client_options: ClientOptions,
+    ) -> PredictResponseUnion:
+        """Predict with one request: the test set inline if the server takes it,
+        else uploaded.
+        """
+        if (x_test_base64 := cls._inline_test_set(x_test_bytes)) is not None:
             try:
-                predict_resp = cls._predict(
+                return cls._predict(
                     req=InlinePredictRequest(
                         x_test_parquet_base64=x_test_base64,
                         fitted_train_set_id=fitted_train_set_id,
@@ -1320,7 +1347,6 @@ class ServiceClient(Singleton):
                     timeout=client_options.timeout,
                     headers=client_options.headers,
                 )
-                return cls._started_prediction(predict_resp, client_options)
             except _InlineTestSetRefused:
                 logger.debug("Server refused the inline test set; uploading it.")
                 # The cached limit is stale.
@@ -1331,28 +1357,7 @@ class ServiceClient(Singleton):
             fitted_train_set_id=fitted_train_set_id,
             client_options=client_options,
         )
-        if predict_mode == ApiMode.ASYNC:
-            submit_resp = cls._submit_predict_job(
-                req=SubmitPredictJobRequest(
-                    test_set_upload_id=test_set_upload_id,
-                    fitted_train_set_id=fitted_train_set_id,
-                    task_config=task_config,
-                ),
-                timeout=client_options.timeout,
-                headers=client_options.headers,
-            )
-            if submit_resp is not None:
-                return _PredictJob(submit_resp.fitted_test_set_id)
-            # The cached settings promised background jobs that this server
-            # (rolled back, say) does not run. It created no job, so one request
-            # with the same upload predicts, and bills, once.
-            logger.warning(
-                "This TabPFN server does not run predictions as background jobs; "
-                "predicting with one request."
-            )
-            cls._drop_settings()
-
-        predict_resp = cls._predict(
+        return cls._predict(
             req=PredictRequest(
                 test_set_upload_id=test_set_upload_id,
                 fitted_train_set_id=fitted_train_set_id,
@@ -1361,17 +1366,68 @@ class ServiceClient(Singleton):
             timeout=client_options.timeout,
             headers=client_options.headers,
         )
-        return cls._started_prediction(predict_resp, client_options)
 
     @classmethod
-    def _started_prediction(
-        cls, predict_resp: PredictResponseUnion, client_options: ClientOptions
-    ) -> _PredictJob | PredictionResult:
-        """The prediction from a predict response.
+    def _async_predict(
+        cls,
+        x_test_bytes: bytes,
+        *,
+        fitted_train_set_id: UUID,
+        task_config: ClassifierConfig | RegressorConfig,
+        client_options: ClientOptions,
+    ) -> SubmitPredictJobResponse | PredictResponseUnion:
+        """Upload the test set and start predicting it as a background job.
 
-        Returns the job to wait for when the server answered that it is still running.
+        A background job is not latency bound, so its test set is never inline.
+        """
+        test_set_upload_id = cls._upload_test_set(
+            x_test_bytes,
+            fitted_train_set_id=fitted_train_set_id,
+            client_options=client_options,
+        )
+        submit_resp = cls._submit_predict_job(
+            req=SubmitPredictJobRequest(
+                test_set_upload_id=test_set_upload_id,
+                fitted_train_set_id=fitted_train_set_id,
+                task_config=task_config,
+            ),
+            timeout=client_options.timeout,
+            headers=client_options.headers,
+        )
+        if submit_resp is not None:
+            return submit_resp
+        # The cached settings promised background jobs that this server
+        # (rolled back, say) does not run. It created no job, so one request
+        # with the same upload predicts, and bills, once.
+        logger.warning(
+            "This TabPFN server does not run predictions as background jobs; "
+            "predicting with one request."
+        )
+        cls._drop_settings()
+        return cls._predict(
+            req=PredictRequest(
+                test_set_upload_id=test_set_upload_id,
+                fitted_train_set_id=fitted_train_set_id,
+                task_config=task_config,
+            ),
+            timeout=client_options.timeout,
+            headers=client_options.headers,
+        )
+
+    @classmethod
+    def _resolve_predict_response(
+        cls,
+        predict_resp: PredictResponseUnion | SubmitPredictJobResponse,
+        client_options: ClientOptions,
+    ) -> _PredictJob | PredictionResult:
+        """The prediction from a predict or submit response.
+
+        Returns the job to wait for when the server started a background job, or
+        answered that it is still running.
         """
         match predict_resp:
+            case SubmitPredictJobResponse():
+                return _PredictJob(predict_resp.fitted_test_set_id)
             case PredictResponse():
                 return cls._prediction_result(
                     predict_resp.prediction,
