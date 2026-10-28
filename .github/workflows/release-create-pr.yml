@@ -60,6 +60,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
+          version: "0.13.4"
           enable-cache: false
 
       # Installed at a pinned version, and before the checkout below: from that
@@ -104,6 +105,11 @@ jobs:
           print(f"Bumped [project].version from {match.group(2)} to {version}")
           PY
 
+      # --no-build keeps third-party build code from running next to the
+      # credential; the project's own version is read from static metadata.
+      - name: Update version in uv.lock
+        run: uv lock --no-build
+
       - name: Build changelog
         run: towncrier build --version "$VERSION" --yes
 
@@ -112,7 +118,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add pyproject.toml CHANGELOG.md changelog
+          git add pyproject.toml uv.lock CHANGELOG.md changelog
 
           if git diff --cached --quiet; then
             echo "Nothing staged. Are there changelog fragments in changelog/ to release?"
