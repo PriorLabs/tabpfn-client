@@ -20,8 +20,18 @@ import re
 import struct
 import time
 import warnings
-from pydantic import BaseModel, TypeAdapter, ValidationError
-from typing import Any, Callable, Iterable, cast, Mapping, NoReturn, TypeAlias
+from pydantic import BaseModel, Field, RootModel, TypeAdapter, ValidationError
+from typing import (
+    Annotated,
+    Any,
+    Callable,
+    Iterable,
+    Literal,
+    cast,
+    Mapping,
+    NoReturn,
+    TypeAlias,
+)
 from typing_extensions import (
     Never,  # in `typing` only from Python 3.11
     TypeVar,  # supports default= on Python 3.10
@@ -74,6 +84,7 @@ from tabpfn_client.api_models import (
     FitStatus,
     GetFitStatusRequest,
     GetFitStatusResponse,
+    InlinePredictRequest,
     PredictRequest,
     Metadata,
     PredictResponse,
@@ -123,6 +134,14 @@ _PredictResponseUnion: TypeAdapter[PredictResponseUnion] = TypeAdapter(
 
 # Statuses from a signed-URL upload or download that a retry can clear.
 _RETRYABLE_STORAGE_STATUSES = frozenset({408, 429, 502, 503, 504})
+
+
+class _UploadTestSetInstead(Exception):
+    """The server cannot take this test set inline: inline is off, the test set is
+    over its limit, or the server has no inline support. A test set the server
+    cannot read raises as an error instead.
+    """
+
 
 # avoid logging of httpx and httpcore on client side
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -191,6 +210,31 @@ def _report_trace(trace_id: UUID | None) -> str:
     return f" Report trace ID: {trace_id.hex}." if trace_id else ""
 
 
+def _asks_for_upload(response: httpx.Response) -> bool:
+    """Whether the server answered an inline test set by asking for an upload.
+
+    This happens when the cached settings are older than a change to the server limit.
+    """
+    match response.status_code:
+        case 403:
+            body, _ = ServiceClient._read_json_body(response)
+            return body.get("error_code") == "INLINE_TEST_SET_NOT_ENABLED"
+        # Any 413: a proxy in front of the server can refuse a large body first.
+        case 413:
+            return True
+        # A server without inline test sets reads the request as an upload predict
+        # with no upload id. Its message repeats the request body, test set included,
+        # so it must never reach an error.
+        case 422:
+            body, message = ServiceClient._read_json_body(response)
+            return (
+                body.get("error_code") == "REQUEST_VALIDATION_ERROR"
+                and "test_set_upload_id" in message
+            )
+        case _:
+            return False
+
+
 def _fitted_model_not_found(
     fitted_train_set_id: UUID, response: NotFoundErrorResponse
 ) -> FittedModelNotFoundError:
@@ -252,6 +296,24 @@ def _prediction_failed(
 # body, whatever the status. A body without the id fails validation and falls
 # through to the generic error of its status.
 _PREDICT_FAILED_ERRORS = dict.fromkeys(range(400, 600), PredictFailedErrorResponse)
+
+
+class _InlinePredictNotFound(
+    RootModel[
+        Annotated[
+            PredictFailedErrorResponse | NotFoundErrorResponse,
+            Field(union_mode="left_to_right"),
+        ]
+    ]
+):
+    """A 404 to an inline predict: a failed prediction, which names itself, or an
+    unknown fit. For an upload, the prepare call reports an unknown fit.
+    """
+
+
+_INLINE_PREDICT_ERRORS: dict[
+    int, type[PredictFailedErrorResponse | _InlinePredictNotFound]
+] = {**_PREDICT_FAILED_ERRORS, 404: _InlinePredictNotFound}
 
 
 def _prediction_gone(
@@ -492,7 +554,7 @@ class ServiceClient(Singleton):
         n_test_rows: int,
         thinking: bool,
         fit_with_cache: bool,
-    ) -> ApiMode:
+    ) -> Literal[ApiMode.SYNC, ApiMode.ASYNC]:
         """Decide whether a prediction runs as one request or as a polled job.
 
         SYNC and ASYNC are kept. AUTO runs the prediction as a job once the
@@ -1239,7 +1301,7 @@ class ServiceClient(Singleton):
         n_train_rows: int | None,
         thinking: bool,
     ) -> _PredictJob | PredictionResult:
-        """Upload a test set, and predict it with one request or start it as a job.
+        """Predict a test set with one request, or start it as a background job.
 
         Returns:
             The prediction, if the server answered with it, or else the
@@ -1247,9 +1309,7 @@ class ServiceClient(Singleton):
             server answered was still running when it stopped waiting for it.
         """
         api_mode = ApiMode(api_mode)
-        test_set_upload_id = cls._upload_test_set(
-            fitted_train_set_id, x_test, client_options
-        )
+        x_test_bytes = cls._serialize_test_set(x_test)
         tabpfn_config = task_config.tabpfn_config
         predict_mode = cls._resolve_predict_mode(
             api_mode,
@@ -1260,28 +1320,59 @@ class ServiceClient(Singleton):
             and tabpfn_config.fit_mode == FitMode.FIT_WITH_CACHE,
         )
 
-        if predict_mode == ApiMode.ASYNC:
-            submit_resp = cls._submit_predict_job(
-                req=SubmitPredictJobRequest(
-                    test_set_upload_id=test_set_upload_id,
+        match predict_mode:
+            case ApiMode.SYNC:
+                resp = cls._sync_predict(
+                    x_test_bytes,
                     fitted_train_set_id=fitted_train_set_id,
                     task_config=task_config,
-                ),
-                timeout=client_options.timeout,
-                headers=client_options.headers,
-            )
-            if submit_resp is not None:
-                return _PredictJob(submit_resp.fitted_test_set_id)
-            # The cached settings promised background jobs that this server
-            # (rolled back, say) does not run. It created no job, so one request
-            # with the same upload predicts, and bills, once.
-            logger.warning(
-                "This TabPFN server does not run predictions as background jobs; "
-                "predicting with one request."
-            )
-            cls._drop_settings()
+                    client_options=client_options,
+                )
+            case ApiMode.ASYNC:
+                resp = cls._async_predict(
+                    x_test_bytes,
+                    fitted_train_set_id=fitted_train_set_id,
+                    task_config=task_config,
+                    client_options=client_options,
+                )
+            case _:
+                assert_never(predict_mode)
+        return cls._resolve_predict_response(resp, client_options)
 
-        predict_resp = cls._predict(
+    @classmethod
+    def _sync_predict(
+        cls,
+        x_test_bytes: bytes,
+        *,
+        fitted_train_set_id: UUID,
+        task_config: ClassifierConfig | RegressorConfig,
+        client_options: ClientOptions,
+    ) -> PredictResponseUnion:
+        """Predict with one request: the test set inline if the server takes it,
+        else uploaded.
+        """
+        if (x_test_base64 := cls._inline_test_set(x_test_bytes)) is not None:
+            try:
+                return cls._predict(
+                    req=InlinePredictRequest(
+                        x_test_parquet_base64=x_test_base64,
+                        fitted_train_set_id=fitted_train_set_id,
+                        task_config=task_config,
+                    ),
+                    timeout=client_options.timeout,
+                    headers=client_options.headers,
+                )
+            except _UploadTestSetInstead:
+                logger.debug("Server cannot take the test set inline; uploading it.")
+                # The cached limit is stale.
+                cls._drop_settings()
+
+        test_set_upload_id = cls._upload_test_set(
+            x_test_bytes,
+            fitted_train_set_id=fitted_train_set_id,
+            client_options=client_options,
+        )
+        return cls._predict(
             req=PredictRequest(
                 test_set_upload_id=test_set_upload_id,
                 fitted_train_set_id=fitted_train_set_id,
@@ -1291,7 +1382,67 @@ class ServiceClient(Singleton):
             headers=client_options.headers,
         )
 
+    @classmethod
+    def _async_predict(
+        cls,
+        x_test_bytes: bytes,
+        *,
+        fitted_train_set_id: UUID,
+        task_config: ClassifierConfig | RegressorConfig,
+        client_options: ClientOptions,
+    ) -> SubmitPredictJobResponse | PredictResponseUnion:
+        """Upload the test set and start predicting it as a background job.
+
+        A background job is not latency bound, so its test set is never inline.
+        """
+        test_set_upload_id = cls._upload_test_set(
+            x_test_bytes,
+            fitted_train_set_id=fitted_train_set_id,
+            client_options=client_options,
+        )
+        submit_resp = cls._submit_predict_job(
+            req=SubmitPredictJobRequest(
+                test_set_upload_id=test_set_upload_id,
+                fitted_train_set_id=fitted_train_set_id,
+                task_config=task_config,
+            ),
+            timeout=client_options.timeout,
+            headers=client_options.headers,
+        )
+        if submit_resp is not None:
+            return submit_resp
+        # The cached settings promised background jobs that this server
+        # (rolled back, say) does not run. It created no job, so one request
+        # with the same upload predicts, and bills, once.
+        logger.warning(
+            "This TabPFN server does not run predictions as background jobs; "
+            "predicting with one request."
+        )
+        cls._drop_settings()
+        return cls._predict(
+            req=PredictRequest(
+                test_set_upload_id=test_set_upload_id,
+                fitted_train_set_id=fitted_train_set_id,
+                task_config=task_config,
+            ),
+            timeout=client_options.timeout,
+            headers=client_options.headers,
+        )
+
+    @classmethod
+    def _resolve_predict_response(
+        cls,
+        predict_resp: PredictResponseUnion | SubmitPredictJobResponse,
+        client_options: ClientOptions,
+    ) -> _PredictJob | PredictionResult:
+        """The prediction from a predict or submit response.
+
+        Returns the job to wait for when the server started a background job, or
+        answered that it is still running.
+        """
         match predict_resp:
+            case SubmitPredictJobResponse():
+                return _PredictJob(predict_resp.fitted_test_set_id)
             case PredictResponse():
                 return cls._prediction_result(
                     predict_resp.prediction,
@@ -1354,7 +1505,9 @@ class ServiceClient(Singleton):
         """
         client_options = client_options or ClientOptions()
         test_set_upload_id = cls._upload_test_set(
-            fitted_train_set_id, x_test, client_options
+            cls._serialize_test_set(x_test),
+            fitted_train_set_id=fitted_train_set_id,
+            client_options=client_options,
         )
         submit_resp = cls._submit_predict_job(
             req=SubmitPredictJobRequest(
@@ -1411,21 +1564,11 @@ class ServiceClient(Singleton):
         )
 
     @classmethod
-    def _upload_test_set(
-        cls,
-        fitted_train_set_id: UUID,
-        x_test: pd.DataFrame | np.ndarray,
-        client_options: ClientOptions,
-    ) -> UUID:
-        """Upload a test set to predict with a fitted train set.
-
-        Returns:
-            The id of the uploaded test set, or of the same test set the server
-            already holds.
+    def _serialize_test_set(cls, x_test: pd.DataFrame | np.ndarray) -> bytes:
+        """The test set as Parquet bytes.
 
         Raises:
             ValueError: If the in-memory size of ``x_test`` exceeds the server limit.
-            FittedModelNotFoundError: If the fitted train set is not found.
         """
         df_x_test = x_test if isinstance(x_test, pd.DataFrame) else pd.DataFrame(x_test)
 
@@ -1438,10 +1581,42 @@ class ServiceClient(Singleton):
                     f"the server limit of {api_settings.dataset_max_size_bytes} bytes."
                 )
 
-        x_test_bytes, x_test_crc32c_hash = _serialize_to_parquet(df_x_test)
+        x_test_bytes, _ = _serialize_to_parquet(df_x_test)
+        return x_test_bytes
 
+    @classmethod
+    def _inline_test_set(cls, x_test_bytes: bytes) -> str | None:
+        """The test set as base64 if the server accepts it inline, else None."""
+        settings = cls.get_settings()
+        if settings is None:
+            return None
+        max_bytes = settings.inline_test_set_max_parquet_bytes
+        # An older server sends no limit and does not accept inline test sets.
+        if max_bytes is None:
+            return None
+        if len(x_test_bytes) > max_bytes:
+            return None
+        return base64.b64encode(x_test_bytes).decode("ascii")
+
+    @classmethod
+    def _upload_test_set(
+        cls,
+        x_test_bytes: bytes,
+        *,
+        fitted_train_set_id: UUID,
+        client_options: ClientOptions,
+    ) -> UUID:
+        """Upload a test set to predict with a fitted train set.
+
+        Returns:
+            The id of the uploaded test set, or of the same test set the server
+            already holds.
+
+        Raises:
+            FittedModelNotFoundError: If the fitted train set is not found.
+        """
         if get_opts().TABPFN_CLIENT_DEDUP_DATASETS:
-            x_test_dedup_hash = x_test_crc32c_hash
+            x_test_dedup_hash = _get_crc32c_hash(x_test_bytes)
         else:
             x_test_dedup_hash = None
 
@@ -1777,13 +1952,16 @@ class ServiceClient(Singleton):
     )
     def _predict(
         cls,
-        req: PredictRequest,
+        req: PredictRequest | InlinePredictRequest,
         timeout: float,
         headers: dict[str, str] | None = None,
     ) -> PredictResponseUnion:
-        """Request a prediction for an uploaded test set.
+        """Request a prediction for an uploaded or inline test set.
 
         Raises:
+            _UploadTestSetInstead: If the server cannot take the inline test set.
+            FittedModelNotFoundError: If the fitted train set of an inline test set
+                is not found.
             PredictFailedError: If the server reports that the prediction it
                 created for the request failed.
             RefitRequiredError: If the fitted model can no longer predict and
@@ -1795,6 +1973,9 @@ class ServiceClient(Singleton):
             timeout=timeout,
             headers=headers,
         )
+        inline = isinstance(req, InlinePredictRequest)
+        if inline and _asks_for_upload(res):
+            raise _UploadTestSetInstead
         # The body, not the request, decides which model applies: a prediction,
         # a download URL to follow, a prediction the server is still running,
         # or one that failed. A refit is a failure like any other: the server
@@ -1803,17 +1984,23 @@ class ServiceClient(Singleton):
             res,
             "predict",
             success_model=_PredictResponseUnion,
-            error_models=_PREDICT_FAILED_ERRORS,
+            error_models=_INLINE_PREDICT_ERRORS if inline else _PREDICT_FAILED_ERRORS,
         )
-        if isinstance(resp, PredictFailedErrorResponse):
-            # What a poll for the prediction raises.
-            raise _prediction_failed(
-                resp.fitted_test_set_id,
-                resp.message,
-                resp.error_code,
-                trace_id=resp.trace_id,
-            )
-        return resp
+        if isinstance(resp, _InlinePredictNotFound):
+            resp = resp.root
+        match resp:
+            case NotFoundErrorResponse():
+                raise _fitted_model_not_found(req.fitted_train_set_id, resp)
+            case PredictFailedErrorResponse():
+                # What a poll for the prediction raises.
+                raise _prediction_failed(
+                    resp.fitted_test_set_id,
+                    resp.message,
+                    resp.error_code,
+                    trace_id=resp.trace_id,
+                )
+            case _:
+                return resp
 
     @classmethod
     @backoff.on_exception(
@@ -2046,7 +2233,7 @@ class ServiceClient(Singleton):
         response: httpx.Response,
         method_name: str,
         success_model: type[SuccessT] | TypeAdapter[SuccessT],
-        error_models: dict[int, type[ErrorT]] | None = None,
+        error_models: Mapping[int, type[ErrorT]] | None = None,
     ) -> SuccessT | ErrorT:
         """Parse a response into its success or expected error model.
 
