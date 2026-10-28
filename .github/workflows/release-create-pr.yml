@@ -60,7 +60,6 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          version: "0.13.4"
           enable-cache: false
 
       # Installed at a pinned version, and before the checkout below: from that
@@ -105,10 +104,29 @@ jobs:
           print(f"Bumped [project].version from {match.group(2)} to {version}")
           PY
 
-      # --no-build keeps third-party build code from running next to the
-      # credential; the project's own version is read from static metadata.
-      - name: Update version in uv.lock
-        run: uv lock --no-build
+      # A text edit rather than `uv lock`, which would resolve against the
+      # index and could change other packages in the release commit.
+      - name: Bump version in uv.lock
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          path = Path("uv.lock")
+          text = path.read_text(encoding="utf-8")
+
+          pattern = r'(?m)(^\[\[package\]\]\nname = "tabpfn-client"\nversion = ")([^"]+)(")'
+          match = re.search(pattern, text)
+          if not match:
+              raise SystemExit("Could not find the tabpfn-client package in uv.lock")
+
+          path.write_text(
+              text[: match.start(2)] + version + text[match.end(2) :], encoding="utf-8"
+          )
+          print(f"Bumped tabpfn-client in uv.lock from {match.group(2)} to {version}")
+          PY
 
       - name: Build changelog
         run: towncrier build --version "$VERSION" --yes
