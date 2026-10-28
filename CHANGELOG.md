@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-28
+
+### Added
+
+- `TabPFNClassifier` and `TabPFNRegressor` gained `submit_fit()`, which starts a fit without waiting for it, and `wait_for_fit()`. `save_model()` saves the pending model, so a later run can `load_model()` it and wait for the same fit instead of fitting again; until the fit has been waited for, `predict()` raises `NotFittedError`. A fit the server reports as failed now raises `FitFailedError`, a `RuntimeError`. ([#404](https://github.com/PriorLabs/tabpfn-client/pull/404))
+- `api_mode` now also applies to `predict()`: with `"auto"`, the default, a prediction runs as a background job that the client polls once the training rows of the fit or the rows to predict reach thresholds that the server sets, while a fit with `fit_mode="fit_with_cache"` still predicts with one request. A prediction that takes longer than the server waits on one request no longer fails: the client polls for its result. `TabPFNClassifier` and `TabPFNRegressor` gained `submit_predict()`, which starts a prediction as a background job without waiting for it, and `wait_for_predict()`, which waits for it and returns what `predict()` returns, or `predict_proba()` for `output_type="probas"`. The model holds one pending prediction, which `save_model()` saves and a new `submit_predict()` or `predict()` replaces once the server has accepted the new prediction. While `predict()` waits for a prediction that runs as a background job, the model holds it, as `fit()` holds a new fit, so `wait_for_predict()` resumes a wait that stopped. `save_model()` no longer saves `api_mode`, and `load_model()` ignores it in a file an earlier version saved: a loaded model uses the `api_mode` of the process that loads it. Two new errors, both `RuntimeError`s: `PredictFailedError`, raised when the server reports that a prediction it created failed, and its subclass `RefitRequiredError`, raised instead of a plain `RuntimeError` when the fitted model can no longer predict: call `fit()` again. A thinking-mode fit now always runs as a background job, whatever `api_mode` is, instead of keeping one request open for up to an hour. If `fit()` stops waiting for a background fit, after `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds (by default the server's 2 hours) or an interrupt, the model is pending on the new fit, which `wait_for_fit()` resumes and `save_model()` saves; a fit that the server reports as failed leaves the model unfitted. A regressor's `"full"` output that is split over several requests keeps up to 4 of them running at once as background jobs. `fit()` and `predict()` no longer resend a request that the server may already have received, for example after a lost response or an HTTP 503, which could fit or predict, and bill, twice: they retry only a request that never reached the server. ([#413](https://github.com/PriorLabs/tabpfn-client/pull/413))
+- `predict` sends a small test set inside the predict request instead of uploading it first, when the server allows it. The server's settings say how large an inline test set may be. A server that does not advertise a limit gets an upload, as before. ([#424](https://github.com/PriorLabs/tabpfn-client/pull/424))
+- New `tabpfn_client.explain.permutation_shap()` computes SHAP values for many explained rows in each prediction request, not one request per row as `shap.PermutationExplainer` does. Pass the training data as `background`, and it samples the background rows from it. `to_shap()` gives a `shap.Explanation` for the shap plots. ([#426](https://github.com/PriorLabs/tabpfn-client/pull/426))
+
+### Changed
+
+- Requests after a pause of more than 5 s no longer open a new connection: the client keeps idle connections open for up to 5 minutes, and prediction downloads now reuse connections too. ([#428](https://github.com/PriorLabs/tabpfn-client/pull/428))
+
+### Fixed
+
+- Treat a successful response with an empty final payload (only keepalive pings) as an internal server error instead of surfacing a confusing validation error; fit status polling retries it like an HTTP 500. ([#403](https://github.com/PriorLabs/tabpfn-client/pull/403))
+- `TabPFNClassifier.fit` in thinking mode now rejects a target with only one class before sending it, including the SageMaker and Foundry estimators. ([#406](https://github.com/PriorLabs/tabpfn-client/pull/406))
+- Development and release tooling no longer trusts the compromised eMudhra (emSign) CAs: pinned certifi, uv, pip and pypa/gh-action-pypi-publish are bumped to their fixed releases. ([#419](https://github.com/PriorLabs/tabpfn-client/pull/419))
+
+
 ## [0.7.0rc1] - 2026-10-28
 
 ### Added
