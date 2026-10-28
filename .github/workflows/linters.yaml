@@ -22,7 +22,7 @@ jobs:
           cache-suffix: uv-0.13.0
           cache-python: true
       - name: Install deps
-        run: uv sync --frozen --all-groups
+        run: uv sync --locked --all-groups
       - name: Trunk check
         uses: trunk-io/trunk-action@e1234e67a86010d61ddac8d8ebf4b783e2ffd2fa # v2.0.0
         with:
