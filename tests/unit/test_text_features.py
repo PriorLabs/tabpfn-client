@@ -73,6 +73,20 @@ class TestCleanTextFeatures(unittest.TestCase):
         # Check that text is cleaned
         self.assertNotIn(",", result["mixed"].iloc[0])
 
+    def test_non_object_columns_unchanged(self):
+        # pd.to_numeric raises TypeError, not ValueError, on period columns
+        df = pd.DataFrame(
+            {
+                "year": pd.period_range("2010", periods=2, freq="Y"),
+                "text": ["text,with,comma", "plain"],
+            }
+        )
+
+        result = _clean_text_features(df)
+
+        pd.testing.assert_series_equal(result["year"], df["year"])
+        self.assertNotIn(",", result["text"].iloc[0])
+
     def test_null_values_handling(self):
         # Test handling of null values
         df = pd.DataFrame(

@@ -2011,18 +2011,21 @@ def _clean_text_features(X):
 
     # limit to 2500 chars and remove commas for text features
     for col in df.columns:
+        # Only object columns hold text. Other dtypes, such as periods, make
+        # pd.to_numeric raise TypeError.
+        if df[col].dtype != object:
+            continue
         # check if we can't convert to float
         try:
             pd.to_numeric(df[col])
         except ValueError:
-            if df[col].dtype == object:  # only process string/object columns
-                df[col] = (
-                    df[col]
-                    .str.replace(",", "")
-                    .str.replace(r"\s+", " ", regex=True)
-                    .str.strip()
-                    .str.slice(0, 2500)
-                )
+            df[col] = (
+                df[col]
+                .str.replace(",", "")
+                .str.replace(r"\s+", " ", regex=True)
+                .str.strip()
+                .str.slice(0, 2500)
+            )
 
     # Convert back to numpy if input was numpy (or tensor that was converted to numpy)
     if isinstance(data, np.ndarray):
