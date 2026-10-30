@@ -50,7 +50,7 @@ TabPFNSystem = Literal["preprocessing", "text", "thinking"]
 TextHandling = Literal["advanced", "simple"]
 
 
-ThinkingEffort = Literal["medium", "high"]
+ThinkingEffort = Literal["micro", "mini", "low", "medium", "high", "xhigh", "max"]
 
 
 class PredictAsyncThresholds(BaseModel):
@@ -514,7 +514,9 @@ class DuplicateTrainSetErrorResponse(BaseModel):
 
 
 class EstimateCostResponse(BaseModel):
-    estimated_cost: int
+    estimated_cost: int = Field(
+        description="Tokens the operation is charged. For thinking_fit, the most it can be charged: the effort level's fit time limit at the GPU-second rate, which is reserved at submit. The settled charge is the measured fit time at the same rate, up to this amount and at least the minimum charge."
+    )
     pricing_version: str
     inputs: EstimateCostRequest
 
@@ -575,7 +577,9 @@ class GetSettingsResponse(BaseModel):
 class InlinePredictRequest(BaseModel):
     fitted_train_set_id: UUID
     task_config: TaskConfig
-    x_test_parquet_base64: str
+    x_test_parquet_base64: str = Field(
+        description="The test set as a base64 Parquet file, in place of `test_set_upload_id`. The decoded file can be at most `inline_test_set_max_parquet_bytes` from `get_settings`. If that value is 0, the server does not accept inline test sets."
+    )
 
 
 class NotFoundErrorResponse(BaseModel):
@@ -664,9 +668,9 @@ class SubmitFitJobResponse(BaseModel):
 
 
 class SubmitPredictJobRequest(BaseModel):
-    test_set_upload_id: UUID
     fitted_train_set_id: UUID
     task_config: TaskConfig
+    test_set_upload_id: UUID
 
 
 class SubmitPredictJobResponse(BaseModel):
