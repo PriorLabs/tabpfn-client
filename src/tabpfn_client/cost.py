@@ -5,7 +5,11 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
-from tabpfn_client.api_models import EstimateCostRequest, EstimateCostResponse
+from tabpfn_client.api_models import (
+    EstimateCostRequest,
+    EstimateCostResponse,
+    ThinkingEffort,
+)
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.config import get_access_token
 
@@ -34,7 +38,7 @@ def estimate_cost(
         "predict", "thinking_fit", "thinking_predict", "cache_predict"
     ] = "predict",
     n_estimators: int | None = None,
-    thinking_effort: Literal["medium", "high"] | None = None,
+    thinking_effort: ThinkingEffort | None = None,
 ) -> EstimateCostResponse:
     """Estimate one operation without uploading data or consuming quota.
 

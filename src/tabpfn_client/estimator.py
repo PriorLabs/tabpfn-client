@@ -593,9 +593,13 @@ class TabPFNClassifier(
                 optional when you've set the level explicitly.
 
             thinking_effort:
-                Effort level for thinking mode. When set, thinking is enabled
-                (you don't also need `thinking_mode=True`). When None and
-                `thinking_mode=True`, defaults to "medium".
+                Effort level for thinking mode, from least to most compute:
+                "micro", "mini", "low", "medium", "high", "xhigh", "max". When
+                set, thinking is enabled (you don't also need
+                `thinking_mode=True`). When None and `thinking_mode=True`,
+                defaults to "medium". Levels other than "medium" and "high" are
+                not available to every account; the server rejects a level your
+                account cannot use.
 
             thinking_timeout_s:
                 Budget for the fit, in seconds. Only consulted when thinking is
@@ -1249,9 +1253,13 @@ class TabPFNRegressor(
                 optional when you've set the level explicitly.
 
             thinking_effort:
-                Effort level for thinking mode. When set, thinking is enabled
-                (you don't also need `thinking_mode=True`). When None and
-                `thinking_mode=True`, defaults to "medium".
+                Effort level for thinking mode, from least to most compute:
+                "micro", "mini", "low", "medium", "high", "xhigh", "max". When
+                set, thinking is enabled (you don't also need
+                `thinking_mode=True`). When None and `thinking_mode=True`,
+                defaults to "medium". Levels other than "medium" and "high" are
+                not available to every account; the server rejects a level your
+                account cannot use.
 
             thinking_timeout_s:
                 Budget for the fit, in seconds. Only consulted when thinking is
