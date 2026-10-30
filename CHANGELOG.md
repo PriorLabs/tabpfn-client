@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-30
+
+### Added
+
+- `thinking_effort` accepts `"micro"`, `"mini"`, `"low"`, `"xhigh"` and `"max"` besides `"medium"` and `"high"`, for accounts the server allows to use them. ([#433](https://github.com/PriorLabs/tabpfn-client/pull/433))
+
+### Fixed
+
+- `fit` and `predict` no longer fail on a DataFrame with a period column, for example years from `pd.period_range`. ([#429](https://github.com/PriorLabs/tabpfn-client/pull/429))
+
+
 ## [0.7.0] - 2026-10-28
 
 ### Added
