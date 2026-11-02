@@ -29,15 +29,23 @@ jobs:
     env:
       HEAD_REF: ${{ github.event.pull_request.head.ref }}
     steps:
-      # RELEASE_BOT_TOKEN rather than GITHUB_TOKEN: a tag pushed with the
+      # An app token rather than GITHUB_TOKEN: a tag pushed with the
       # GITHUB_TOKEN does not start workflow runs, so release-publish.yml
       # would never fire.
+      - name: App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.TABPFN_CLIENT_APP_ID }}
+          private-key: ${{ secrets.TABPFN_CLIENT_APP_PRIVATE_KEY }}
+          permission-contents: write
+
       - name: Checkout merge commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_BOT_TOKEN }}
+          token: ${{ steps.app.outputs.token }}
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
