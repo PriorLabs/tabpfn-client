@@ -69,14 +69,24 @@ jobs:
       - name: Install towncrier
         run: uv pip install --system 'towncrier==25.8.0'
 
-      # RELEASE_BOT_TOKEN rather than GITHUB_TOKEN: a pull request opened with
-      # the GITHUB_TOKEN does not start workflow runs, which would leave the
-      # release PR without CI.
+      # An app token rather than GITHUB_TOKEN: a pull request opened with the
+      # GITHUB_TOKEN does not start workflow runs, which would leave the release
+      # PR without CI. The PR is authored by the app, not by whoever dispatched
+      # this workflow.
+      - name: App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.TABPFN_CLIENT_APP_ID }}
+          private-key: ${{ secrets.TABPFN_CLIENT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_BOT_TOKEN }}
+          token: ${{ steps.app.outputs.token }}
 
       - name: Create release branch from base ref
         run: |
@@ -96,8 +106,8 @@ jobs:
 
       - name: Commit release changes
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "tabpfn-client-app[bot]"
+          git config user.email "290670574+tabpfn-client-app[bot]@users.noreply.github.com"
 
           git add pyproject.toml uv.lock CHANGELOG.md changelog
 
@@ -113,7 +123,7 @@ jobs:
 
       - name: Open pull request
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           gh pr create \
             --base "$BASE_BRANCH" \
