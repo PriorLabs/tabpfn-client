@@ -572,6 +572,7 @@ class GetSettingsResponse(BaseModel):
     dataset_max_size_bytes: int
     async_settings: AsyncSettings
     inline_test_set_max_parquet_bytes: int | None = None
+    thinking_max_timeout_secs: float | None = None
 
 
 class InlinePredictRequest(BaseModel):
