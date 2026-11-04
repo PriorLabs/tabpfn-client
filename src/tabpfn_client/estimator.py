@@ -2134,6 +2134,8 @@ def _build_thinking_config(
     )
     if not enabled:
         return None
+    if timeout_secs is not None:
+        _validate_thinking_timeout(timeout_secs)
     return ThinkingConfig(
         effort=effort,
         timeout_secs=timeout_secs,
@@ -2142,6 +2144,22 @@ def _build_thinking_config(
         time_col=time_col,
         group_time_col=group_time_col,
     )
+
+
+def _validate_thinking_timeout(timeout_secs: float) -> None:
+    """Reject a `thinking_timeout_s` above the server's limit before the upload.
+
+    Servers that do not report a limit still reject a too-large value when the fit
+    arrives.
+    """
+    settings = ServiceClient.get_settings()
+    if settings is None or settings.thinking_max_timeout_secs is None:
+        return
+    if timeout_secs > settings.thinking_max_timeout_secs:
+        raise ValueError(
+            f"thinking_timeout_s={timeout_secs:g} exceeds the maximum of "
+            f"{settings.thinking_max_timeout_secs:g} seconds."
+        )
 
 
 def _validate_group_columns(
