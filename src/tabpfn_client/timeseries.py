@@ -60,18 +60,11 @@ class _ForecastTask(BaseModel):
     quantiles: list[float]
 
 
-class _BacktestTask(BaseModel):
-    task: Literal["backtest"] = "backtest"
-    horizon: int
-    quantiles: list[float]
-    n_windows: int
-    step_size: int | None = None
-
-
 class _JobSpec(BaseModel):
     freq: str
     columns: _ColumnRoles
-    task: Annotated[Union[_ForecastTask, _BacktestTask], Field(discriminator="task")]
+    # Tagged, so more tasks can join as a discriminated union later.
+    task: _ForecastTask
     preset: str | None = None
 
 
@@ -241,7 +234,7 @@ def _run(
 
 def _spec(
     series: pd.DataFrame,
-    task: _ForecastTask | _BacktestTask,
+    task: _ForecastTask,
     *,
     freq: str,
     id_column: str,
@@ -310,74 +303,6 @@ def forecast(
     if horizon < 1:
         raise InvalidSeriesError("horizon must be at least 1")
     task = _ForecastTask(horizon=horizon, quantiles=_check_quantiles(quantiles))
-    spec = _spec(
-        series,
-        task,
-        freq=freq,
-        id_column=id_column,
-        timestamp_column=timestamp_column,
-        target_columns=target_columns,
-        preset=preset,
-    )
-    return _run(series, spec, timeout=timeout, poll_interval=poll_interval)
-
-
-def backtest(
-    series: pd.DataFrame,
-    *,
-    horizon: int,
-    freq: str,
-    n_windows: int = 1,
-    step_size: int | None = None,
-    id_column: str = "item_id",
-    timestamp_column: str = "timestamp",
-    target_columns: Sequence[str] = ("target",),
-    quantiles: Sequence[float] = QUANTILE_GRID,
-    preset: str | None = None,
-    timeout: float = 1800.0,
-    poll_interval: float = 5.0,
-) -> tuple[pd.DataFrame, dict]:
-    """Forecast the last part of `series` as if it were not known yet.
-
-    Window `i` cuts `horizon + i * step_size` steps off the end of every item and
-    forecasts the next `horizon` steps from there. The result has the forecast next
-    to the known values, so the caller can score it.
-
-    Args:
-        series: Long table, one row per item and timestamp.
-        horizon: Number of steps each window forecasts.
-        freq: Pandas offset alias of the timestamps.
-        n_windows: Number of windows, from 1 to 10.
-        step_size: Steps between window starts. None means `horizon`.
-        id_column: Column that names the item.
-        timestamp_column: Column with the timestamps.
-        target_columns: Columns to forecast.
-        quantiles: Quantiles to return, from `QUANTILE_GRID`.
-        preset: Ensemble size. None lets the server choose.
-        timeout: Seconds to wait for the job.
-        poll_interval: Seconds between status requests.
-
-    Returns:
-        The same columns as `forecast`, plus `cutoff` (the last known timestamp of
-        the window) and `actual`; and the job metadata.
-
-    Raises:
-        InvalidSeriesError: If the table or the parameters break a rule.
-        TimeSeriesJobFailedError: If the server reports the job failed.
-        TimeoutError: If the job does not finish within `timeout`.
-    """
-    if horizon < 1:
-        raise InvalidSeriesError("horizon must be at least 1")
-    if not 1 <= n_windows <= 10:
-        raise InvalidSeriesError("n_windows must be from 1 to 10")
-    if step_size is not None and step_size < 1:
-        raise InvalidSeriesError("step_size must be at least 1")
-    task = _BacktestTask(
-        horizon=horizon,
-        quantiles=_check_quantiles(quantiles),
-        n_windows=n_windows,
-        step_size=step_size,
-    )
     spec = _spec(
         series,
         task,
