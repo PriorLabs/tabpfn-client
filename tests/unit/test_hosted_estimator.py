@@ -513,7 +513,7 @@ class TestAsyncJobs:
 
     def test_polls_until_the_answer(self, clock):
         recorder = Recorder(answers=[_accepted("5"), _accepted("7")])
-        model = _classifier(recorder, use_async=True)
+        model = _classifier(recorder, use_async=True, tabpfn_systems=[])
         model.fit(X_COMPLETE, Y)
         proba = model.predict_proba(X_COMPLETE.iloc[:2])
 
@@ -525,6 +525,8 @@ class TestAsyncJobs:
         body = json.loads(submit.content)
         job_id = body["job_id"]
         assert body["execution"] == "async" and "X_train" in body
+        # `[]` is a real choice, so the submit carries it too.
+        assert body["tabpfn_systems"] == []
         # The endpoint takes only a UUID as a job id.
         assert uuid.UUID(job_id).hex == job_id
         assert submit.headers["x-tabpfn-job-id"] == job_id
@@ -538,13 +540,16 @@ class TestAsyncJobs:
 
     def test_parquet_submit_carries_the_job(self, clock):
         recorder = Recorder(answers=[_accepted()])
-        model = _classifier(recorder, payload_format="parquet", use_async=True)
+        model = _classifier(
+            recorder, payload_format="parquet", use_async=True, tabpfn_systems=[]
+        )
         model.fit(X, Y)
         model.predict_proba(X.iloc[:2])
 
         config, frames = recorder.multipart(0)
         job_id = config["job_id"]
         assert config["execution"] == "async"
+        assert config["tabpfn_systems"] == []
         assert set(frames) == {"x_train", "y_train", "x_test"}
         assert recorder.sent(0).headers["x-tabpfn-job-id"] == job_id
         poll = recorder.sent()
@@ -728,10 +733,19 @@ class TestSklearnContract:
             assert restored.get_params()["use_async"] is True
             assert restored.get_params()["async_timeout_s"] == 30.0
 
-    def test_unpickles_a_state_from_before_async(self):
-        """v0.7.1 pickled neither async param, and no state version."""
+    @pytest.mark.parametrize(
+        "missing",
+        [
+            ("use_async", "async_timeout_s", "_state_version"),
+            ("use_async", "async_timeout_s", "_state_version", "tabpfn_systems"),
+        ],
+        ids=["before_async", "v0.7.1"],
+    )
+    def test_unpickles_a_state_from_before_async(self, missing: Tuple[str, ...]):
+        """Older states, from before async jobs or from v0.7.1, load with defaults."""
         state = TabPFNClassifier(endpoint_url=URL).__getstate__()
-        del state["use_async"], state["async_timeout_s"], state["_state_version"]
+        for key in missing:
+            del state[key]
         sent_state = dict(state)
         restored = TabPFNClassifier.__new__(TabPFNClassifier)
         restored.__setstate__(state)
@@ -740,6 +754,7 @@ class TestSklearnContract:
         assert "_state_version" not in vars(restored)
         assert restored.get_params()["use_async"] is False
         assert restored.get_params()["async_timeout_s"] == 3600.0
+        assert restored.get_params()["tabpfn_systems"] is None
         assert isinstance(clone(restored), TabPFNClassifier)
 
         recorder = Recorder()
@@ -747,7 +762,9 @@ class TestSklearnContract:
         restored.fit(X_COMPLETE, Y)
         restored.predict_proba(X_COMPLETE.iloc[:2])
 
-        assert "execution" not in recorder.json_body()
+        body = recorder.json_body()
+        assert "execution" not in body
+        assert "tabpfn_systems" not in body
         assert len(recorder.requests) == 1
 
     def test_pickle_round_trip_keeps_the_version_off_the_estimator(self):
