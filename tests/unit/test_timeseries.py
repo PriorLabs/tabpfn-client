@@ -105,7 +105,7 @@ def test__validate_series__column_in_two_roles__raises():
         )
 
 
-# --- forecast / backtest over HTTP --------------------------------------------------
+# --- forecast over HTTP -----------------------------------------------------------
 
 
 def _result_parquet() -> bytes:
@@ -194,25 +194,3 @@ def test__forecast__bad_parameters__raises(kwargs):
     args = {"horizon": 3, **kwargs}
     with pytest.raises(InvalidSeriesError):
         timeseries.forecast(_series(), freq="D", target_columns=["y"], **args)
-
-
-def test__backtest__sends_windows(server):
-    submit = server.router.post("/forecast/v0/submit_job").respond(
-        200, json={"job_id": str(JOB_ID)}
-    )
-    server.router.post("/forecast/v0/get_job_result").respond(
-        200,
-        json={
-            "status": "failed",
-            "job_id": str(JOB_ID),
-            "error": "x",
-            "user_error": False,
-        },
-    )
-
-    with pytest.raises(TimeSeriesJobFailedError):
-        timeseries.backtest(
-            _series(), horizon=2, freq="D", n_windows=2, target_columns=["y"]
-        )
-
-    assert b'"n_windows":2' in submit.calls.last.request.content
