@@ -29,6 +29,13 @@ only sent when set; some deployments reject overrides.
 baked (e.g. `"v3"`, `"v3.5"`). Only sent when set, so older containers
 that don't know the field keep working.
 
+`tabpfn_systems` selects the systems the endpoint runs around the model
+(e.g. `["preprocessing", "text"]`, or `[]` for only minimal cleaning).
+Only sent when set, so older containers that don't know the field keep
+working. The client only checks that it is a list of strings: the
+container checks the values and their order, and may accept values
+beyond `"preprocessing"`, `"text"` and `"thinking"`.
+
 `use_kv_cache=True` automates that round trip within one estimator: the
 first `predict*` after `fit()` ships the training data as usual, and
 every later one reuses the `model_id` the endpoint returned. Workloads
@@ -78,6 +85,8 @@ import pandas as pd
 from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.utils.validation import check_is_fitted
 
+from tabpfn_client.api_models import TabPFNSystem
+
 
 # Multipart form field name -> JSON body key for the same dataset.
 _JSON_DATASET_KEYS = {"x_train": "X_train", "y_train": "y_train", "x_test": "X_test"}
@@ -112,6 +121,22 @@ def _to_parquet_part(X: Any, name: str) -> Tuple[str, bytes, str]:
     buf = io.BytesIO()
     frame.to_parquet(buf, index=False, compression="zstd")
     return (f"{name}.parquet", buf.getvalue(), _PARQUET_MIME)
+
+
+def _validate_tabpfn_systems(systems: Any) -> None:
+    """Check `tabpfn_systems` is a list of names; the container checks the values.
+
+    Raises:
+        ValueError: If it is not a list or tuple, or holds a non-string item.
+    """
+    if systems is None:
+        return
+    if not isinstance(systems, (list, tuple)) or any(
+        not isinstance(s, str) for s in systems
+    ):
+        raise ValueError(
+            f"tabpfn_systems must be a list of system names, not {systems!r}."
+        )
 
 
 def _routing_headers(
@@ -176,6 +201,7 @@ class _HostedBase(BaseEstimator):
         timeout_s: float = 300.0,
         payload_format: Literal["json", "parquet"] = "json",
         use_kv_cache: bool = False,
+        tabpfn_systems: Optional[List[TabPFNSystem | str]] = None,
         use_async: bool = False,
         async_timeout_s: float = 3600.0,
     ):
@@ -199,6 +225,7 @@ class _HostedBase(BaseEstimator):
         self.timeout_s = timeout_s
         self.payload_format = payload_format
         self.use_kv_cache = use_kv_cache
+        self.tabpfn_systems = tabpfn_systems
         self.use_async = use_async
         self.async_timeout_s = async_timeout_s
 
@@ -260,6 +287,7 @@ class _HostedBase(BaseEstimator):
         return state
 
     def __setstate__(self, state: Dict[str, Any]) -> None:
+        """Restore a pickle, filling parameters an older version lacks with defaults."""
         # A state pickled before versioning carries none; it loads as version 0.
         version = state.get("_state_version", 0)
         if version > _STATE_VERSION:
@@ -323,6 +351,7 @@ class _HostedBase(BaseEstimator):
         `model_id_`.
 
         Raises:
+            ValueError: If `tabpfn_systems` is not a list of strings.
             sklearn.exceptions.NotFittedError: If neither training data nor a
                 `model_id` is available.
             httpx.HTTPStatusError: If the endpoint answers with a non-2xx
@@ -330,6 +359,7 @@ class _HostedBase(BaseEstimator):
             TimeoutError: If `use_async` is set and the endpoint has not
                 answered the job within `async_timeout_s`.
         """
+        _validate_tabpfn_systems(self.tabpfn_systems)
         params: Dict[str, Any] = {"output_type": output_type}
         if predict_params:
             params.update(predict_params)
@@ -347,6 +377,9 @@ class _HostedBase(BaseEstimator):
         # (422) keep working.
         if self.model_version is not None:
             request["model_version"] = self.model_version
+        # Top level and omitted when unset too; `[]` is a real choice, so it is sent.
+        if self.tabpfn_systems is not None:
+            request["tabpfn_systems"] = list(self.tabpfn_systems)
         datasets: Dict[str, Any] = {"x_test": X_test}
 
         # Precedence: a completed fit() wins over the constructor's model_id.

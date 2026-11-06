@@ -320,6 +320,122 @@ class TestModelVersion:
         assert config["model_version"] == "v3"
 
 
+class TestTabpfnSystems:
+    def test_default_omits_the_field(self):
+        """Compat with older containers: an unknown field would 422."""
+        recorder = Recorder()
+        model = _classifier(recorder)
+        model.fit(X_COMPLETE, Y)
+        model.predict_proba(X_COMPLETE.iloc[:2])
+
+        assert "tabpfn_systems" not in recorder.json_body()
+
+    def test_explicit_value_sits_at_the_top_level(self):
+        """The serving container reads `req.tabpfn_systems`, not under `tabpfn_config`."""
+        recorder = Recorder()
+        model = _classifier(recorder, tabpfn_systems=["preprocessing", "text"])
+        model.fit(X_COMPLETE, Y)
+        model.predict_proba(X_COMPLETE.iloc[:2])
+
+        body = recorder.json_body()
+        assert body["tabpfn_systems"] == ["preprocessing", "text"]
+        assert "tabpfn_systems" not in body["task_config"]["tabpfn_config"]
+
+    def test_empty_list_is_sent(self):
+        """`[]` asks for only minimal cleaning, so it must not read as unset."""
+        recorder = Recorder(prediction=[1.5, 2.5])
+        model = _regressor(recorder, tabpfn_systems=[])
+        model.fit(X_COMPLETE, pd.Series([1.0, 2.0, 3.0, 4.0]))
+        model.predict(X_COMPLETE.iloc[:2])
+
+        assert recorder.json_body()["tabpfn_systems"] == []
+
+    def test_travels_on_the_parquet_payload_too(self):
+        recorder = Recorder()
+        model = _classifier(
+            recorder,
+            payload_format="parquet",
+            tabpfn_systems=["preprocessing", "text", "thinking"],
+        )
+        model.fit(X, Y)
+        model.predict_proba(X.iloc[:2])
+
+        config, _ = recorder.multipart()
+        assert config["tabpfn_systems"] == ["preprocessing", "text", "thinking"]
+
+    def test_is_sent_on_a_cached_predict(self):
+        recorder = Recorder()
+        model = _classifier(recorder, model_id="abc", tabpfn_systems=["preprocessing"])
+        model.predict_proba(X_COMPLETE.iloc[:2])
+
+        body = recorder.json_body()
+        assert body["context"] == {"model_id": "abc"}
+        assert body["tabpfn_systems"] == ["preprocessing"]
+
+    def test_tuple_is_sent_as_a_list(self):
+        recorder = Recorder()
+        model = _classifier(recorder, tabpfn_systems=("preprocessing", "text"))
+        model.fit(X_COMPLETE, Y)
+        model.predict_proba(X_COMPLETE.iloc[:2])
+
+        assert recorder.json_body()["tabpfn_systems"] == ["preprocessing", "text"]
+
+    def test_leaves_order_to_the_container(self):
+        """Order and dependencies are the container's to check, not the client's."""
+        recorder = Recorder()
+        model = _classifier(recorder, tabpfn_systems=["text", "preprocessing"])
+        model.fit(X_COMPLETE, Y)
+        model.predict_proba(X_COMPLETE.iloc[:2])
+
+        assert recorder.json_body()["tabpfn_systems"] == ["text", "preprocessing"]
+
+    def test_sends_other_values_unchanged(self):
+        """A container may accept values beyond the known ones, so it decides."""
+        recorder = Recorder()
+        model = _classifier(recorder, tabpfn_systems=["custom"])
+        model.fit(X_COMPLETE, Y)
+        model.predict_proba(X_COMPLETE.iloc[:2])
+
+        assert recorder.json_body()["tabpfn_systems"] == ["custom"]
+
+    @pytest.mark.parametrize("systems", ["preprocessing", [1]])
+    def test_invalid_value_raises_before_sending(self, systems: Any):
+        """Checked on predict, which also covers the `model_id` path that skips fit."""
+        recorder = Recorder()
+        model = _classifier(recorder, model_id="abc", tabpfn_systems=systems)
+
+        with pytest.raises(ValueError, match="list of system names"):
+            model.predict_proba(X_COMPLETE.iloc[:2])
+        assert recorder.requests == []
+
+    def test_get_params_and_clone_keep_it(self):
+        """Stored as passed for sklearn's clone; the caller's list is left alone."""
+        recorder = Recorder()
+        systems = ["preprocessing"]
+        model = _classifier(recorder, tabpfn_systems=systems)
+        model.fit(X_COMPLETE, Y)
+        model.predict_proba(X_COMPLETE.iloc[:2])
+
+        cloned = clone(model)
+        assert isinstance(cloned, TabPFNClassifier)
+        assert model.get_params()["tabpfn_systems"] is systems
+        assert cloned.get_params()["tabpfn_systems"] == ["preprocessing"]
+        assert systems == ["preprocessing"]
+
+    def test_older_pickle_without_the_field_still_predicts(self):
+        """Estimators pickled by v0.7.1 or earlier have no `tabpfn_systems`."""
+        model = TabPFNClassifier(endpoint_url=URL)
+        model.fit(X_COMPLETE, Y)
+        del model.tabpfn_systems
+        restored = pickle.loads(pickle.dumps(model))
+        recorder = Recorder()
+        recorder.install(restored)
+        restored.predict_proba(X_COMPLETE.iloc[:2])
+
+        assert restored.get_params()["tabpfn_systems"] is None
+        assert "tabpfn_systems" not in recorder.json_body()
+
+
 class TestNonFiniteJson:
     def test_missing_and_infinite_values_survive_the_json_path(self):
         """Explainers mask features with +inf; httpx's `json=` would reject it."""
