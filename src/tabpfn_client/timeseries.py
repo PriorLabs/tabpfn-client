@@ -150,7 +150,8 @@ def validate_series(
         if ts.has_duplicates:
             raise InvalidSeriesError(f"item {item_id!r} has duplicate timestamps")
         expected = pd.date_range(start=ts[0], periods=len(ts), freq=offset)
-        if not ts.equals(expected):
+        # `equals` is False across units, e.g. `us` data against an `ns` `date_range`.
+        if not (ts == expected).all():
             raise InvalidSeriesError(
                 f"item {item_id!r} has gaps, or timestamps off the {freq!r} grid"
             )

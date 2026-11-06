@@ -62,6 +62,13 @@ def test__validate_series__valid_table__passes():
     validate_series(_series(), freq="D", **COLS)
 
 
+def test__validate_series__microsecond_timestamps__passes():
+    df = _series()
+    validate_series(
+        df.assign(timestamp=df["timestamp"].astype("datetime64[us]")), freq="D", **COLS
+    )
+
+
 def test__validate_series__unsorted_rows__passes():
     validate_series(_series().sample(frac=1, random_state=0), freq="D", **COLS)
 
