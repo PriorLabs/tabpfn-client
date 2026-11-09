@@ -22,9 +22,11 @@ from tabpfn_client.config import init
 # The quantiles the service can return. Keep in step with the server.
 QUANTILE_GRID: tuple[float, ...] = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
 
-# The largest horizon and request body the service takes. Keep in step with the server.
+# The largest horizon the service takes. Keep in step with the server.
 MAX_HORIZON = 1024
-_MAX_INLINE_BYTES = 100 * 1024 * 1024
+# The largest table sent in the request body. Larger tables go to `prepare_upload`'s
+# signed URL. Keep in step with the server, which rejects a larger body.
+_MAX_INLINE_BYTES = 5_000_000
 
 _UPLOAD_PATH = "/forecast/prepare_upload"
 _SUBMIT_PATH = "/forecast/submit_job"
@@ -320,7 +322,8 @@ def forecast(
         timestamp_column: Column with the timestamps.
         target_columns: Columns to forecast.
         quantiles: Quantiles to return, from `QUANTILE_GRID`.
-        preset: Ensemble size. None lets the server choose.
+        preset: Quality tier: "low", "medium" or "high". Higher is more accurate and
+            slower. None lets the server choose.
         timeout: Seconds to wait for the job.
         poll_interval: Seconds between status requests.
 
