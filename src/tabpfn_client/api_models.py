@@ -563,6 +563,26 @@ class GetPredictResultResponse(BaseModel):
     timings: PredictTimings | None = None
 
 
+class Preset(str, Enum):
+    """Quality tier: higher is more accurate and slower."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class ForecastLimits(BaseModel):
+    """What one forecast job may take. `get_settings` returns them as `forecast`."""
+
+    max_horizon: int
+    max_inline_table_bytes: int
+    max_upload_bytes: int
+    max_items: int
+    max_rows: int
+    quantiles: list[float]
+    presets: list[Annotated[Preset | UnknownEnum, Field(union_mode="left_to_right")]]
+
+
 class GetSettingsResponse(BaseModel):
     default_model_version: Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")]
     max_model_limit: ModelLimit
@@ -573,6 +593,7 @@ class GetSettingsResponse(BaseModel):
     async_settings: AsyncSettings
     inline_test_set_max_parquet_bytes: int | None = None
     thinking_max_timeout_secs: float | None = None
+    forecast: ForecastLimits | None = None
 
 
 class InlinePredictRequest(BaseModel):

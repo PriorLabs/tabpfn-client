@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import io
+import json
 from collections.abc import Iterator
 from unittest.mock import patch
+from urllib.parse import parse_qs
 from uuid import UUID
 
 import numpy as np
@@ -13,6 +15,7 @@ import pytest
 import respx
 
 from tabpfn_client import timeseries
+from tabpfn_client.api_models import ForecastLimits, GetSettingsResponse
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.timeseries import (
     InvalidSeriesError,
@@ -20,9 +23,29 @@ from tabpfn_client.timeseries import (
     validate_series,
 )
 from tests.mock_tabpfn_server import MockTabPFNServer
+from tests.unit.test_client import _api_settings_payload
 
 JOB_ID = UUID("00000000-0000-0000-0000-0000000000f1")
 COLS = dict(id_column="item_id", timestamp_column="timestamp", target_columns=["y"])
+
+
+GRID = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+
+
+def _settings(**limits) -> GetSettingsResponse:
+    forecast = ForecastLimits(
+        **{
+            "max_horizon": 64,
+            "max_inline_table_bytes": 1_000_000,
+            "max_upload_bytes": 10_000_000,
+            "max_items": 100,
+            "max_rows": 10_000,
+            "quantiles": GRID,
+            "presets": ["low", "medium", "high"],
+            **limits,
+        }
+    )
+    return GetSettingsResponse(**_api_settings_payload(), forecast=forecast)
 
 
 def _series(n_items: int = 2, length: int = 6) -> pd.DataFrame:
@@ -44,6 +67,7 @@ def authorized_client() -> Iterator[None]:
     with (
         patch.object(timeseries, "init"),
         patch.object(timeseries.time, "sleep"),
+        patch.object(ServiceClient, "get_settings", return_value=_settings()),
     ):
         yield
     ServiceClient.reset_authorization()
@@ -184,10 +208,7 @@ def test__forecast__server_rejects_spec__raises_invalid_series(server):
         timeseries.forecast(_series(), horizon=3, freq="D", target_columns=["y"])
 
 
-def test__forecast__table_over_inline_limit__uploads_it_then_submits_the_job_id(
-    server, monkeypatch
-):
-    monkeypatch.setattr(timeseries, "_MAX_INLINE_BYTES", 1)
+def _mock_upload_then_fail(server: MockTabPFNServer) -> tuple[respx.Route, ...]:
     router = server.router
     prepare = router.post("/forecast/prepare_upload").respond(
         200,
@@ -214,7 +235,22 @@ def test__forecast__table_over_inline_limit__uploads_it_then_submits_the_job_id(
         },
     )
 
-    with pytest.raises(TimeSeriesJobFailedError):
+    return prepare, put, submit
+
+
+def test__forecast__table_over_inline_limit__uploads_it_then_submits_the_job_id(
+    server,
+):
+    prepare, put, submit = _mock_upload_then_fail(server)
+
+    with (
+        patch.object(
+            ServiceClient,
+            "get_settings",
+            return_value=_settings(max_inline_table_bytes=1),
+        ),
+        pytest.raises(TimeSeriesJobFailedError),
+    ):
         timeseries.forecast(_series(), horizon=3, freq="D", target_columns=["y"])
 
     assert b'"format":"parquet"' in prepare.calls.last.request.content
@@ -233,11 +269,80 @@ def test__forecast__bad_table__raises_before_any_request(server):
 
 
 @pytest.mark.parametrize(
-    "kwargs",
-    [{"horizon": 0}, {"horizon": 1025}, {"quantiles": [0.15]}, {"quantiles": []}],
+    ("kwargs", "match"),
+    [
+        ({"horizon": 0}, "at least 1"),
+        ({"horizon": 65}, "at most 64"),
+        ({"quantiles": [0.15]}, "quantiles must be from"),
+        ({"quantiles": []}, "at least one quantile"),
+    ],
     ids=["horizon_zero", "horizon_too_long", "off_grid_quantile", "no_quantile"],
 )
-def test__forecast__bad_parameters__raises(kwargs):
+def test__forecast__bad_parameters__raises(server, kwargs, match):
     args = {"horizon": 3, **kwargs}
-    with pytest.raises(InvalidSeriesError):
+    with pytest.raises(InvalidSeriesError, match=match):
         timeseries.forecast(_series(), freq="D", target_columns=["y"], **args)
+
+
+def test__forecast__no_settings__uploads_and_leaves_limit_checks_to_the_server(
+    server,
+):
+    prepare, _, submit = _mock_upload_then_fail(server)
+
+    with (
+        patch.object(ServiceClient, "get_settings", return_value=None),
+        pytest.raises(TimeSeriesJobFailedError),
+    ):
+        timeseries.forecast(_series(), horizon=5000, freq="D", target_columns=["y"])
+
+    assert prepare.called
+    form = parse_qs(submit.calls.last.request.content.decode())
+    assert json.loads(form["spec"][0])["task"] == {"task": "forecast", "horizon": 5000}
+
+
+def _renamed(column: str, new: str) -> dict:
+    roles = {"item_id": "id_column", "timestamp": "timestamp_column"}
+    match column:
+        case "y":
+            return {
+                "series": _series().rename(columns={"y": new}),
+                "target_columns": [new],
+            }
+        case _:
+            return {
+                "series": _series().rename(columns={column: new}),
+                "target_columns": ["y"],
+                roles[column]: new,
+            }
+
+
+@pytest.mark.parametrize(
+    ("column", "new", "quantiles"),
+    [
+        ("item_id", "mean", [0.5]),
+        ("timestamp", "target_column", [0.5]),
+        ("y", "q_0.5", [0.5]),
+        ("y", "q_0.9", None),
+    ],
+    ids=["id_mean", "timestamp_target_column", "target_requested_q", "target_grid_q"],
+)
+def test__forecast__column_name_taken_by_result__raises_before_any_request(
+    server, column, new, quantiles
+):
+    with pytest.raises(InvalidSeriesError, match=f"\\['{new}'\\] are taken"):
+        timeseries.forecast(
+            horizon=3, freq="D", quantiles=quantiles, **_renamed(column, new)
+        )
+
+
+def test__forecast__quantile_column_name_not_requested__submits(server):
+    submit = server.router.post("/forecast/submit_job").respond(
+        422, json={"detail": "stop here"}
+    )
+
+    with pytest.raises(InvalidSeriesError, match="stop here"):
+        timeseries.forecast(
+            horizon=3, freq="D", quantiles=[0.5], **_renamed("y", "q_0.9")
+        )
+
+    assert submit.called

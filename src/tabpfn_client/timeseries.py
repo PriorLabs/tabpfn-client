@@ -15,18 +15,9 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel, Field, TypeAdapter
 
-from tabpfn_client.api_models import FileInfo, FileUploadInfo
+from tabpfn_client.api_models import FileInfo, FileUploadInfo, ForecastLimits
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.config import init
-
-# The quantiles the service can return. Keep in step with the server.
-QUANTILE_GRID: tuple[float, ...] = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
-
-# The largest horizon the service takes. Keep in step with the server.
-MAX_HORIZON = 1024
-# The largest table sent in the request body. Larger tables go to `prepare_upload`'s
-# signed URL. Keep in step with the server, which rejects a larger body.
-_MAX_INLINE_BYTES = 5_000_000
 
 _UPLOAD_PATH = "/forecast/prepare_upload"
 _SUBMIT_PATH = "/forecast/submit_job"
@@ -65,7 +56,8 @@ class _ColumnRoles(BaseModel):
 class _ForecastTask(BaseModel):
     task: Literal["forecast"] = "forecast"
     horizon: int
-    quantiles: list[float]
+    # None asks for the server's full quantile grid.
+    quantiles: list[float] | None = None
 
 
 class _JobSpec(BaseModel):
@@ -170,29 +162,55 @@ def validate_series(
             )
 
 
-def _check_quantiles(quantiles: Sequence[float]) -> list[float]:
-    off_grid = sorted(set(quantiles) - set(QUANTILE_GRID))
-    if off_grid:
-        raise InvalidSeriesError(
-            f"quantiles must be from {list(QUANTILE_GRID)}, got {off_grid}"
-        )
-    if not quantiles:
+def _check_task(
+    *, horizon: int, quantiles: list[float] | None, limits: ForecastLimits | None
+) -> None:
+    """Check the task against the server's limits.
+
+    Without limits (no settings, or none for forecasts) the server does the checks.
+    """
+    if horizon < 1:
+        raise InvalidSeriesError("horizon must be at least 1")
+    if quantiles is not None and not quantiles:
         raise InvalidSeriesError("give at least one quantile")
-    return sorted(set(quantiles))
+    if limits is None:
+        return
+    if horizon > limits.max_horizon:
+        raise InvalidSeriesError(f"horizon must be at most {limits.max_horizon}")
+    if quantiles is not None:
+        off_grid = sorted(set(quantiles) - set(limits.quantiles))
+        if off_grid:
+            raise InvalidSeriesError(
+                f"quantiles must be from {limits.quantiles}, got {off_grid}"
+            )
+
+
+def _check_output_names(
+    *,
+    id_column: str,
+    timestamp_column: str,
+    target_columns: Sequence[str],
+    quantiles: Sequence[float],
+) -> None:
+    """Raise if a caller's column name is one the server adds to the result."""
+    added = {"target_column", "mean", *(f"q_{float(q)}" for q in quantiles)}
+    clashes = sorted(added & {id_column, timestamp_column, *target_columns})
+    if clashes:
+        raise InvalidSeriesError(
+            f"column name(s) {clashes} are taken by the result, which adds the "
+            f"columns {sorted(added)}; rename them"
+        )
 
 
 # --- transport ----------------------------------------------------------------------
 
 
-def _submit(series: pd.DataFrame, spec: _JobSpec) -> UUID:
+def _submit(series: pd.DataFrame, spec: _JobSpec, *, inline_max_bytes: int) -> UUID:
     buf = io.BytesIO()
     series.to_parquet(buf, index=False)
     table = buf.getvalue()
     data = {"spec": spec.model_dump_json(exclude_none=True)}
-    if len(table) > _MAX_INLINE_BYTES:
-        data["job_id"] = str(_upload(table))
-        res = ServiceClient.httpx_client.post(_SUBMIT_PATH, data=data)
-    else:
+    if len(table) <= inline_max_bytes:
         res = ServiceClient.httpx_client.post(
             _SUBMIT_PATH,
             data=data,
@@ -200,6 +218,9 @@ def _submit(series: pd.DataFrame, spec: _JobSpec) -> UUID:
                 "series": ("series.parquet", table, "application/vnd.apache.parquet")
             },
         )
+    else:
+        data["job_id"] = str(_upload(table))
+        res = ServiceClient.httpx_client.post(_SUBMIT_PATH, data=data)
     if res.status_code in (413, 422):
         raise InvalidSeriesError(res.json().get("detail", res.text))
     return ServiceClient._validate_response(
@@ -244,11 +265,11 @@ def _run(
     series: pd.DataFrame,
     spec: _JobSpec,
     *,
+    inline_max_bytes: int,
     timeout: float,
     poll_interval: float,
 ) -> tuple[pd.DataFrame, dict]:
-    init()
-    job_id = _submit(series, spec)
+    job_id = _submit(series, spec, inline_max_bytes=inline_max_bytes)
     deadline = time.monotonic() + timeout
     while True:
         result = _poll(job_id)
@@ -305,7 +326,7 @@ def forecast(
     id_column: str = "item_id",
     timestamp_column: str = "timestamp",
     target_columns: Sequence[str] = ("target",),
-    quantiles: Sequence[float] = QUANTILE_GRID,
+    quantiles: Sequence[float] | None = None,
     preset: str | None = None,
     timeout: float = 1800.0,
     poll_interval: float = 5.0,
@@ -321,7 +342,8 @@ def forecast(
         id_column: Column that names the item.
         timestamp_column: Column with the timestamps.
         target_columns: Columns to forecast.
-        quantiles: Quantiles to return, from `QUANTILE_GRID`.
+        quantiles: Quantiles to return, from the `forecast.quantiles` grid of
+            `ServiceClient.get_settings()`. None returns the whole grid.
         preset: Quality tier: "low", "medium" or "high". Higher is more accurate and
             slower. None lets the server choose.
         timeout: Seconds to wait for the job.
@@ -332,13 +354,31 @@ def forecast(
         `mean` column and one `q_<level>` column per quantile; and the job metadata.
 
     Raises:
-        InvalidSeriesError: If the table or the parameters break a rule.
+        InvalidSeriesError: If the table or the parameters break a rule, or a column
+            name is one the result adds.
         TimeSeriesJobFailedError: If the server reports the job failed.
         TimeoutError: If the job does not finish within `timeout`.
     """
-    if not 1 <= horizon <= MAX_HORIZON:
-        raise InvalidSeriesError(f"horizon must be from 1 to {MAX_HORIZON}")
-    task = _ForecastTask(horizon=horizon, quantiles=_check_quantiles(quantiles))
+    init()
+    settings = ServiceClient.get_settings()
+    limits = None if settings is None else settings.forecast
+    requested = None if quantiles is None else sorted(set(quantiles))
+    _check_task(horizon=horizon, quantiles=requested, limits=limits)
+    match requested, limits:
+        case None, None:
+            # The grid is unknown, so the server checks the quantile columns.
+            returned = []
+        case None, ForecastLimits(quantiles=grid):
+            returned = grid
+        case _:
+            returned = requested
+    _check_output_names(
+        id_column=id_column,
+        timestamp_column=timestamp_column,
+        target_columns=target_columns,
+        quantiles=returned,
+    )
+    task = _ForecastTask(horizon=horizon, quantiles=requested)
     spec = _spec(
         series,
         task,
@@ -348,4 +388,11 @@ def forecast(
         target_columns=target_columns,
         preset=preset,
     )
-    return _run(series, spec, timeout=timeout, poll_interval=poll_interval)
+    return _run(
+        series,
+        spec,
+        # Without limits, upload every table: the signed URL takes any size.
+        inline_max_bytes=0 if limits is None else limits.max_inline_table_bytes,
+        timeout=timeout,
+        poll_interval=poll_interval,
+    )
