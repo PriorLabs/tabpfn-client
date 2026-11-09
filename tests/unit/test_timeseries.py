@@ -123,11 +123,11 @@ def _result_parquet() -> bytes:
 
 def test__forecast__job_succeeds__returns_result_and_metadata(server):
     router = server.router
-    submit = router.post("/forecast/v0/submit_job").respond(
+    submit = router.post("/forecast/submit_job").respond(
         200, json={"job_id": str(JOB_ID)}
     )
     url = f"{server.base_url}/signed/result.parquet"
-    router.post("/forecast/v0/get_job_result").mock(
+    router.post("/forecast/get_job_result").mock(
         side_effect=[
             respx.MockResponse(200, json={"status": "pending", "job_id": str(JOB_ID)}),
             respx.MockResponse(
@@ -155,10 +155,10 @@ def test__forecast__job_succeeds__returns_result_and_metadata(server):
 
 
 def test__forecast__job_fails__raises_with_user_error(server):
-    server.router.post("/forecast/v0/submit_job").respond(
+    server.router.post("/forecast/submit_job").respond(
         200, json={"job_id": str(JOB_ID)}
     )
-    server.router.post("/forecast/v0/get_job_result").respond(
+    server.router.post("/forecast/get_job_result").respond(
         200,
         json={
             "status": "failed",
@@ -176,12 +176,52 @@ def test__forecast__job_fails__raises_with_user_error(server):
 
 
 def test__forecast__server_rejects_spec__raises_invalid_series(server):
-    server.router.post("/forecast/v0/submit_job").respond(
+    server.router.post("/forecast/submit_job").respond(
         422, json={"detail": "task.horizon: too large"}
     )
 
     with pytest.raises(InvalidSeriesError, match="too large"):
         timeseries.forecast(_series(), horizon=3, freq="D", target_columns=["y"])
+
+
+def test__forecast__table_over_inline_limit__uploads_it_then_submits_the_job_id(
+    server, monkeypatch
+):
+    monkeypatch.setattr(timeseries, "_MAX_INLINE_BYTES", 1)
+    router = server.router
+    prepare = router.post("/forecast/prepare_upload").respond(
+        200,
+        json={
+            "job_id": str(JOB_ID),
+            "series_info": {
+                "signed_urls": [f"{server.base_url}/signed/series.parquet"],
+                "expires_at": 0.0,
+                "required_headers": {"X-Goog-Content-Length-Range": "0,10"},
+            },
+        },
+    )
+    put = router.put("/signed/series.parquet").respond(200)
+    submit = router.post("/forecast/submit_job").respond(
+        200, json={"job_id": str(JOB_ID)}
+    )
+    router.post("/forecast/get_job_result").respond(
+        200,
+        json={
+            "status": "failed",
+            "job_id": str(JOB_ID),
+            "error": "stop here",
+            "user_error": False,
+        },
+    )
+
+    with pytest.raises(TimeSeriesJobFailedError):
+        timeseries.forecast(_series(), horizon=3, freq="D", target_columns=["y"])
+
+    assert b'"format":"parquet"' in prepare.calls.last.request.content
+    assert put.calls.last.request.headers["X-Goog-Content-Length-Range"] == "0,10"
+    body = submit.calls.last.request.content
+    assert str(JOB_ID).encode() in body
+    assert b"series.parquet" not in body
 
 
 def test__forecast__bad_table__raises_before_any_request(server):
@@ -194,8 +234,8 @@ def test__forecast__bad_table__raises_before_any_request(server):
 
 @pytest.mark.parametrize(
     "kwargs",
-    [{"horizon": 0}, {"quantiles": [0.15]}, {"quantiles": []}],
-    ids=["horizon", "off_grid_quantile", "no_quantile"],
+    [{"horizon": 0}, {"horizon": 1025}, {"quantiles": [0.15]}, {"quantiles": []}],
+    ids=["horizon_zero", "horizon_too_long", "off_grid_quantile", "no_quantile"],
 )
 def test__forecast__bad_parameters__raises(kwargs):
     args = {"horizon": 3, **kwargs}

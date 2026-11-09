@@ -15,14 +15,20 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel, Field, TypeAdapter
 
+from tabpfn_client.api_models import FileInfo, FileUploadInfo
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.config import init
 
 # The quantiles the service can return. Keep in step with the server.
 QUANTILE_GRID: tuple[float, ...] = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
 
-_SUBMIT_PATH = "/forecast/v0/submit_job"
-_RESULT_PATH = "/forecast/v0/get_job_result"
+# The largest horizon and request body the service takes. Keep in step with the server.
+MAX_HORIZON = 1024
+_MAX_INLINE_BYTES = 100 * 1024 * 1024
+
+_UPLOAD_PATH = "/forecast/prepare_upload"
+_SUBMIT_PATH = "/forecast/submit_job"
+_RESULT_PATH = "/forecast/get_job_result"
 
 
 class InvalidSeriesError(ValueError):
@@ -70,6 +76,11 @@ class _JobSpec(BaseModel):
 
 class _SubmitJobResponse(BaseModel):
     job_id: UUID
+
+
+class _PrepareUploadResponse(BaseModel):
+    job_id: UUID
+    series_info: FileUploadInfo
 
 
 class _JobPending(BaseModel):
@@ -174,22 +185,43 @@ def _check_quantiles(quantiles: Sequence[float]) -> list[float]:
 def _submit(series: pd.DataFrame, spec: _JobSpec) -> UUID:
     buf = io.BytesIO()
     series.to_parquet(buf, index=False)
-    res = ServiceClient.httpx_client.post(
-        _SUBMIT_PATH,
-        data={"spec": spec.model_dump_json(exclude_none=True)},
-        files={
-            "series": (
-                "series.parquet",
-                buf.getvalue(),
-                "application/vnd.apache.parquet",
-            )
-        },
-    )
+    table = buf.getvalue()
+    data = {"spec": spec.model_dump_json(exclude_none=True)}
+    if len(table) > _MAX_INLINE_BYTES:
+        data["job_id"] = str(_upload(table))
+        res = ServiceClient.httpx_client.post(_SUBMIT_PATH, data=data)
+    else:
+        res = ServiceClient.httpx_client.post(
+            _SUBMIT_PATH,
+            data=data,
+            files={
+                "series": ("series.parquet", table, "application/vnd.apache.parquet")
+            },
+        )
     if res.status_code in (413, 422):
         raise InvalidSeriesError(res.json().get("detail", res.text))
     return ServiceClient._validate_response(
         res, "submit_job", success_model=_SubmitJobResponse
     ).job_id
+
+
+def _upload(table: bytes) -> UUID:
+    """Write `table` to a signed URL; return the job it is for."""
+    res = ServiceClient.httpx_client.post(
+        _UPLOAD_PATH,
+        json={
+            "series_info": FileInfo(format="parquet", size_bytes=len(table)).model_dump(
+                exclude_none=True
+            )
+        },
+    )
+    if res.status_code == 422:
+        raise InvalidSeriesError(res.json().get("detail", res.text))
+    up = ServiceClient._validate_response(
+        res, "prepare_upload", success_model=_PrepareUploadResponse
+    )
+    ServiceClient._upload_to_gcs("series", table, up.series_info)
+    return up.job_id
 
 
 def _poll(job_id: UUID) -> _JobPending | _JobSucceeded | _JobFailed:
@@ -301,8 +333,8 @@ def forecast(
         TimeSeriesJobFailedError: If the server reports the job failed.
         TimeoutError: If the job does not finish within `timeout`.
     """
-    if horizon < 1:
-        raise InvalidSeriesError("horizon must be at least 1")
+    if not 1 <= horizon <= MAX_HORIZON:
+        raise InvalidSeriesError(f"horizon must be from 1 to {MAX_HORIZON}")
     task = _ForecastTask(horizon=horizon, quantiles=_check_quantiles(quantiles))
     spec = _spec(
         series,
