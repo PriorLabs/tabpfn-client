@@ -44,6 +44,10 @@ importance, partial dependence — otherwise pay a full re-fit per call.
 The endpoint's cache is bounded, so a `model_id` can be evicted between
 predicts; that surfaces as an error and the estimator has to be re-fit.
 
+A request that sends `context.model_id` also sends it in the
+`X-TabPFN-Model-Id` header, so a load balancer can route it to the
+replica that holds the model without reading the body.
+
 `model_id` lives on the constructor (not on `predict`) so the sklearn
 estimator contract stays intact: `predict(X)` / `predict_proba(X)` work
 with `Pipeline`, `GridSearchCV`, `cross_validate`, etc.
@@ -53,12 +57,26 @@ instead of inline JSON. Encoding dominates request time on large tables,
 and Parquet carries missing and non-finite values exactly. The JSON path
 encodes them as the `NaN` / `Infinity` literals Python's `json` accepts
 but the standard does not, so a strict endpoint needs Parquet for those.
+
+`use_async=True` runs each `predict*` call as a job on the endpoint
+instead of one long request; `predict*` still blocks and returns the same
+result. The container must have async jobs turned on, otherwise it
+answers 422. Between requests the estimator waits as long as the
+endpoint's `Retry-After` header says, and it submits again when the
+endpoint is too busy to take the job. If `async_timeout_s` passes first,
+`predict*` raises `TimeoutError`, and the job may still run on the
+endpoint. Behind more than one replica, the load balancer must send all
+requests with the same `X-TabPFN-Job-Id` header to the same replica.
 """
 
 from __future__ import annotations
 
+import contextlib
+import inspect
 import io
 import json
+import time
+import uuid
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import httpx
@@ -74,6 +92,16 @@ from tabpfn_client.api_models import TabPFNSystem
 _JSON_DATASET_KEYS = {"x_train": "X_train", "y_train": "y_train", "x_test": "X_test"}
 
 _PARQUET_MIME = "application/vnd.apache.parquet"
+
+# A load balancer routes by these without reading the body.
+_MODEL_ID_HEADER = "X-TabPFN-Model-Id"
+_JOB_ID_HEADER = "X-TabPFN-Job-Id"
+
+# Seconds to wait when the endpoint names no whole number in `Retry-After`.
+_DEFAULT_RETRY_AFTER_S = 5.0
+
+# Bump when a change to the estimator's attributes can't load an older state.
+_STATE_VERSION = 1
 
 
 def _to_jsonable(X: Any) -> list:
@@ -111,6 +139,39 @@ def _validate_tabpfn_systems(systems: Any) -> None:
         )
 
 
+def _routing_headers(
+    request: Dict[str, Any], job_id: Optional[str] = None
+) -> Dict[str, str]:
+    """Headers that name the request's model and job for a load balancer."""
+    headers: Dict[str, str] = {}
+    model_id = request.get("context", {}).get("model_id")
+    if model_id is not None:
+        headers[_MODEL_ID_HEADER] = model_id
+    if job_id is not None:
+        headers[_JOB_ID_HEADER] = job_id
+    return headers
+
+
+def _retry_after_s(response: httpx.Response) -> float:
+    """Seconds the response's `Retry-After` header asks to wait, at least one."""
+    try:
+        seconds = int(response.headers["Retry-After"])
+    except (KeyError, ValueError):
+        return _DEFAULT_RETRY_AFTER_S
+    return max(float(seconds), 1.0)
+
+
+def _wait(response: httpx.Response, deadline: float, job_id: str) -> None:
+    """Sleep as long as the response asks, or raise if that ends past `deadline`."""
+    wait_s = _retry_after_s(response)
+    if time.monotonic() + wait_s > deadline:
+        raise TimeoutError(
+            f"The endpoint did not answer job {job_id} within async_timeout_s. "
+            "The job may still run on the endpoint."
+        )
+    time.sleep(wait_s)
+
+
 class _HostedBase(BaseEstimator):
     """Shared HTTP plumbing for the endpoint-backed TabPFN estimators."""
 
@@ -141,6 +202,8 @@ class _HostedBase(BaseEstimator):
         payload_format: Literal["json", "parquet"] = "json",
         use_kv_cache: bool = False,
         tabpfn_systems: Optional[List[TabPFNSystem | str]] = None,
+        use_async: bool = False,
+        async_timeout_s: float = 3600.0,
     ):
         self.endpoint_url = endpoint_url
         self.api_key = api_key
@@ -163,6 +226,8 @@ class _HostedBase(BaseEstimator):
         self.payload_format = payload_format
         self.use_kv_cache = use_kv_cache
         self.tabpfn_systems = tabpfn_systems
+        self.use_async = use_async
+        self.async_timeout_s = async_timeout_s
 
     def _build_tabpfn_config(self) -> Dict[str, Any]:
         cfg: Dict[str, Any] = {
@@ -218,11 +283,27 @@ class _HostedBase(BaseEstimator):
         # httpx.Client isn't pickleable; strip the cache for sklearn pickling.
         state = self.__dict__.copy()
         state.pop("_cached_client", None)
+        state["_state_version"] = _STATE_VERSION
         return state
 
     def __setstate__(self, state: Dict[str, Any]) -> None:
-        """Restore a pickle; ones from v0.7.1 or earlier lack `tabpfn_systems`."""
-        super().__setstate__({"tabpfn_systems": None, **state})
+        """Restore a pickle, filling parameters an older version lacks with defaults."""
+        # A state pickled before versioning carries none; it loads as version 0.
+        version = state.get("_state_version", 0)
+        if version > _STATE_VERSION:
+            raise ValueError(
+                f"This estimator was saved by a newer tabpfn-client (state "
+                f"version {version}; this one reads up to {_STATE_VERSION}). "
+                "Upgrade tabpfn-client to load it."
+            )
+
+        # A state pickled before a parameter existed lacks it; its default
+        # keeps `predict*`, `get_params()` and `clone()` working.
+        params = inspect.signature(type(self).__init__).parameters.values()
+        defaults = {p.name: p.default for p in params if p.default is not p.empty}
+        restored = {**defaults, **state}
+        restored.pop("_state_version", None)
+        super().__setstate__(restored)
 
     def fit(self, X: Any, y: Any) -> "_HostedBase":
         """Store the training data; the endpoint fits on the next `predict*` call.
@@ -275,6 +356,8 @@ class _HostedBase(BaseEstimator):
                 `model_id` is available.
             httpx.HTTPStatusError: If the endpoint answers with a non-2xx
                 status.
+            TimeoutError: If `use_async` is set and the endpoint has not
+                answered the job within `async_timeout_s`.
         """
         _validate_tabpfn_systems(self.tabpfn_systems)
         params: Dict[str, Any] = {"output_type": output_type}
@@ -325,7 +408,11 @@ class _HostedBase(BaseEstimator):
             # Neither path available — raise the standard sklearn error.
             check_is_fitted(self, ["X_train_", "y_train_"])
 
-        resp = self._post(request, datasets)
+        resp = (
+            self._post_async(request, datasets)
+            if self.use_async
+            else self._post(request, datasets, _routing_headers(request))
+        )
         resp.raise_for_status()
         payload = resp.json()
 
@@ -338,9 +425,16 @@ class _HostedBase(BaseEstimator):
         return payload
 
     def _post(
-        self, request: Dict[str, Any], datasets: Dict[str, Any]
+        self,
+        request: Dict[str, Any],
+        datasets: Dict[str, Any],
+        headers: Dict[str, str],
     ) -> httpx.Response:
         """POST the request, with the datasets inline or as Parquet files."""
+        # Replaces same-named `extra_headers` in any case, so they can't
+        # reroute the request.
+        sent = httpx.Headers(self._headers())
+        sent.update(headers)
         if self.payload_format == "parquet":
             return self._http_client().post(
                 self.endpoint_url,
@@ -349,7 +443,7 @@ class _HostedBase(BaseEstimator):
                     name: _to_parquet_part(value, name)
                     for name, value in datasets.items()
                 },
-                headers=self._headers(),
+                headers=sent,
             )
         body = dict(request)
         for name, value in datasets.items():
@@ -359,7 +453,51 @@ class _HostedBase(BaseEstimator):
         return self._http_client().post(
             self.endpoint_url,
             content=json.dumps(body).encode("utf-8"),
-            headers=self._headers(),
+            headers=sent,
+        )
+
+    def _post_async(
+        self, request: Dict[str, Any], datasets: Dict[str, Any]
+    ) -> httpx.Response:
+        """Run the request as a job on the endpoint and return its final answer."""
+        deadline = time.monotonic() + self.async_timeout_s
+
+        while True:
+            # A refused submit registers no job, so each try gets a new id.
+            job_id = uuid.uuid4().hex
+            resp = self._submit(request, datasets, job_id)
+            if resp.status_code == 202 or "Retry-After" not in resp.headers:
+                break
+            _wait(resp, deadline, job_id)
+
+        # A final answer never carries `Retry-After`; the endpoint drops those.
+        while resp.status_code == 202 or "Retry-After" in resp.headers:
+            _wait(resp, deadline, job_id)
+            # Behind a proxy a poll can queue for longer than `timeout_s`. It
+            # only reads, so the loop keeps the last answer and polls again.
+            with contextlib.suppress(httpx.TimeoutException):
+                resp = self._poll(request, job_id)
+        return resp
+
+    def _submit(
+        self, request: Dict[str, Any], datasets: Dict[str, Any], job_id: str
+    ) -> httpx.Response:
+        """POST the request as the job `job_id`."""
+        body = {**request, "execution": "async", "job_id": job_id}
+        return self._post(body, datasets, _routing_headers(request, job_id))
+
+    def _poll(self, request: Dict[str, Any], job_id: str) -> httpx.Response:
+        """Ask the endpoint for the answer to the job `job_id`."""
+        headers = httpx.Headers(self._headers())
+        # Parquet mode sets no Content-Type, and the endpoint reads only a
+        # JSON body as a poll.
+        headers.update(
+            {"Content-Type": "application/json", **_routing_headers(request, job_id)}
+        )
+        return self._http_client().post(
+            self.endpoint_url,
+            content=json.dumps({"job_id": job_id}).encode("utf-8"),
+            headers=headers,
         )
 
 
