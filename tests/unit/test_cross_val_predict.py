@@ -182,7 +182,7 @@ class TestFoldIds:
     def test_rows_in_no_test_set_are_minus_one(self):
         rows = np.arange(N_ROWS)
         splits = [
-            (rows[rows >= 4], rows[:2]),
+            (rows[2:], rows[:2]),
             (np.concatenate([rows[:2], rows[4:]]), rows[2:4]),
         ]
         fold_ids = _cv_fold_ids(splits, X, Y_REGRESSION, None, classifier=False)
