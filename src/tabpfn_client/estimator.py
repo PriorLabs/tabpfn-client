@@ -1494,6 +1494,12 @@ class TabPFNRegressor(
                   one response is split over several requests; those that run
                   as background jobs overlap, up to 4 at once.
 
+                A thinking-mode fit returns only `"mean"`, `"median"` and
+                `"quantiles"`, and its `"mean"` is the prediction that scores
+                best on `thinking_metric`: the mean for the default RMSE, the
+                median for MAE. Its quantiles range from 0.001 to 0.999. A
+                thinking-mode fit of a model version before 3.5 returns only
+                `"mean"`.
             quantiles: The quantiles to return if `output_type="quantiles"`.
                 By default, the `[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]`
                 quantiles are returned.
