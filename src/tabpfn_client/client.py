@@ -45,6 +45,7 @@ from tabpfn_client.models import (
 from tabpfn_client.errors import (
     RetryableServerError,
     CappedRetryableServerError,
+    CrossValidateFailedError,
     EmptyResponseError,
     FitFailedError,
     FittedModelNotFoundError,
@@ -64,6 +65,10 @@ from omegaconf import DictConfig, OmegaConf
 from tabpfn_common_utils.utils import Singleton
 from tabpfn_client.api_models import (
     GetSettingsResponse,
+    GetCrossValidateResultRequest,
+    GetCrossValidateResultResponse,
+    SubmitCrossValidateRequest,
+    SubmitCrossValidateResponse,
     EstimateCostRequest,
     EstimateCostResponse,
     TabPFNSystem,
@@ -361,6 +366,30 @@ def _warn_stopped_waiting(fitted_test_set_id: UUID) -> None:
     )
 
 
+_NO_CROSS_VALIDATE = "This TabPFN server does not run cross-validation."
+
+
+def _cross_validate_failed(
+    cv_job_id: UUID | None, error: str | None, error_code: str | None
+) -> CrossValidateFailedError:
+    """Build the error for a cross-validation job the server reports as failed."""
+    message = (
+        f"Cross-validation job {cv_job_id} failed: "
+        f"{error or 'no error message provided'}"
+    )
+    if error_code:
+        message += f" (error code {error_code})"
+    return CrossValidateFailedError(message, cv_job_id=cv_job_id)
+
+
+def _cross_validate_resume_hint(cv_job_id: UUID) -> str:
+    """Say how any process gets the result of a cross-validation job."""
+    return (
+        "call tabpfn_client.init(), then tabpfn_client.service_wrapper."
+        f'InferenceClient.wait_for_cross_validate("{cv_job_id}")'
+    )
+
+
 def _serialize_to_parquet(df: pd.DataFrame) -> tuple[bytes, str]:
     """Serialize ``df`` to zstd-compressed parquet.
 
@@ -377,7 +406,10 @@ def _serialize_to_parquet(df: pd.DataFrame) -> tuple[bytes, str]:
 SuccessT = TypeVar("SuccessT", bound=BaseModel)
 ErrorT = TypeVar("ErrorT", bound=BaseModel, default=Never)
 _PollResponseT = TypeVar(
-    "_PollResponseT", GetFitStatusResponse, GetPredictResultResponse
+    "_PollResponseT",
+    GetFitStatusResponse,
+    GetPredictResultResponse,
+    GetCrossValidateResultResponse,
 )
 
 # Floor for the server's `retry_in_secs` polling hint — defensive: a zero or
@@ -695,6 +727,77 @@ class ServiceClient(Singleton):
         client_options = client_options or ClientOptions()
         tabpfn_systems_: list[TabPFNSystem | str] = list(tabpfn_systems)
 
+        df_X, df_y, total_mem_usage = cls._train_set_frames(X, y)
+        use_async = cls._runs_as_job(api_mode, total_mem_usage)
+        train_set_upload_id = cls._upload_train_set(
+            df_X, df_y, description=description, client_options=client_options
+        )
+
+        if use_async:
+            submit_resp = cls._submit_fit_job(
+                req=SubmitFitJobRequest(
+                    train_set_upload_id=train_set_upload_id,
+                    task_config=task_config,
+                    tabpfn_systems=tabpfn_systems_,
+                    text_handling=None
+                    if text_handling == "advanced"
+                    else text_handling,
+                    thinking_config=thinking_config,
+                ),
+                timeout=client_options.timeout,
+                headers=client_options.headers,
+            )
+            # The server answers a submitted job with its id alone: it has
+            # accepted the fit, not run it.
+            fit_resp = FitResponse(
+                fitted_train_set_id=submit_resp.fitted_train_set_id,
+                status=FitStatus.PENDING,
+            )
+        else:
+            fit_resp = cls._fit(
+                req=FitRequest(
+                    train_set_upload_id=train_set_upload_id,
+                    task_config=task_config,
+                    tabpfn_systems=tabpfn_systems_,
+                    text_handling=None
+                    if text_handling == "advanced"
+                    else text_handling,
+                    thinking_config=thinking_config,
+                ),
+                timeout=client_options.timeout,
+                headers=client_options.headers,
+            )
+
+        # NOTE: The server currently only returns COMPLETED or PENDING
+        # (failed requests raise), but `status` is forward-compatible
+        # (`FitStatus | UnknownEnum`), so treat anything that is not
+        # COMPLETED as still in progress instead of silently skipping
+        # the wait when a newer server adds a status.
+        if wait and fit_resp.status != FitStatus.COMPLETED:
+            status_resp = cls._wait_for_fit(
+                fit_resp.fitted_train_set_id,
+                headers=client_options.headers,
+            )
+            fit_resp = FitResponse(
+                fitted_train_set_id=fit_resp.fitted_train_set_id,
+                status=status_resp.status,
+                timings=status_resp.timings,
+            )
+        return fit_resp
+
+    @classmethod
+    def _train_set_frames(
+        cls, X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray
+    ) -> tuple[pd.DataFrame, pd.DataFrame, int]:
+        """The train set as frames, checked against the server's size limit.
+
+        Returns:
+            `X` and `y` as DataFrames, and their total in-memory size in bytes.
+
+        Raises:
+            ValueError: If the in-memory size of `X` or `y` exceeds the server
+                limit.
+        """
         df_X = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
         df_y = cast(pd.DataFrame, y if isinstance(y, pd.DataFrame) else pd.DataFrame(y))
 
@@ -712,18 +815,39 @@ class ServiceClient(Singleton):
                     f"In-memory size of {name} ({mem_usage} bytes) exceeds "
                     f"the server limit of {api_settings.dataset_max_size_bytes} bytes."
                 )
+        return df_X, df_y, int(total_mem_usage)
 
+    @classmethod
+    def _runs_as_job(cls, api_mode: ApiMode, train_set_size_bytes: int) -> bool:
+        """Whether work on a train set runs as a background job in `api_mode`.
+
+        AUTO runs it as a job above the server's train set size threshold.
+        """
         match api_mode:
             case ApiMode.SYNC:
-                use_async = False
+                return False
             case ApiMode.ASYNC:
-                use_async = True
+                return True
             case ApiMode.AUTO:
-                trainset_size_threshold = (
-                    cls._resolve_async_settings().use_above_trainset_size_bytes
-                )
-                use_async = total_mem_usage > trainset_size_threshold
+                threshold = cls._resolve_async_settings().use_above_trainset_size_bytes
+                return train_set_size_bytes > threshold
+            case _:
+                assert_never(api_mode)
 
+    @classmethod
+    def _upload_train_set(
+        cls,
+        df_X: pd.DataFrame,
+        df_y: pd.DataFrame,
+        *,
+        description: str | None,
+        client_options: ClientOptions,
+    ) -> UUID:
+        """Upload a train set, or reuse the server's copy of an identical one.
+
+        Returns:
+            The id of the upload, which a fit or a cross-validation takes.
+        """
         x_bytes, x_crc32c_hash = _serialize_to_parquet(df_X)
         y_bytes, y_crc32c_hash = _serialize_to_parquet(df_y)
 
@@ -782,58 +906,7 @@ class ServiceClient(Singleton):
                     for f in futures:
                         f.cancel()
                     raise
-
-        if use_async:
-            submit_resp = cls._submit_fit_job(
-                req=SubmitFitJobRequest(
-                    train_set_upload_id=prepare_resp.train_set_upload_id,
-                    task_config=task_config,
-                    tabpfn_systems=tabpfn_systems_,
-                    text_handling=None
-                    if text_handling == "advanced"
-                    else text_handling,
-                    thinking_config=thinking_config,
-                ),
-                timeout=client_options.timeout,
-                headers=client_options.headers,
-            )
-            # The server answers a submitted job with its id alone: it has
-            # accepted the fit, not run it.
-            fit_resp = FitResponse(
-                fitted_train_set_id=submit_resp.fitted_train_set_id,
-                status=FitStatus.PENDING,
-            )
-        else:
-            fit_resp = cls._fit(
-                req=FitRequest(
-                    train_set_upload_id=prepare_resp.train_set_upload_id,
-                    task_config=task_config,
-                    tabpfn_systems=tabpfn_systems_,
-                    text_handling=None
-                    if text_handling == "advanced"
-                    else text_handling,
-                    thinking_config=thinking_config,
-                ),
-                timeout=client_options.timeout,
-                headers=client_options.headers,
-            )
-
-        # NOTE: The server currently only returns COMPLETED or PENDING
-        # (failed requests raise), but `status` is forward-compatible
-        # (`FitStatus | UnknownEnum`), so treat anything that is not
-        # COMPLETED as still in progress instead of silently skipping
-        # the wait when a newer server adds a status.
-        if wait and fit_resp.status != FitStatus.COMPLETED:
-            status_resp = cls._wait_for_fit(
-                fit_resp.fitted_train_set_id,
-                headers=client_options.headers,
-            )
-            fit_resp = FitResponse(
-                fitted_train_set_id=fit_resp.fitted_train_set_id,
-                status=status_resp.status,
-                timings=status_resp.timings,
-            )
-        return fit_resp
+        return prepare_resp.train_set_upload_id
 
     @classmethod
     def _wait_for_fit(
@@ -1122,6 +1195,348 @@ class ServiceClient(Singleton):
             "fit",
             success_model=FitResponse,
         )
+
+    @classmethod
+    def cross_validate(
+        cls,
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray,
+        *,
+        fold_ids: list[list[int]],
+        task_config: ClassifierConfig | RegressorConfig,
+        tabpfn_systems: list[TabPFNSystem],
+        text_handling: TextHandling = "advanced",
+        api_mode: ApiMode = ApiMode.AUTO,
+        client_options: ClientOptions | None = None,
+        wait: bool = True,
+    ) -> GetCrossValidateResultResponse:
+        """Upload a train set and cross-validate on it, by fold ids.
+
+        The server fits and predicts every fold, and stores the out-of-fold
+        predictions. SYNC sends one request, which the server answers with the
+        result, or as pending when it stops waiting first. ASYNC submits a
+        background job. AUTO picks ASYNC for a train set above the size
+        threshold a fit uses.
+
+        Args:
+            X: The training input samples, of shape (n_samples, n_features).
+            y: The target values, of shape (n_samples,).
+            fold_ids: One vector per repeat, with one entry per row of `X`:
+                `0..K-1` puts the row in that validation fold, `-1` keeps it in
+                every training split.
+            task_config: The classification or regression task configuration,
+                whose predict parameters say what each fold predicts.
+            tabpfn_systems: The systems to use, as for a fit. Thinking is not
+                supported.
+            text_handling: Text-processing preset, `"advanced"` or `"simple"`.
+            api_mode: The API mode to use: SYNC, ASYNC, or AUTO.
+            client_options: Client specific options (e.g. timeout, headers).
+            wait: Whether to poll the server until the job completes. When
+                False, a job the server is still running comes back pending,
+                and `wait_for_cross_validate` waits for it.
+
+        Returns:
+            The job as the server reports it: completed, with the signed URLs
+            of its predictions, or, when not waited for, possibly pending.
+
+        Raises:
+            ValueError: If `text_handling` is invalid or the in-memory size of
+                `X` or `y` exceeds the server limit.
+            CrossValidateFailedError: If the server reports that the job
+                failed, or no longer has it.
+            RuntimeError: If the server does not run cross-validation or
+                rejects the request.
+            TimeoutError: If a job waited for has not completed within the
+                poll timeout.
+        """
+        validate_text_handling(text_handling)
+        api_mode = ApiMode(api_mode)
+        client_options = client_options or ClientOptions()
+
+        df_X, df_y, total_mem_usage = cls._train_set_frames(X, y)
+        use_async = cls._runs_as_job(api_mode, total_mem_usage)
+        train_set_upload_id = cls._upload_train_set(
+            df_X, df_y, description=None, client_options=client_options
+        )
+        req = SubmitCrossValidateRequest(
+            task_config=task_config,
+            tabpfn_systems=list(tabpfn_systems),
+            text_handling=None if text_handling == "advanced" else text_handling,
+            train_set_upload_id=train_set_upload_id,
+            fold_ids=fold_ids,
+        )
+        if use_async:
+            submit_resp = cls._submit_cross_validate_job(
+                req, timeout=client_options.timeout, headers=client_options.headers
+            )
+            result = GetCrossValidateResultResponse(
+                cv_job_id=submit_resp.cv_job_id, status="pending"
+            )
+        else:
+            result = cls._cross_validate(
+                req, timeout=client_options.timeout, headers=client_options.headers
+            )
+        if wait and result.status != "completed":
+            result = cls.wait_for_cross_validate(
+                result.cv_job_id,
+                client_options,
+                first_poll_delay_secs=result.retry_in_secs or 0.0,
+            )
+        return result
+
+    @classmethod
+    def wait_for_cross_validate(
+        cls,
+        cv_job_id: UUID | str,
+        client_options: ClientOptions | None = None,
+        *,
+        first_poll_delay_secs: float = 0.0,
+    ) -> GetCrossValidateResultResponse:
+        """Poll `/tabpfn/get_cross_validate_result` until the job completes.
+
+        Polls as `_poll_until_done` describes. A wait that breaks off for any
+        other reason than a failed or unknown job logs the job's id first, so
+        that it can be waited for again.
+
+        Args:
+            cv_job_id: The id of the job, as a UUID or a string.
+            client_options: Client specific options (e.g. timeout, headers).
+            first_poll_delay_secs: Seconds to wait before the first poll.
+
+        Returns:
+            The completed job, with the signed URLs of its predictions.
+
+        Raises:
+            ValueError: If `cv_job_id` is not a valid id.
+            CrossValidateFailedError: If the server reports that the job
+                failed, or does not have it.
+            TimeoutError: If the job has not completed within
+                `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds.
+            RuntimeError: On the 4th capped poll error in a row.
+        """
+        cv_job_id = UUID(str(cv_job_id))
+        client_options = client_options or ClientOptions()
+        timeout = cast("float | None", client_options.timeout)
+        if timeout is None:
+            timeout = get_opts().TABPFN_CLIENT_TIMEOUT
+        timeout = min(timeout, _MAX_POLL_TIMEOUT_SECS)
+
+        def is_done(resp: GetCrossValidateResultResponse) -> bool:
+            if resp.status == "failed":
+                raise _cross_validate_failed(cv_job_id, resp.error, resp.error_code)
+            return resp.status == "completed"
+
+        req = GetCrossValidateResultRequest(cv_job_id=cv_job_id)
+        try:
+            return cls._poll_until_done(
+                lambda: cls._get_cross_validate_result(
+                    req, timeout=timeout, headers=client_options.headers
+                ),
+                is_done,
+                subject=f"cross-validation job {cv_job_id}",
+                transient_errors=(
+                    httpx.NetworkError,
+                    httpx.TimeoutException,
+                    httpx.RemoteProtocolError,
+                    RetryableServerError,
+                ),
+                capped_errors=(CappedRetryableServerError,),
+                first_poll_delay_secs=first_poll_delay_secs,
+            )
+        except CrossValidateFailedError:
+            raise
+        except BaseException:
+            logger.warning(
+                f"Stopped waiting for cross-validation job {cv_job_id}. If it is "
+                "still running, the server completes it regardless. To wait for "
+                f"it again, {_cross_validate_resume_hint(cv_job_id)}"
+            )
+            raise
+
+    @classmethod
+    def download_cross_validate_predictions(
+        cls, urls: list[str], client_options: ClientOptions | None = None
+    ) -> list[pd.DataFrame]:
+        """Download the predictions of a completed cross-validation job.
+
+        Args:
+            urls: The signed URLs of the job's parquet files, as
+                `oof_urls` of the completed job lists them.
+            client_options: Client specific options; only the timeout applies.
+
+        Returns:
+            One frame per URL: a `row` column with the train set row, then the
+            prediction columns.
+        """
+        timeout = (client_options or ClientOptions()).timeout
+        return [cls._download_parquet(url, timeout=timeout) for url in urls]
+
+    # NOTE: no backoff decorator here on purpose — the polling loop already
+    # retries transient errors until its deadline.
+    @classmethod
+    def _get_cross_validate_result(
+        cls,
+        req: GetCrossValidateResultRequest,
+        *,
+        timeout: float,
+        headers: dict[str, str] | None = None,
+    ) -> GetCrossValidateResultResponse:
+        """Fetch the status of a cross-validation job once.
+
+        Raises:
+            CrossValidateFailedError: If the server does not have the job.
+            RuntimeError: If the server does not run cross-validation.
+            CappedRetryableServerError: On HTTP 429 or 500, or an empty or
+                malformed success body.
+            RetryableServerError: On HTTP 408, 502, 503, or 504.
+        """
+        res = cls.httpx_client.post(
+            url="/tabpfn/get_cross_validate_result",
+            json=req.model_dump(mode="json", exclude_none=True),
+            timeout=timeout,
+            headers=headers,
+        )
+        if res.status_code in (429, 500):
+            raise CappedRetryableServerError(
+                "Fail to call get_cross_validate_result: "
+                f"[HTTP {res.status_code}] {res.text}."
+            )
+        if cls._is_route_missing(res):
+            raise RuntimeError(_NO_CROSS_VALIDATE)
+        try:
+            resp = cls._validate_response(
+                res,
+                "get_cross_validate_result",
+                success_model=GetCrossValidateResultResponse,
+                error_models={404: NotFoundErrorResponse},
+            )
+        except EmptyResponseError as exc:
+            raise CappedRetryableServerError(str(exc)) from exc
+        except ValidationError as exc:
+            raise _malformed_poll_body("get_cross_validate_result", exc) from exc
+        if isinstance(resp, NotFoundErrorResponse):
+            raise CrossValidateFailedError(
+                f"The server does not have cross-validation job {req.cv_job_id}: "
+                f"{resp.message}.{_report_trace(resp.trace_id)}",
+                cv_job_id=req.cv_job_id,
+            )
+        return resp
+
+    @classmethod
+    # Every submit creates a new job and the server has no dedup logic, so
+    # retry only errors that prove the request never reached it.
+    @backoff.on_exception(
+        backoff.constant,
+        (
+            httpx.ConnectError,
+            httpx.ConnectTimeout,
+        ),
+        max_tries=2,
+        interval=0,
+        logger=logger,
+        on_backoff=_on_backoff,
+        on_giveup=_on_giveup,
+    )
+    def _submit_cross_validate_job(
+        cls,
+        req: SubmitCrossValidateRequest,
+        *,
+        timeout: float,
+        headers: dict[str, str] | None = None,
+    ) -> SubmitCrossValidateResponse:
+        """Submit a cross-validation job for an uploaded train set.
+
+        Raises:
+            RuntimeError: If the server does not run cross-validation, or
+                rejects the request.
+        """
+        res = cls.httpx_client.post(
+            url="/tabpfn/submit_cross_validate_job",
+            json=req.model_dump(mode="json", exclude_none=True),
+            timeout=timeout,
+            headers=headers,
+        )
+        if cls._is_route_missing(res):
+            raise RuntimeError(_NO_CROSS_VALIDATE)
+        return cls._validate_response(
+            res, "submit_cross_validate_job", success_model=SubmitCrossValidateResponse
+        )
+
+    @classmethod
+    # As for a submit: every request creates a new job.
+    @backoff.on_exception(
+        backoff.constant,
+        (
+            httpx.ConnectError,
+            httpx.ConnectTimeout,
+        ),
+        max_tries=2,
+        interval=0,
+        logger=logger,
+        on_backoff=_on_backoff,
+        on_giveup=_on_giveup,
+    )
+    def _cross_validate(
+        cls,
+        req: SubmitCrossValidateRequest,
+        *,
+        timeout: float,
+        headers: dict[str, str] | None = None,
+    ) -> GetCrossValidateResultResponse:
+        """Cross-validate with one request, which the server holds open.
+
+        Returns:
+            The completed job, or the pending one if the server stopped
+            waiting for it first.
+
+        Raises:
+            CrossValidateFailedError: If the server reports the job as failed.
+            RuntimeError: If the server does not run cross-validation, or
+                rejects the request.
+        """
+        res = cls.httpx_client.post(
+            url="/tabpfn/cross_validate",
+            json=req.model_dump(mode="json", exclude_none=True),
+            timeout=timeout,
+            headers=headers,
+        )
+        if cls._is_route_missing(res):
+            raise RuntimeError(_NO_CROSS_VALIDATE)
+        resp = cls._validate_response(
+            res, "cross_validate", success_model=GetCrossValidateResultResponse
+        )
+        if resp.status == "failed":
+            raise _cross_validate_failed(resp.cv_job_id, resp.error, resp.error_code)
+        return resp
+
+    @classmethod
+    @backoff.on_exception(
+        backoff.constant,
+        (
+            httpx.ConnectError,
+            httpx.TimeoutException,
+            httpx.ReadTimeout,
+            httpx.RemoteProtocolError,
+            RetryableServerError,
+        ),
+        max_tries=2,
+        interval=1,
+        logger=logger,
+        on_backoff=_on_backoff,
+        on_giveup=_on_giveup,
+    )
+    def _download_parquet(cls, uri: str, timeout: float) -> pd.DataFrame:
+        """Download a parquet file from a signed URL."""
+        resp = cls.storage_client.get(uri, timeout=timeout)
+        if resp.status_code in _RETRYABLE_STORAGE_STATUSES:
+            raise RetryableServerError(
+                f"Download failed: {resp.status_code} {resp.text}"
+            )
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"Download permanently failed: {resp.status_code} {resp.text}"
+            )
+        return pd.read_parquet(io.BytesIO(resp.content))
 
     @classmethod
     def predict(

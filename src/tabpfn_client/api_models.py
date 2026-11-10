@@ -198,6 +198,26 @@ class ClassifierMetadata(BaseModel):
     top_k: int | None = Field(default=None, description="The `top_k` value of the request.")
 
 
+class CrossValidateSplit(BaseModel):
+    repeat: int
+    fold: int
+    num_train_rows: int
+    num_val_rows: int
+    fit_predict_s: float
+    reused: bool | None = None
+
+
+class CrossValidateUploadSplit(BaseModel):
+    train_set_upload_id: UUID = Field(
+        description="The split's training rows, then its `num_val_rows` validation rows."
+    )
+    num_val_rows: int
+    categorical_features_indices: list[int] | None = Field(
+        default=None,
+        description="Positions in this upload's columns; replaces `task_config`'s for this split.",
+    )
+
+
 class ModelVersion(str, Enum):
     V2 = "v2"
     V2_5 = "v2.5"
@@ -535,6 +555,22 @@ class FitResponse(BaseModel):
     timings: FitTimings | None = None
 
 
+class GetCrossValidateResultRequest(BaseModel):
+    cv_job_id: UUID
+
+
+class GetCrossValidateResultResponse(BaseModel):
+    cv_job_id: UUID
+    status: Annotated[Literal["pending", "completed", "failed"] | str, Field(union_mode="left_to_right")]
+    retry_in_secs: float | None = None
+    error: str | None = None
+    error_code: str | None = None
+    oof_urls: list[str] | None = None
+    split_urls: list[str] | None = None
+    classes: list[str | int | float | bool] | None = None
+    splits: list[CrossValidateSplit] | None = None
+
+
 class GetFitStatusRequest(BaseModel):
     fitted_train_set_id: UUID
 
@@ -654,6 +690,27 @@ class PrepareTrainSetUploadResponse(BaseModel):
     train_set_upload_id: UUID
     x_train_info: FileUploadInfo
     y_train_info: FileUploadInfo
+
+
+class SubmitCrossValidateRequest(BaseModel):
+    task_config: TaskConfig
+    tabpfn_systems: list[Annotated[TabPFNSystem | str, Field(union_mode="left_to_right")]] | None = None
+    text_handling: Annotated[TextHandling | str, Field(union_mode="left_to_right")] | None = None
+    train_set_upload_id: UUID | None = Field(
+        default=None, description="Fold-id mode: the train set `fold_ids` splits."
+    )
+    fold_ids: list[list[int]] | None = Field(
+        default=None,
+        description="Fold-id mode: one vector per repeat with one entry per train-set row, in upload order. `0..K-1` puts the row in that validation fold; `-1` keeps it in every training split.",
+    )
+    splits: list[CrossValidateUploadSplit] | None = Field(
+        default=None,
+        description="Upload mode: one upload per split, for splits transformed by the client. Results come back in this order.",
+    )
+
+
+class SubmitCrossValidateResponse(BaseModel):
+    cv_job_id: UUID
 
 
 class SubmitFitJobRequest(BaseModel):

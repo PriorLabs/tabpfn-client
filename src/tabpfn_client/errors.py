@@ -127,3 +127,25 @@ class PredictionGoneError(RuntimeError):
     """
 
     pass
+
+
+class CrossValidateFailedError(RuntimeError):
+    """The server reports that a cross-validation job failed, or it does not have it.
+
+    Raised by ``cross_val_predict()`` and ``wait_for_cross_val_predict()``. The
+    message holds the server's reason and its error code, and ``cv_job_id`` the
+    id of the job.
+    """
+
+    # The default lets pickle and copy rebuild the error from its message, as
+    # they rebuild any exception, and then restore the id.
+    def __init__(self, message: str, *, cv_job_id: UUID | None = None):
+        """Initialize the error.
+
+        Args:
+            message: The error message.
+            cv_job_id: The id of the cross-validation job, or None if it is not
+                known.
+        """
+        super().__init__(message)
+        self.cv_job_id = cv_job_id

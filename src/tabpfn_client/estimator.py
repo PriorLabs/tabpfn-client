@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import warnings
+from dataclasses import dataclass
 from uuid import UUID, uuid4
 from collections.abc import Callable
 from typing import Any, Literal, TypeVar, cast, get_args, overload
@@ -16,6 +17,7 @@ import numpy as np
 import pandas as pd
 from sklearn.base import ClassifierMixin, RegressorMixin
 from sklearn.exceptions import NotFittedError
+from sklearn.model_selection import check_cv
 from sklearn.utils import column_or_1d
 from sklearn.utils.multiclass import check_classification_targets
 from sklearn.utils.validation import check_is_fitted
@@ -23,11 +25,13 @@ from tabpfn_client.client import (
     ServiceClient,
     ClientOptions,
     PredictionResult,
+    _cross_validate_resume_hint,
     _resume_hint,
 )
 from tabpfn_client.config import Config, init
 from tabpfn_client.constants import URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE
 from tabpfn_client.errors import (
+    CrossValidateFailedError,
     FitFailedError,
     FittedModelNotFoundError,
     PredictFailedError,
@@ -46,6 +50,7 @@ from tabpfn_client.api_models import (
     ClassifierTabPFNConfig,
     RegressorPredictParams,
     ClassifierPredictParams,
+    ClassifierOutputType,
     ClassifierConfig,
     RegressorConfig,
     ThinkingConfig,
@@ -58,6 +63,7 @@ from tabpfn_client.api_models import (
     FitResponse,
     FitStatus,
     FitTimings,
+    GetCrossValidateResultResponse,
 )
 from tabpfn_client.models import ApiMode, TabPFNConfig, FitModeLiteral
 from tabpfn_client.persistence import ModelPersistenceMixin, _PendingPredict
@@ -92,6 +98,29 @@ FALLBACK_PREDICT_ROW_PAIRS_BUDGET = 250_000 * 1_000_000
 # background prediction whose output the estimator cannot return.
 ClassifierOutputLiteral = Literal["preds", "probas"]
 RegressorOutputLiteral = Literal["mean", "median", "mode", "quantiles", "full", "main"]
+
+# What `cross_val_predict()` returns: the methods of each estimator, and the
+# regressor outputs that are one value per row.
+ClassifierCrossValMethodLiteral = Literal["predict", "predict_proba"]
+RegressorCrossValMethodLiteral = Literal["predict"]
+RegressorCrossValOutputLiteral = Literal["mean", "median", "mode"]
+
+
+@dataclass(frozen=True)
+class _PendingCrossValPredict:
+    """A cross-validation the model holds until `wait_for_cross_val_predict()`.
+
+    Attributes:
+        cv_job_id: The id of the server's cross-validation job.
+        n_rows: The rows of the train set, which the predictions cover.
+        method: `"predict"` or `"predict_proba"`.
+        classes: The classes of the classifier's targets; None for a regressor.
+    """
+
+    cv_job_id: UUID
+    n_rows: int
+    method: str
+    classes: np.ndarray | None = None
 
 
 class TabPFNModelSelection:
@@ -204,6 +233,15 @@ class _AsyncMixin(ModelPersistenceMixin):
 
     # Set by the estimator's `__init__`.
     client_options: ClientOptions
+    text_handling: TextHandling
+    paper_version: bool
+    thinking_mode: bool
+    thinking_effort: ThinkingEffort | None
+    api_mode: ApiMode
+    _fit_count: int
+
+    # Class-level default so models pickled before this attribute existed load.
+    _pending_cross_val_predict: _PendingCrossValPredict | None = None
 
     def submit_fit(
         self,
@@ -427,6 +465,154 @@ class _AsyncMixin(ModelPersistenceMixin):
             self._pending_predict = None
             raise
         return pending, result
+
+    def wait_for_cross_val_predict(self) -> np.ndarray:
+        """Wait for the pending cross-validation, and return its predictions.
+
+        The pending cross-validation is the one `submit_cross_val_predict()`
+        started, or one `cross_val_predict()` stopped waiting for. Polls the
+        server until it has completed. Until then it stays pending, so a wait
+        that stops can be resumed by calling `wait_for_cross_val_predict()`
+        again. `save_model()` does not save it; a pickled model keeps it.
+
+        Returns:
+            The out-of-fold predictions, as `cross_val_predict()` returns them
+            for the method the cross-validation was started with.
+
+        Raises:
+            RuntimeError: If no cross-validation is pending, or polling for it
+                fails.
+            CrossValidateFailedError: If the server reports that the job
+                failed, or does not have it. It is then no longer pending.
+            TimeoutError: If the job has not completed within
+                `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds.
+        """
+        return self._await_cross_val_predict()
+
+    def _await_cross_val_predict(
+        self, first_poll_delay_secs: float = 0.0
+    ) -> np.ndarray:
+        """Wait for the pending cross-validation, as `wait_for_cross_val_predict()`.
+
+        Polls first after `first_poll_delay_secs`.
+        """
+        pending = self._pending_cross_val_predict
+        if pending is None:
+            raise RuntimeError(
+                f"This {type(self).__name__} has no cross-validation to wait for. "
+                "Call submit_cross_val_predict() first."
+            )
+        # A pickled model can carry its pending job into a process that has
+        # not authorized the HTTP client yet.
+        init()
+        try:
+            result = InferenceClient.wait_for_cross_validate(
+                pending.cv_job_id,
+                client_options=self.client_options,
+                first_poll_delay_secs=first_poll_delay_secs,
+            )
+        except CrossValidateFailedError:
+            self._pending_cross_val_predict = None
+            raise
+        output = _cross_val_predictions(result, pending, self.client_options)
+        self._pending_cross_val_predict = None
+        return output
+
+    def _prepare_cross_val_predict(
+        self,
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray,
+        cv: Any,
+        groups: Any,
+        *,
+        classifier: bool,
+    ) -> tuple[Any, list[int], TextHandling]:
+        """Check the data and the splits as `fit()` checks a train set.
+
+        Returns:
+            `X` with its text cleaned, the fold id of each row, and the text
+            handling to send.
+
+        Raises:
+            ValueError: If thinking mode is on, the data exceeds the model
+                limits, or the splits are not disjoint test sets that each
+                train on every other row.
+        """
+        text_handling = validate_text_handling(self.text_handling)
+        if _resolve_thinking_mode(self.thinking_mode, self.thinking_effort):
+            raise ValueError("cross_val_predict() does not support thinking mode.")
+        init()
+        validate_train_set(X, y, model_path=self._get_tabpfn_config().model_path)
+        fold_ids = _cv_fold_ids(cv, X, y, groups, classifier=classifier)
+        return _clean_text_features(X), fold_ids, text_handling
+
+    def _send_cross_val_predict(
+        self,
+        X_clean: Any,
+        y: pd.Series | np.ndarray,
+        *,
+        fold_ids: list[int],
+        text_handling: TextHandling,
+        task_config: ClassifierConfig | RegressorConfig,
+        method: str,
+        classes: np.ndarray | None,
+        submit: bool,
+    ) -> np.ndarray | None:
+        """Start the cross-validation and, unless `submit`, wait for it.
+
+        The model's fit and its pending prediction are left alone. Holds the
+        job while waiting for it, as `predict()` holds a prediction.
+
+        Returns:
+            The out-of-fold predictions, or None with `submit`.
+        """
+        client_options = ClientOptions(
+            timeout=self.client_options.timeout,
+            headers=dict(self.client_options.headers),
+        )
+        # A trace of its own, unless the caller set one before any fit.
+        if self._fit_count > 0 or "sentry-trace" not in client_options.headers:
+            client_options.headers["sentry-trace"] = uuid4().hex
+        result = InferenceClient.cross_validate(
+            X_clean,
+            y,
+            fold_ids=[fold_ids],
+            task_config=task_config,
+            tabpfn_systems=_build_tabpfn_systems(self.paper_version, False),
+            text_handling=text_handling,
+            api_mode=ApiMode.ASYNC if submit else ApiMode(self.api_mode),
+            client_options=client_options,
+            wait=False,
+        )
+        pending = _PendingCrossValPredict(
+            cv_job_id=result.cv_job_id,
+            n_rows=len(fold_ids),
+            method=method,
+            classes=classes,
+        )
+        if result.status == "completed" and not submit:
+            return _cross_val_predictions(result, pending, self.client_options)
+        self._drop_pending_cross_val_predict()
+        self._pending_cross_val_predict = pending
+        if submit:
+            return None
+        return self._await_cross_val_predict(result.retry_in_secs or 0.0)
+
+    def _drop_pending_cross_val_predict(self) -> None:
+        """Forget the pending cross-validation, if there is one, logging its id."""
+        pending = self._pending_cross_val_predict
+        if pending is None:
+            return
+        logger.warning(
+            f"Cross-validation job {pending.cv_job_id} is no longer pending on "
+            f"this {type(self).__name__}: a new one replaced it. To get its "
+            f"result anyway, {_cross_validate_resume_hint(pending.cv_job_id)}"
+        )
+        self._pending_cross_val_predict = None
+
+    def _get_tabpfn_config(self) -> TabPFNConfig:
+        """Build the model config from the constructor parameters."""
+        raise NotImplementedError  # Each estimator builds its own.
 
 
 class TabPFNClassifier(
@@ -958,6 +1144,128 @@ class TabPFNClassifier(
         output = self._finish_predict(result)
         self._pending_predict = None
         return output
+
+    def cross_val_predict(
+        self,
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray,
+        cv: Any = 5,
+        *,
+        groups: Any = None,
+        method: ClassifierCrossValMethodLiteral = "predict",
+    ) -> np.ndarray:
+        """Cross-validate on the server, and return the out-of-fold predictions.
+
+        Like `sklearn.model_selection.cross_val_predict`: each row is predicted
+        by a model fitted on the rows outside its test fold. The server fits and
+        predicts every fold in one job. This does not fit the model: its fit and
+        its pending prediction are left alone. `api_mode` applies as for
+        `fit()`; a job the client polls for is held while it waits, so a wait
+        that stops can be resumed with `wait_for_cross_val_predict()`.
+
+        Args:
+            X: The input data.
+            y: The target variable.
+            cv: The splits. An int is the number of folds of a
+                `StratifiedKFold`, as `sklearn.model_selection.check_cv` makes
+                it; also an sklearn splitter, or an iterable of (train, test)
+                index pairs. The test sets must be disjoint, and each fold must
+                train on every row outside its test set. Rows in no test set
+                train every fold and come back as NaN.
+            groups: Group labels for the rows, for a splitter that takes them,
+                such as `GroupKFold`.
+            method: `"predict"` for class labels, `"predict_proba"` for the
+                probabilities of the classes in sorted order.
+
+        Returns:
+            An array of shape (n_samples,) for `"predict"`, or (n_samples,
+            n_classes) for `"predict_proba"`. A label array with rows in no
+            test set is float, or object for non-numeric labels.
+
+        Raises:
+            ValueError: If `method` is unknown, thinking mode is on, the data
+                exceeds the model limits, or the splits are invalid.
+            CrossValidateFailedError: If the server reports that the job
+                failed.
+            RuntimeError: If the server rejects the request, for instance
+                because cross-validation is not enabled for the account.
+            TimeoutError: If a job the client polls for has not completed
+                within `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds. The model
+                then holds it: call `wait_for_cross_val_predict()`.
+        """
+        output = self._cross_val_predict(X, y, cv, groups, method, submit=False)
+        return cast("np.ndarray", output)
+
+    def submit_cross_val_predict(
+        self,
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray,
+        cv: Any = 5,
+        *,
+        groups: Any = None,
+        method: ClassifierCrossValMethodLiteral = "predict",
+    ) -> Self:
+        """Start a cross-validation on the server, without waiting for it.
+
+        Checks and uploads the data as `cross_val_predict()` does, but returns
+        as soon as the server has accepted the job, which it runs in the
+        background whatever `api_mode` is. `wait_for_cross_val_predict()`
+        waits for it and returns the predictions. The model holds one pending
+        cross-validation, which a new one replaces.
+
+        Args:
+            X: The input data.
+            y: The target variable.
+            cv: The splits, as for `cross_val_predict()`.
+            groups: Group labels for the rows, as for `cross_val_predict()`.
+            method: `"predict"` or `"predict_proba"`, as for
+                `cross_val_predict()`.
+
+        Returns:
+            self
+
+        Raises:
+            ValueError: If `method` is unknown, thinking mode is on, the data
+                exceeds the model limits, or the splits are invalid.
+            RuntimeError: If the server rejects the request.
+        """
+        self._cross_val_predict(X, y, cv, groups, method, submit=True)
+        return self
+
+    def _cross_val_predict(
+        self,
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray,
+        cv: Any,
+        groups: Any,
+        method: str,
+        *,
+        submit: bool,
+    ) -> np.ndarray | None:
+        """Cross-validate as `cross_val_predict()` or, with `submit`, as
+        `submit_cross_val_predict()` does.
+        """
+        _validate_choice("method", method, ClassifierCrossValMethodLiteral)
+        X_clean, fold_ids, text_handling = self._prepare_cross_val_predict(
+            X, y, cv, groups, classifier=True
+        )
+        classes = self._validate_targets_and_classes(y)
+        task_config = ClassifierConfig(
+            tabpfn_config=self._get_tabpfn_config(),
+            predict_params=ClassifierPredictParams(
+                output_type=ClassifierOutputType.PROBAS
+            ),
+        )
+        return self._send_cross_val_predict(
+            X_clean,
+            y,
+            fold_ids=fold_ids,
+            text_handling=text_handling,
+            task_config=task_config,
+            method=method,
+            classes=classes,
+            submit=submit,
+        )
 
     def _predict(
         self,
@@ -1655,6 +1963,136 @@ class TabPFNRegressor(
         self._pending_predict = None
         return output
 
+    def cross_val_predict(
+        self,
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray,
+        cv: Any = 5,
+        *,
+        groups: Any = None,
+        method: RegressorCrossValMethodLiteral = "predict",
+        output_type: RegressorCrossValOutputLiteral = "mean",
+    ) -> np.ndarray:
+        """Cross-validate on the server, and return the out-of-fold predictions.
+
+        Like `sklearn.model_selection.cross_val_predict`: each row is predicted
+        by a model fitted on the rows outside its test fold. The server fits and
+        predicts every fold in one job. This does not fit the model: its fit and
+        its pending prediction are left alone. `api_mode` applies as for
+        `fit()`; a job the client polls for is held while it waits, so a wait
+        that stops can be resumed with `wait_for_cross_val_predict()`.
+
+        Args:
+            X: The input data.
+            y: The target variable.
+            cv: The splits. An int is the number of folds of a `KFold`, as
+                `sklearn.model_selection.check_cv` makes it; also an sklearn
+                splitter, or an iterable of (train, test) index pairs. The test
+                sets must be disjoint, and each fold must train on every row
+                outside its test set. Rows in no test set train every fold and
+                come back as NaN.
+            groups: Group labels for the rows, for a splitter that takes them,
+                such as `GroupKFold`.
+            method: `"predict"`, the only method of a regressor.
+            output_type: `"mean"`, `"median"` or `"mode"` of the predicted
+                distribution, as for `predict()`.
+
+        Returns:
+            An array of shape (n_samples,).
+
+        Raises:
+            ValueError: If `method` or `output_type` is unknown, thinking mode
+                is on, the data exceeds the model limits, or the splits are
+                invalid.
+            CrossValidateFailedError: If the server reports that the job
+                failed.
+            RuntimeError: If the server rejects the request, for instance
+                because cross-validation is not enabled for the account.
+            TimeoutError: If a job the client polls for has not completed
+                within `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds. The model
+                then holds it: call `wait_for_cross_val_predict()`.
+        """
+        output = self._cross_val_predict(
+            X, y, cv, groups, method, output_type, submit=False
+        )
+        return cast("np.ndarray", output)
+
+    def submit_cross_val_predict(
+        self,
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray,
+        cv: Any = 5,
+        *,
+        groups: Any = None,
+        method: RegressorCrossValMethodLiteral = "predict",
+        output_type: RegressorCrossValOutputLiteral = "mean",
+    ) -> Self:
+        """Start a cross-validation on the server, without waiting for it.
+
+        Checks and uploads the data as `cross_val_predict()` does, but returns
+        as soon as the server has accepted the job, which it runs in the
+        background whatever `api_mode` is. `wait_for_cross_val_predict()`
+        waits for it and returns the predictions. The model holds one pending
+        cross-validation, which a new one replaces.
+
+        Args:
+            X: The input data.
+            y: The target variable.
+            cv: The splits, as for `cross_val_predict()`.
+            groups: Group labels for the rows, as for `cross_val_predict()`.
+            method: `"predict"`, as for `cross_val_predict()`.
+            output_type: `"mean"`, `"median"` or `"mode"`, as for
+                `cross_val_predict()`.
+
+        Returns:
+            self
+
+        Raises:
+            ValueError: If `method` or `output_type` is unknown, thinking mode
+                is on, the data exceeds the model limits, or the splits are
+                invalid.
+            RuntimeError: If the server rejects the request.
+        """
+        self._cross_val_predict(X, y, cv, groups, method, output_type, submit=True)
+        return self
+
+    def _cross_val_predict(
+        self,
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray,
+        cv: Any,
+        groups: Any,
+        method: str,
+        output_type: str,
+        *,
+        submit: bool,
+    ) -> np.ndarray | None:
+        """Cross-validate as `cross_val_predict()` or, with `submit`, as
+        `submit_cross_val_predict()` does.
+        """
+        _validate_choice("method", method, RegressorCrossValMethodLiteral)
+        _validate_choice("output_type", output_type, RegressorCrossValOutputLiteral)
+        X_clean, fold_ids, text_handling = self._prepare_cross_val_predict(
+            X, y, cv, groups, classifier=False
+        )
+        self._validate_targets(y)
+        task_config = RegressorConfig(
+            tabpfn_config=self._get_tabpfn_config(),
+            predict_params=RegressorPredictParams.model_validate(
+                {"output_type": output_type}
+            ),
+        )
+        return self._send_cross_val_predict(
+            X_clean,
+            y,
+            fold_ids=fold_ids,
+            text_handling=text_handling,
+            task_config=task_config,
+            method=method,
+            classes=None,
+            submit=submit,
+        )
+
     def _prepare_predict(
         self,
         X: Any,
@@ -2085,11 +2523,19 @@ def _validate_output_type(output_type: str, allowed: Any) -> None:
     Raises:
         ValueError: If `output_type` is not among them.
     """
+    _validate_choice("output_type", output_type, allowed)
+
+
+def _validate_choice(name: str, value: str, allowed: Any) -> None:
+    """Check `value` against the `Literal` of the choices for argument `name`.
+
+    Raises:
+        ValueError: If `value` is not among them.
+    """
     choices = get_args(allowed)
-    if output_type not in choices:
+    if value not in choices:
         raise ValueError(
-            f"output_type must be one of {', '.join(map(repr, choices))}, "
-            f"not {output_type!r}."
+            f"{name} must be one of {', '.join(map(repr, choices))}, not {value!r}."
         )
 
 
@@ -2207,3 +2653,125 @@ def _validate_group_columns(
     missing = [col for col in named if col not in X.columns]
     if missing:
         raise ValueError(f"X is missing the columns {missing}.")
+
+
+def _cv_fold_ids(
+    cv: Any,
+    X: Any,
+    y: Any,
+    groups: Any,
+    *,
+    classifier: bool,
+) -> list[int]:
+    """Turn the splits of `cv` into one fold id per row, as the server takes them.
+
+    Fold `k` is the `k`-th split's test set; a row in no test set is `-1`, and
+    trains every fold. The server trains each fold on every row outside its
+    test set, so a split whose train set is anything else is rejected rather
+    than run on different rows.
+
+    Raises:
+        ValueError: If `cv` yields no split, a test set is empty, out of
+            range or overlaps another, or a train set is not every row outside
+            its test set.
+    """
+    n_rows = X.shape[0]
+    splitter = cast(Any, check_cv(cv, y, classifier=classifier))
+    splits = [
+        (_split_indices(train, n_rows), _split_indices(test, n_rows))
+        for train, test in splitter.split(X, y, groups)
+    ]
+    if not splits:
+        raise ValueError("cv yields no splits.")
+    fold_ids = np.full(n_rows, -1, dtype=np.int64)
+    for fold, (_, test) in enumerate(splits):
+        if test.size == 0:
+            raise ValueError(f"Split {fold} has an empty test set.")
+        if np.unique(test).size != test.size or (fold_ids[test] != -1).any():
+            raise ValueError(
+                "cross_val_predict only works for partitions: every row may be "
+                "in at most one test set."
+            )
+        fold_ids[test] = fold
+    for fold, (train, _) in enumerate(splits):
+        if not np.array_equal(np.unique(train), np.flatnonzero(fold_ids != fold)):
+            raise ValueError(
+                f"Split {fold} does not train on every row outside its test set. "
+                "The server trains each fold on all other rows, so splitters "
+                "such as TimeSeriesSplit are not supported."
+            )
+        if train.size == 0:
+            raise ValueError(f"Split {fold} has an empty train set.")
+    return fold_ids.tolist()
+
+
+def _split_indices(indices: Any, n_rows: int) -> np.ndarray:
+    """The row positions of a train or test set: indices, or a boolean mask.
+
+    Raises:
+        ValueError: If an index is out of range.
+    """
+    indices = np.asarray(indices)
+    if indices.dtype == bool:
+        return np.flatnonzero(indices)
+    indices = indices.astype(np.int64, copy=False)
+    if indices.size and (indices.min() < 0 or indices.max() >= n_rows):
+        raise ValueError(f"A split has an index outside the {n_rows} rows of X.")
+    return indices
+
+
+def _cross_val_predictions(
+    result: GetCrossValidateResultResponse,
+    pending: _PendingCrossValPredict,
+    client_options: ClientOptions,
+) -> np.ndarray:
+    """Download the predictions of a completed job, in train set row order.
+
+    Rows the job did not predict are NaN.
+
+    Raises:
+        RuntimeError: If the job's predictions are not one file, or lack the
+            columns the request asked for.
+    """
+    urls = result.oof_urls or []
+    if len(urls) != 1:
+        raise RuntimeError(
+            f"Cross-validation job {result.cv_job_id} sent {len(urls)} prediction "
+            "files for one repeat."
+        )
+    (frame,) = InferenceClient.download_cross_validate_predictions(urls, client_options)
+    rows = frame["row"].to_numpy(dtype=np.int64)
+
+    if pending.classes is None:
+        if "prediction" not in frame.columns:
+            raise RuntimeError(
+                f"Cross-validation job {result.cv_job_id} sent the columns "
+                f"{list(frame.columns)}, without `prediction`."
+            )
+        predictions = np.full(pending.n_rows, np.nan)
+        predictions[rows] = frame["prediction"].to_numpy(dtype=float)
+        return predictions
+
+    classes = result.classes or []
+    columns = [f"proba_{c}" for c in classes]
+    if not columns or any(c not in frame.columns for c in columns):
+        raise RuntimeError(
+            f"Cross-validation job {result.cv_job_id} sent the columns "
+            f"{list(frame.columns)} for the classes {classes}."
+        )
+    probas = np.full((pending.n_rows, len(columns)), np.nan)
+    probas[rows] = frame[columns].to_numpy(dtype=float)
+    if pending.method == "predict_proba":
+        return probas
+
+    # The server's classes come back through JSON; the targets' own values keep
+    # their dtype.
+    same_classes = [str(c) for c in classes] == [str(c) for c in pending.classes]
+    labels = pending.classes if same_classes else np.asarray(classes)
+    predicted = cast("np.ndarray", ~np.isnan(probas).any(axis=1))
+    output = labels[np.argmax(np.where(predicted[:, None], probas, 0.0), axis=1)]
+    if predicted.all():
+        return output
+    output = output.astype(float if np.issubdtype(output.dtype, np.number) else object)
+    output[~predicted] = np.nan
+    return output
