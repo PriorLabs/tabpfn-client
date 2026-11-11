@@ -118,8 +118,6 @@ def test_fit_sends_a_timeout_at_the_level_s_cap():
 def test_fit_without_an_effort_checks_the_longest_timeout_any_level_takes():
     _use_level_caps()
     with patch.object(InferenceClient, "fit_with_result") as mock_fit:
-        with pytest.raises(
-            ValueError, match="exceeds the maximum of 5000 seconds\\.$"
-        ):
+        with pytest.raises(ValueError, match="exceeds the maximum of 5000 seconds\\.$"):
             TabPFNClassifier(thinking_mode=True, thinking_timeout_s=5_001).fit(_X, _Y)
     mock_fit.assert_not_called()
