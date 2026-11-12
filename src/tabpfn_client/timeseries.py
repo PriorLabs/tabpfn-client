@@ -65,7 +65,6 @@ class _JobSpec(BaseModel):
     columns: _ColumnRoles
     # Tagged, so more tasks can join as a discriminated union later.
     task: _ForecastTask
-    preset: str | None = None
 
 
 class _SubmitJobResponse(BaseModel):
@@ -122,44 +121,113 @@ def validate_series(
     """
     roles = [id_column, timestamp_column, *target_columns]
     if not target_columns:
-        raise InvalidSeriesError("give at least one target column")
-    if len(set(roles)) != len(roles):
-        raise InvalidSeriesError("a column can have only one role")
+        raise InvalidSeriesError("Name at least one target column.")
+    repeated = sorted({name for name in roles if roles.count(name) > 1})
+    if repeated:
+        raise InvalidSeriesError(
+            f"Column(s) {repeated} have more than one role, and a column can have "
+            "only one role. Name each column once."
+        )
     missing = sorted(set(roles) - set(series.columns))
     if missing:
-        raise InvalidSeriesError(f"the series table has no column(s) {missing}")
+        raise InvalidSeriesError(
+            f"The series table has no column(s) {missing}, which the job names. Add "
+            "them, or name the table's own columns in the job."
+        )
     extra = sorted(set(series.columns) - set(roles))
     if extra:
-        raise InvalidSeriesError(f"the series table has columns with no role: {extra}")
-    try:
-        offset = pd.tseries.frequencies.to_offset(freq)
-    except ValueError as e:
-        raise InvalidSeriesError(f"freq {freq!r} is not a pandas offset alias") from e
+        raise InvalidSeriesError(
+            f"The series table has column(s) {extra}, which the job does not name. "
+            "Drop them, or name them in the job."
+        )
+    offset = _offset(freq)
     try:
         stamps = pd.to_datetime(series[timestamp_column])
-    except (ValueError, TypeError) as e:
+    except (ValueError, TypeError, OverflowError) as e:
         raise InvalidSeriesError(
-            f"column {timestamp_column!r} does not parse as timestamps"
+            f"Column {timestamp_column!r} of the series table does not parse as "
+            "timestamps. Send datetime values or ISO 8601 strings."
         ) from e
+    if stamps.hasnans:
+        raise InvalidSeriesError(
+            f"Column {timestamp_column!r} of the series table has missing timestamps. "
+            "Fill them or drop their rows."
+        )
     for t in target_columns:
         if not pd.api.types.is_numeric_dtype(series[t]):
-            raise InvalidSeriesError(f"target column {t!r} is not numeric")
-        if not np.isfinite(series[t].to_numpy(dtype=np.float64)).all():
-            raise InvalidSeriesError(f"target column {t!r} has NaN or inf values")
+            raise InvalidSeriesError(
+                f"Target column {t!r} has type {series[t].dtype}, not a number type. "
+                "Convert it to int or float."
+            )
+        # In float32, the models' dtype, so a float64 value too large for it is refused.
+        with np.errstate(over="ignore"):
+            values = series[t].to_numpy(dtype=np.float32)
+        if not np.isfinite(values).all():
+            raise InvalidSeriesError(
+                f"Target column {t!r} has NaN or inf values, or values beyond +-3.4e38. "
+                "Fill them, for example by interpolation."
+            )
 
     frame = pd.DataFrame(
         {"id": series[id_column].astype(str), "ts": stamps}
     ).sort_values(["id", "ts"])
     for item_id, g in frame.groupby("id", sort=True):
-        ts = pd.DatetimeIndex(g["ts"])
-        if ts.has_duplicates:
-            raise InvalidSeriesError(f"item {item_id!r} has duplicate timestamps")
+        _check_item(
+            pd.DatetimeIndex(g["ts"]), item_id=item_id, freq=freq, offset=offset
+        )
+
+
+def _offset(freq: str) -> pd.DateOffset:
+    """`freq` as a pandas offset, refused unless it is a positive step."""
+    try:
+        offset = pd.tseries.frequencies.to_offset(freq)
+    except OverflowError as e:
+        raise InvalidSeriesError(
+            f"freq {freq!r} is too large a step. Use the step between your timestamps, "
+            "such as 'D' or '15min'."
+        ) from e
+    except ValueError as e:
+        raise InvalidSeriesError(
+            f"freq {freq!r} is not a pandas offset alias. Use an alias such as 'D', "
+            "'h', 'W-SUN' or 'MS'."
+        ) from e
+    if offset.n <= 0:
+        raise InvalidSeriesError(
+            f"freq {freq!r} is not a positive step. Use a positive multiple, such as "
+            "'D' or '15min'."
+        )
+    return offset
+
+
+def _check_item(
+    ts: pd.DatetimeIndex, *, item_id: str, freq: str, offset: pd.DateOffset
+) -> None:
+    """Refuse an item whose sorted timestamps are not one `freq` step apart."""
+    if ts.has_duplicates:
+        raise InvalidSeriesError(
+            f"Item {item_id!r} has duplicate timestamps. Keep one row per item and "
+            "timestamp."
+        )
+    try:
         expected = pd.date_range(start=ts[0], periods=len(ts), freq=offset)
-        # `equals` is False across units, e.g. `us` data against an `ns` `date_range`.
-        if not (ts == expected).all():
-            raise InvalidSeriesError(
-                f"item {item_id!r} has gaps, or timestamps off the {freq!r} grid"
-            )
+    except (ValueError, OverflowError) as e:
+        raise InvalidSeriesError(
+            f"With freq {freq!r}, the timestamps of item {item_id!r} run past the "
+            "year 2262, the last date the service can hold. Check that freq is the "
+            "step between your timestamps."
+        ) from e
+    # `!=` and not `equals`: `equals` is False across units, e.g. `us` data against
+    # an `ns` `date_range`.
+    off = np.flatnonzero(ts != expected)
+    if len(off) == 0:
+        return
+    row = int(off[0])
+    raise InvalidSeriesError(
+        f"Item {item_id!r} has a gap or a timestamp off the {freq!r} grid: after "
+        f"{ts[row - 1]} comes {ts[row]}, not {expected[row]}. Send one row per "
+        f"{freq!r} step from an item's first timestamp to its last, and check that "
+        "freq is the step between your timestamps."
+    )
 
 
 def _check_task(
@@ -197,8 +265,8 @@ def _check_output_names(
     clashes = sorted(added & {id_column, timestamp_column, *target_columns})
     if clashes:
         raise InvalidSeriesError(
-            f"column name(s) {clashes} are taken by the result, which adds the "
-            f"columns {sorted(added)}; rename them"
+            f"Column name(s) {clashes} are taken by the result, which adds the "
+            f"columns {sorted(added)}. Rename those columns."
         )
 
 
@@ -222,7 +290,7 @@ def _submit(series: pd.DataFrame, spec: _JobSpec, *, inline_max_bytes: int) -> U
         data["job_id"] = str(_upload(table))
         res = ServiceClient.httpx_client.post(_SUBMIT_PATH, data=data)
     if res.status_code in (413, 422):
-        raise InvalidSeriesError(res.json().get("detail", res.text))
+        raise InvalidSeriesError(ServiceClient._read_json_body(res)[1])
     return ServiceClient._validate_response(
         res, "submit_job", success_model=_SubmitJobResponse
     ).job_id
@@ -239,7 +307,7 @@ def _upload(table: bytes) -> UUID:
         },
     )
     if res.status_code == 422:
-        raise InvalidSeriesError(res.json().get("detail", res.text))
+        raise InvalidSeriesError(ServiceClient._read_json_body(res)[1])
     up = ServiceClient._validate_response(
         res, "prepare_upload", success_model=_PrepareUploadResponse
     )
@@ -296,7 +364,6 @@ def _spec(
     id_column: str,
     timestamp_column: str,
     target_columns: Sequence[str],
-    preset: str | None,
 ) -> _JobSpec:
     validate_series(
         series,
@@ -311,7 +378,6 @@ def _spec(
             id=id_column, timestamp=timestamp_column, targets=list(target_columns)
         ),
         task=task,
-        preset=preset,
     )
 
 
@@ -327,7 +393,6 @@ def forecast(
     timestamp_column: str = "timestamp",
     target_columns: Sequence[str] = ("target",),
     quantiles: Sequence[float] | None = None,
-    preset: str | None = None,
     timeout: float = 1800.0,
     poll_interval: float = 5.0,
 ) -> tuple[pd.DataFrame, dict]:
@@ -344,8 +409,6 @@ def forecast(
         target_columns: Columns to forecast.
         quantiles: Quantiles to return, from the `forecast.quantiles` grid of
             `ServiceClient.get_settings()`. None returns the whole grid.
-        preset: Quality tier: "low", "medium" or "high". Higher is more accurate and
-            slower. None lets the server choose.
         timeout: Seconds to wait for the job.
         poll_interval: Seconds between status requests.
 
@@ -386,7 +449,6 @@ def forecast(
         id_column=id_column,
         timestamp_column=timestamp_column,
         target_columns=target_columns,
-        preset=preset,
     )
     return _run(
         series,

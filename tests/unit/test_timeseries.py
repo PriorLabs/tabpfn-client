@@ -41,7 +41,6 @@ def _settings(**limits) -> GetSettingsResponse:
             "max_items": 100,
             "max_rows": 10_000,
             "quantiles": GRID,
-            "presets": ["low", "medium", "high"],
             **limits,
         }
     )
@@ -101,14 +100,33 @@ def test__validate_series__unsorted_rows__passes():
     ("mutate", "match"),
     [
         (lambda df: df.drop(columns="y"), "no column"),
-        (lambda df: df.assign(extra=1), "no role"),
-        (lambda df: df.assign(y=df["y"].astype(str)), "not numeric"),
+        (lambda df: df.assign(extra=1), "which the job does not name"),
+        (lambda df: df.assign(y=df["y"].astype(str)), "not a number type"),
         (lambda df: df.assign(y=df["y"].where(df.index != 3)), "NaN or inf"),
+        (lambda df: df.assign(y=1e300), "beyond \\+-3.4e38"),
         (lambda df: df.assign(timestamp="not a date"), "parse as timestamps"),
-        (lambda df: df.drop(index=2), "gaps"),
+        (
+            lambda df: df.assign(timestamp=df["timestamp"].where(df.index != 3)),
+            "missing timestamps",
+        ),
+        (
+            lambda df: df.drop(index=2),
+            "Item 'i0' has a gap or a timestamp off the 'D' grid: after 2024-01-02 "
+            "00:00:00 comes 2024-01-04 00:00:00, not 2024-01-03 00:00:00",
+        ),
         (lambda df: pd.concat([df, df.iloc[[0]]]), "duplicate"),
     ],
-    ids=["missing", "extra", "text", "nan", "bad_ts", "gap", "duplicate"],
+    ids=[
+        "missing",
+        "extra",
+        "text",
+        "nan",
+        "float32_overflow",
+        "bad_ts",
+        "missing_ts",
+        "gap",
+        "duplicate",
+    ],
 )
 def test__validate_series__bad_table__raises(mutate, match):
     with pytest.raises(InvalidSeriesError, match=match):
@@ -120,9 +138,20 @@ def test__validate_series__off_grid_freq__raises():
         validate_series(_series(), freq="h", **COLS)
 
 
-def test__validate_series__unknown_freq__raises():
-    with pytest.raises(InvalidSeriesError, match="offset alias"):
-        validate_series(_series(), freq="fortnight", **COLS)
+@pytest.mark.parametrize(
+    ("freq", "match"),
+    [
+        ("fortnight", "is not a pandas offset alias"),
+        ("0D", "is not a positive step"),
+        ("-1h", "is not a positive step"),
+        ("99999999999999999999D", "is too large a step"),
+        ("100000D", "run past the year 2262"),
+    ],
+    ids=["unknown", "zero", "negative", "overflow", "past_2262"],
+)
+def test__validate_series__bad_freq__raises(freq, match):
+    with pytest.raises(InvalidSeriesError, match=match):
+        validate_series(_series(), freq=freq, **COLS)
 
 
 def test__validate_series__column_in_two_roles__raises():
@@ -187,25 +216,34 @@ def test__forecast__job_fails__raises_with_user_error(server):
         json={
             "status": "failed",
             "job_id": str(JOB_ID),
-            "error": "preset 'medium' is not available",
+            "error": "Item 'i0' has duplicate timestamps.",
             "user_error": True,
         },
     )
 
-    with pytest.raises(TimeSeriesJobFailedError, match="medium") as exc:
+    with pytest.raises(TimeSeriesJobFailedError, match="duplicate") as exc:
         timeseries.forecast(_series(), horizon=3, freq="D", target_columns=["y"])
 
     assert exc.value.user_error is True
     assert exc.value.job_id == JOB_ID
 
 
-def test__forecast__server_rejects_spec__raises_invalid_series(server):
+def test__forecast__server_rejects_spec__raises_invalid_series_with_its_message(
+    server,
+):
     server.router.post("/forecast/submit_job").respond(
-        422, json={"detail": "task.horizon: too large"}
+        422,
+        json={
+            "message": "task.horizon: too large",
+            "error_code": "REQUEST_VALIDATION_ERROR",
+            "trace_id": "t",
+        },
     )
 
-    with pytest.raises(InvalidSeriesError, match="too large"):
+    with pytest.raises(InvalidSeriesError) as exc:
         timeseries.forecast(_series(), horizon=3, freq="D", target_columns=["y"])
+
+    assert str(exc.value) == "task.horizon: too large"
 
 
 def _mock_upload_then_fail(server: MockTabPFNServer) -> tuple[respx.Route, ...]:

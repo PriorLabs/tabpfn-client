@@ -563,14 +563,6 @@ class GetPredictResultResponse(BaseModel):
     timings: PredictTimings | None = None
 
 
-class Preset(str, Enum):
-    """Quality tier: higher is more accurate and slower."""
-
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-
-
 class ForecastLimits(BaseModel):
     """What one forecast job may take. `get_settings` returns them as `forecast`."""
 
@@ -580,7 +572,6 @@ class ForecastLimits(BaseModel):
     max_items: int
     max_rows: int
     quantiles: list[float]
-    presets: list[Annotated[Preset | UnknownEnum, Field(union_mode="left_to_right")]]
 
 
 class GetSettingsResponse(BaseModel):
