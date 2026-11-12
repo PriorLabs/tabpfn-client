@@ -253,20 +253,27 @@ def _check_task(
             )
 
 
-def _check_output_names(
-    *,
-    id_column: str,
-    timestamp_column: str,
-    target_columns: Sequence[str],
-    quantiles: Sequence[float],
+_QUANTILE_PREFIX = "q_"
+# Output column names, of the forecast and of the backtest to come (`cutoff`, `actual`),
+# with every name that starts with `_QUANTILE_PREFIX`. No input column may take one.
+_RESERVED_COLUMNS = frozenset({"target_column", "mean", "cutoff", "actual"})
+
+
+def _is_reserved_column(name: str) -> bool:
+    return name in _RESERVED_COLUMNS or name.startswith(_QUANTILE_PREFIX)
+
+
+def _check_reserved_names(
+    *, id_column: str, timestamp_column: str, target_columns: Sequence[str]
 ) -> None:
-    """Raise if a caller's column name is one the server adds to the result."""
-    added = {"target_column", "mean", *(f"q_{float(q)}" for q in quantiles)}
-    clashes = sorted(added & {id_column, timestamp_column, *target_columns})
-    if clashes:
+    """Raise if a caller's column name is reserved for the output."""
+    names = {id_column, timestamp_column, *target_columns}
+    reserved = sorted(name for name in names if _is_reserved_column(name))
+    if reserved:
         raise InvalidSeriesError(
-            f"Column name(s) {clashes} are taken by the result, which adds the "
-            f"columns {sorted(added)}. Rename those columns."
+            f"column(s) {reserved} have reserved names: {sorted(_RESERVED_COLUMNS)} and "
+            f"names that start with {_QUANTILE_PREFIX!r} are output columns. Rename "
+            "those columns."
         )
 
 
@@ -427,19 +434,10 @@ def forecast(
     limits = None if settings is None else settings.forecast
     requested = None if quantiles is None else sorted(set(quantiles))
     _check_task(horizon=horizon, quantiles=requested, limits=limits)
-    match requested, limits:
-        case None, None:
-            # The grid is unknown, so the server checks the quantile columns.
-            returned = []
-        case None, ForecastLimits(quantiles=grid):
-            returned = grid
-        case _:
-            returned = requested
-    _check_output_names(
+    _check_reserved_names(
         id_column=id_column,
         timestamp_column=timestamp_column,
         target_columns=target_columns,
-        quantiles=returned,
     )
     task = _ForecastTask(horizon=horizon, quantiles=requested)
     spec = _spec(

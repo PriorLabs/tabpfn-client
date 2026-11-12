@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 from collections.abc import Iterator
 from unittest.mock import patch
 from urllib.parse import parse_qs
@@ -354,33 +355,16 @@ def _renamed(column: str, new: str) -> dict:
             }
 
 
+@pytest.mark.parametrize("column", ["item_id", "timestamp", "y"])
 @pytest.mark.parametrize(
-    ("column", "new", "quantiles"),
-    [
-        ("item_id", "mean", [0.5]),
-        ("timestamp", "target_column", [0.5]),
-        ("y", "q_0.5", [0.5]),
-        ("y", "q_0.9", None),
-    ],
-    ids=["id_mean", "timestamp_target_column", "target_requested_q", "target_grid_q"],
+    "new", ["target_column", "mean", "cutoff", "actual", "q_0.5", "q_0.9", "q_custom"]
 )
-def test__forecast__column_name_taken_by_result__raises_before_any_request(
-    server, column, new, quantiles
+def test__forecast__column_with_a_reserved_name__raises_before_any_request(
+    server, column, new
 ):
-    with pytest.raises(InvalidSeriesError, match=f"\\['{new}'\\] are taken"):
+    with pytest.raises(
+        InvalidSeriesError, match=re.escape(f"column(s) ['{new}'] have reserved names")
+    ):
         timeseries.forecast(
-            horizon=3, freq="D", quantiles=quantiles, **_renamed(column, new)
+            horizon=3, freq="D", quantiles=[0.5], **_renamed(column, new)
         )
-
-
-def test__forecast__quantile_column_name_not_requested__submits(server):
-    submit = server.router.post("/forecast/submit_job").respond(
-        422, json={"detail": "stop here"}
-    )
-
-    with pytest.raises(InvalidSeriesError, match="stop here"):
-        timeseries.forecast(
-            horizon=3, freq="D", quantiles=[0.5], **_renamed("y", "q_0.9")
-        )
-
-    assert submit.called
