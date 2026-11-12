@@ -6,6 +6,7 @@ import io
 import json
 import re
 from collections.abc import Iterator
+from typing import Any
 from unittest.mock import patch
 from urllib.parse import parse_qs
 from uuid import UUID
@@ -27,7 +28,9 @@ from tests.mock_tabpfn_server import MockTabPFNServer
 from tests.unit.test_client import _api_settings_payload
 
 JOB_ID = UUID("00000000-0000-0000-0000-0000000000f1")
-COLS = dict(id_column="item_id", timestamp_column="timestamp", target_columns=["y"])
+COLS: dict[str, Any] = dict(
+    id_column="item_id", timestamp_column="timestamp", target_columns=["y"]
+)
 
 
 GRID = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
@@ -102,6 +105,7 @@ def test__validate_series__unsorted_rows__passes():
     [
         (lambda df: df.drop(columns="y"), "no column"),
         (lambda df: df.assign(extra=1), "which the job does not name"),
+        (lambda df: df.iloc[:0], "The series table has no rows"),
         (lambda df: df.assign(y=df["y"].astype(str)), "not a number type"),
         (lambda df: df.assign(y=df["y"].where(df.index != 3)), "NaN or inf"),
         (lambda df: df.assign(y=1e300), "beyond \\+-3.4e38"),
@@ -120,6 +124,7 @@ def test__validate_series__unsorted_rows__passes():
     ids=[
         "missing",
         "extra",
+        "empty",
         "text",
         "nan",
         "float32_overflow",
@@ -132,6 +137,67 @@ def test__validate_series__unsorted_rows__passes():
 def test__validate_series__bad_table__raises(mutate, match):
     with pytest.raises(InvalidSeriesError, match=match):
         validate_series(mutate(_series()), freq="D", **COLS)
+
+
+# The worker takes a target of any type `is_numeric_dtype` accepts, bools included.
+_NUMBER_TARGETS = {
+    "int64": lambda y: y.astype("int64"),
+    "float32": lambda y: y.astype("float32"),
+    "bool": lambda y: y > 3,
+    "Int64": lambda y: y.astype("Int64"),
+    "Float64": lambda y: y.astype("Float64"),
+    "boolean": lambda y: (y > 3).astype("boolean"),
+    "int64_pyarrow": lambda y: y.astype("int64[pyarrow]"),
+    "double_pyarrow": lambda y: y.astype("double[pyarrow]"),
+}
+
+
+@pytest.mark.parametrize("to_dtype", _NUMBER_TARGETS.values(), ids=_NUMBER_TARGETS)
+def test__validate_series__number_target_dtype__passes(to_dtype):
+    df = _series()
+    validate_series(df.assign(y=to_dtype(df["y"])), freq="D", **COLS)
+
+
+@pytest.mark.parametrize(
+    "to_dtype",
+    [
+        lambda y: y.astype("Int64").where(y != 3),
+        lambda y: y.astype("Float64").where(y != 3),
+        lambda y: (y > 3).astype("boolean").where(y != 3),
+        lambda y: y.astype("double[pyarrow]").where(y != 3),
+    ],
+    ids=["Int64", "Float64", "boolean", "double_pyarrow"],
+)
+def test__validate_series__nullable_target_with_missing__raises_nan(to_dtype):
+    df = _series()
+    with pytest.raises(InvalidSeriesError, match="has NaN or inf values"):
+        validate_series(df.assign(y=to_dtype(df["y"])), freq="D", **COLS)
+
+
+_OTHER_TARGETS = {
+    "string_python": lambda y: y.astype(str).astype("string[python]"),
+    "string_pyarrow": lambda y: y.astype(str).astype("string[pyarrow]"),
+    "categorical": lambda y: y.astype("category"),
+    "object_str": lambda y: y.astype(str).astype(object),
+    "object_bool": lambda y: (y > 3).astype(object),
+    "object_none": lambda y: pd.Series([None] * len(y), dtype=object),
+    "object_mixed": lambda y: y.astype(object).where(y != 3, "x"),
+    "datetime": lambda y: pd.to_datetime(y, unit="D"),
+}
+
+
+@pytest.mark.parametrize("to_dtype", _OTHER_TARGETS.values(), ids=_OTHER_TARGETS)
+def test__validate_series__non_number_target_dtype__raises(to_dtype):
+    df = _series()
+    with pytest.raises(InvalidSeriesError, match="'y' has type .*, not a number type"):
+        validate_series(df.assign(y=to_dtype(df["y"])), freq="D", **COLS)
+
+
+def test__validate_series__bad_target_and_timestamps__raises_target_first():
+    # The worker's order, so both name the same fault.
+    df = _series().assign(y="text", timestamp="not a date")
+    with pytest.raises(InvalidSeriesError, match="not a number type"):
+        validate_series(df, freq="fortnight", **COLS)
 
 
 def test__validate_series__off_grid_freq__raises():

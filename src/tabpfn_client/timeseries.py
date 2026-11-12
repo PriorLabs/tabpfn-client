@@ -115,9 +115,9 @@ def validate_series(
 ) -> None:
     """Raise `InvalidSeriesError` if the server would reject `series`.
 
-    The rules are the same as the worker's: every column has exactly one role, the
-    timestamps parse, the targets are finite numbers, and each item's timestamps are
-    on the `freq` grid with no gaps or duplicates.
+    The rules are the same as the worker's, in its order: every column has exactly one
+    role, the table has rows, the targets are finite numbers, the timestamps parse,
+    and each item's timestamps are on the `freq` grid with no gaps or duplicates.
     """
     roles = [id_column, timestamp_column, *target_columns]
     if not target_columns:
@@ -140,18 +140,9 @@ def validate_series(
             f"The series table has column(s) {extra}, which the job does not name. "
             "Drop them, or name them in the job."
         )
-    offset = _offset(freq)
-    try:
-        stamps = pd.to_datetime(series[timestamp_column])
-    except (ValueError, TypeError, OverflowError) as e:
+    if len(series) == 0:
         raise InvalidSeriesError(
-            f"Column {timestamp_column!r} of the series table does not parse as "
-            "timestamps. Send datetime values or ISO 8601 strings."
-        ) from e
-    if stamps.hasnans:
-        raise InvalidSeriesError(
-            f"Column {timestamp_column!r} of the series table has missing timestamps. "
-            "Fill them or drop their rows."
+            "The series table has no rows. Send at least one row per item."
         )
     for t in target_columns:
         if not pd.api.types.is_numeric_dtype(series[t]):
@@ -167,6 +158,19 @@ def validate_series(
                 f"Target column {t!r} has NaN or inf values, or values beyond +-3.4e38. "
                 "Fill them, for example by interpolation."
             )
+    try:
+        stamps = pd.to_datetime(series[timestamp_column])
+    except (ValueError, TypeError, OverflowError) as e:
+        raise InvalidSeriesError(
+            f"Column {timestamp_column!r} of the series table does not parse as "
+            "timestamps. Send datetime values or ISO 8601 strings."
+        ) from e
+    if stamps.hasnans:
+        raise InvalidSeriesError(
+            f"Column {timestamp_column!r} of the series table has missing timestamps. "
+            "Fill them or drop their rows."
+        )
+    offset = _offset(freq)
 
     frame = pd.DataFrame(
         {"id": series[id_column].astype(str), "ts": stamps}
