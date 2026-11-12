@@ -662,6 +662,18 @@ class PredictResponse(BaseModel):
     )
 
 
+class PrepareFoldIdsUploadRequest(BaseModel):
+    train_set_upload_id: UUID = Field(description="The train set the fold ids split.")
+    fold_ids_info: FileInfo = Field(
+        description="One integer column per repeat and one row per train-set row, in upload order."
+    )
+
+
+class PrepareFoldIdsUploadResponse(BaseModel):
+    fold_ids_upload_id: UUID
+    fold_ids_info: FileUploadInfo
+
+
 class PrepareTestSetUploadRequest(BaseModel):
     fitted_train_set_id: UUID
     x_test_info: FileInfo
@@ -697,11 +709,15 @@ class SubmitCrossValidateRequest(BaseModel):
     tabpfn_systems: list[Annotated[TabPFNSystem | str, Field(union_mode="left_to_right")]] | None = None
     text_handling: Annotated[TextHandling | str, Field(union_mode="left_to_right")] | None = None
     train_set_upload_id: UUID | None = Field(
-        default=None, description="Fold-id mode: the train set `fold_ids` splits."
+        default=None, description="Fold-id mode: the train set the fold ids split."
     )
-    fold_ids: list[list[int]] | None = Field(
+    fold_ids_upload_id: UUID | None = Field(
         default=None,
-        description="Fold-id mode: one vector per repeat with one entry per train-set row, in upload order. `0..K-1` puts the row in that validation fold; `-1` keeps it in every training split.",
+        description="Fold-id mode: the fold ids, uploaded for `train_set_upload_id` with `/prepare_fold_ids_upload`. One integer column per repeat and one row per train-set row, in upload order. `0..K-1` puts the row in that validation fold; `-1` keeps it in every training split.",
+    )
+    fold_sizes: list[list[int]] | None = Field(
+        default=None,
+        description="Fold-id mode: per repeat, the number of rows in each fold `0..K-1`. The splits are priced from these; a job whose fold ids do not match them fails before any split runs.",
     )
     splits: list[CrossValidateUploadSplit] | None = Field(
         default=None,

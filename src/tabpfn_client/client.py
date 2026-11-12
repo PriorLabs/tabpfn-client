@@ -73,6 +73,8 @@ from tabpfn_client.api_models import (
     EstimateCostResponse,
     TabPFNSystem,
     TextHandling,
+    PrepareFoldIdsUploadRequest,
+    PrepareFoldIdsUploadResponse,
     PrepareTrainSetUploadRequest,
     PrepareTrainSetUploadResponse,
     DuplicateTrainSetErrorResponse,
@@ -388,6 +390,32 @@ def _cross_validate_resume_hint(cv_job_id: UUID) -> str:
         "call tabpfn_client.init(), then tabpfn_client.service_wrapper."
         f'InferenceClient.wait_for_cross_validate("{cv_job_id}")'
     )
+
+
+def _fold_sizes(fold_ids: list[list[int]], num_rows: int) -> list[list[int]]:
+    """Each repeat's number of rows in each fold `0..K-1`.
+
+    Raises:
+        ValueError: If a repeat does not have one fold id per row, a fold id is
+            below -1, or a fold in `0..K-1` is empty.
+    """
+    sizes = []
+    for repeat, ids in enumerate(fold_ids):
+        ids = np.asarray(ids)
+        if ids.shape != (num_rows,):
+            raise ValueError(
+                f"Repeat {repeat} has {ids.size} fold ids; X has {num_rows} rows."
+            )
+        if ids.size and ids.min() < -1:
+            raise ValueError(f"Repeat {repeat} has a fold id below -1.")
+        counts = np.bincount(ids[ids >= 0]).tolist()
+        if not counts or min(counts) == 0:
+            raise ValueError(
+                f"Repeat {repeat}'s fold ids must cover every fold 0..K-1 with at "
+                "least one row."
+            )
+        sizes.append(counts)
+    return sizes
 
 
 def _serialize_to_parquet(df: pd.DataFrame) -> tuple[bytes, str]:
@@ -909,6 +937,38 @@ class ServiceClient(Singleton):
         return prepare_resp.train_set_upload_id
 
     @classmethod
+    def _upload_fold_ids(
+        cls,
+        train_set_upload_id: UUID,
+        fold_ids: list[list[int]],
+        *,
+        client_options: ClientOptions,
+    ) -> UUID:
+        """Upload the fold ids of a cross-validation, one column per repeat.
+
+        Returns:
+            The id of the upload, which the cross-validation takes.
+        """
+        frame = pd.DataFrame(
+            {f"r{i}": np.asarray(ids, dtype=np.int32) for i, ids in enumerate(fold_ids)}
+        )
+        data, _ = _serialize_to_parquet(frame)
+        prepare_req = PrepareFoldIdsUploadRequest(
+            train_set_upload_id=train_set_upload_id,
+            fold_ids_info=FileInfo(format="parquet", size_bytes=len(data)),
+        )
+        res = cls.httpx_client.post(
+            url="/tabpfn/prepare_fold_ids_upload",
+            json=prepare_req.model_dump(mode="json", exclude_none=True),
+            headers=client_options.headers,
+        )
+        prepare_resp = cls._validate_response(
+            res, "prepare_fold_ids_upload", success_model=PrepareFoldIdsUploadResponse
+        )
+        cls._upload_to_gcs("fold_ids", data, prepare_resp.fold_ids_info)
+        return prepare_resp.fold_ids_upload_id
+
+    @classmethod
     def _wait_for_fit(
         cls,
         fitted_train_set_id: UUID,
@@ -1210,7 +1270,7 @@ class ServiceClient(Singleton):
         client_options: ClientOptions | None = None,
         wait: bool = True,
     ) -> GetCrossValidateResultResponse:
-        """Upload a train set and cross-validate on it, by fold ids.
+        """Upload a train set and its fold ids, and cross-validate on them.
 
         The server fits and predicts every fold, and stores the out-of-fold
         predictions. SYNC sends one request, which the server answers with the
@@ -1240,8 +1300,9 @@ class ServiceClient(Singleton):
             of its predictions, or, when not waited for, possibly pending.
 
         Raises:
-            ValueError: If `text_handling` is invalid or the in-memory size of
-                `X` or `y` exceeds the server limit.
+            ValueError: If `text_handling` is invalid, the fold ids are not one
+                per row of `X` over folds `0..K-1` that each hold a row, or the
+                in-memory size of `X` or `y` exceeds the server limit.
             CrossValidateFailedError: If the server reports that the job
                 failed, or no longer has it.
             RuntimeError: If the server does not run cross-validation or
@@ -1255,15 +1316,20 @@ class ServiceClient(Singleton):
 
         df_X, df_y, total_mem_usage = cls._train_set_frames(X, y)
         use_async = cls._runs_as_job(api_mode, total_mem_usage)
+        fold_sizes = _fold_sizes(fold_ids, len(df_X))
         train_set_upload_id = cls._upload_train_set(
             df_X, df_y, description=None, client_options=client_options
+        )
+        fold_ids_upload_id = cls._upload_fold_ids(
+            train_set_upload_id, fold_ids, client_options=client_options
         )
         req = SubmitCrossValidateRequest(
             task_config=task_config,
             tabpfn_systems=list(tabpfn_systems),
             text_handling=None if text_handling == "advanced" else text_handling,
             train_set_upload_id=train_set_upload_id,
-            fold_ids=fold_ids,
+            fold_ids_upload_id=fold_ids_upload_id,
+            fold_sizes=fold_sizes,
         )
         if use_async:
             submit_resp = cls._submit_cross_validate_job(

@@ -39,7 +39,7 @@ from tabpfn_client.api_models import (
     GetCrossValidateResultResponse,
     RegressorConfig,
 )
-from tabpfn_client.client import ResolvedAsyncSettings, ServiceClient
+from tabpfn_client.client import ResolvedAsyncSettings, ServiceClient, _fold_sizes
 from tabpfn_client.config import Config
 from tabpfn_client.estimator import (
     TabPFNClassifier,
@@ -404,8 +404,27 @@ def _parquet(frame: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 
+class TestFoldSizes:
+    def test_counts_each_fold_per_repeat(self):
+        assert _fold_sizes([[0, 1, 0, -1], [1, 1, 0, 0]], 4) == [[2, 1], [2, 2]]
+
+    @pytest.mark.parametrize(
+        "fold_ids",
+        [
+            [[0, 1, 0]],  # fewer ids than rows
+            [[0, 2, 0, 2]],  # fold 1 is empty
+            [[-1, -1, -1, -1]],  # no fold
+            [[0, 1, -2, 0]],  # below -1
+        ],
+    )
+    def test_unusable_fold_ids_are_rejected(self, fold_ids):
+        with pytest.raises(ValueError):
+            _fold_sizes(fold_ids, 4)
+
+
 class TestServiceClient:
     UPLOAD_ID = "00000000-0000-0000-0000-000000000001"
+    FOLD_IDS_UPLOAD_ID = "00000000-0000-0000-0000-000000000002"
     FOLD_IDS = [[0, 1, 0, 1, -1, 0]]
 
     def setup_method(self):
@@ -438,6 +457,17 @@ class TestServiceClient:
                 "message": "duplicate",
                 "error_code": "DUPLICATE_TRAIN_SET_UPLOAD",
                 "train_set_upload_id": self.UPLOAD_ID,
+            },
+        )
+        mock_server.router.post("/tabpfn/prepare_fold_ids_upload").respond(
+            200,
+            json={
+                "fold_ids_upload_id": self.FOLD_IDS_UPLOAD_ID,
+                "fold_ids_info": {
+                    "signed_urls": ["https://storage.test/folds"],
+                    "expires_at": 0.0,
+                    "required_headers": {},
+                },
             },
         )
 
@@ -483,7 +513,10 @@ class TestServiceClient:
                 },
             ),
         ]
-        with self._patched() as fake_time:
+        with (
+            self._patched() as fake_time,
+            patch.object(ServiceClient, "_upload_to_gcs") as upload_to_gcs,
+        ):
             result = self._cross_validate(ApiMode.SYNC)
 
         assert result.status == "completed"
@@ -491,7 +524,12 @@ class TestServiceClient:
         assert fake_time.sleeps == [3.0, 1.5]
         body = json.loads(sync_route.calls[0].request.content)
         assert body["train_set_upload_id"] == self.UPLOAD_ID
-        assert body["fold_ids"] == self.FOLD_IDS
+        assert body["fold_ids_upload_id"] == self.FOLD_IDS_UPLOAD_ID
+        assert body["fold_sizes"] == [[3, 2]]
+        assert "fold_ids" not in body
+        (name, data, _), _ = upload_to_gcs.call_args
+        assert name == "fold_ids"
+        assert pd.read_parquet(io.BytesIO(data))["r0"].tolist() == self.FOLD_IDS[0]
         assert body["task_config"]["task"] == "classification"
         assert "splits" not in body
         polled = json.loads(result_route.calls[0].request.content)
