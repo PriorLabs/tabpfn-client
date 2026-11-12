@@ -14,6 +14,7 @@ from uuid import UUID
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel, Field, TypeAdapter
+from typing_extensions import assert_never
 
 from tabpfn_client.api_models import FileInfo, FileUploadInfo, ForecastLimits
 from tabpfn_client.client import ServiceClient
@@ -42,6 +43,14 @@ class TimeSeriesJobFailedError(RuntimeError):
         super().__init__(message)
         self.job_id = job_id
         self.user_error = user_error
+
+
+class TimeSeriesInputParseError(TimeSeriesJobFailedError):
+    """The server cannot read the table as the columns and types the job names."""
+
+
+class TimeSeriesInputValidationError(TimeSeriesJobFailedError):
+    """The server reads the table, but its values break a rule of the service."""
 
 
 # --- wire models (mirror the server's `prior.models.forecast`) ---------------------
@@ -93,6 +102,8 @@ class _JobFailed(BaseModel):
     job_id: UUID
     error: str
     user_error: bool
+    # Set exactly when `user_error` is true. Servers that predate it send none.
+    error_kind: Literal["parse", "validation"] | None = None
 
 
 _JobResult = TypeAdapter(
@@ -355,10 +366,17 @@ def _run(
         match result:
             case _JobSucceeded(result_url=url, metadata=metadata):
                 return _download(url), metadata
-            case _JobFailed(error=error, user_error=user_error):
-                raise TimeSeriesJobFailedError(
-                    error, job_id=job_id, user_error=user_error
-                )
+            case _JobFailed(error=error, user_error=user_error, error_kind=kind):
+                match kind:
+                    case "parse":
+                        error_type = TimeSeriesInputParseError
+                    case "validation":
+                        error_type = TimeSeriesInputValidationError
+                    case None:
+                        error_type = TimeSeriesJobFailedError
+                    case _:
+                        assert_never(kind)
+                raise error_type(error, job_id=job_id, user_error=user_error)
             case _JobPending():
                 if time.monotonic() > deadline:
                     raise TimeoutError(
@@ -430,7 +448,12 @@ def forecast(
     Raises:
         InvalidSeriesError: If the table or the parameters break a rule, or a column
             name is one the result adds.
-        TimeSeriesJobFailedError: If the server reports the job failed.
+        TimeSeriesInputParseError: If the server cannot read the table as the job
+            names it.
+        TimeSeriesInputValidationError: If the server reads the table, but its values
+            break a rule.
+        TimeSeriesJobFailedError: If the server reports the job failed for another
+            reason.
         TimeoutError: If the job does not finish within `timeout`.
     """
     init()

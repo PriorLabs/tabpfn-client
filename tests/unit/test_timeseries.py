@@ -21,6 +21,8 @@ from tabpfn_client.api_models import ForecastLimits, GetSettingsResponse
 from tabpfn_client.client import ServiceClient
 from tabpfn_client.timeseries import (
     InvalidSeriesError,
+    TimeSeriesInputParseError,
+    TimeSeriesInputValidationError,
     TimeSeriesJobFailedError,
     validate_series,
 )
@@ -291,7 +293,42 @@ def test__forecast__job_fails__raises_with_user_error(server):
     with pytest.raises(TimeSeriesJobFailedError, match="duplicate") as exc:
         timeseries.forecast(_series(), horizon=3, freq="D", target_columns=["y"])
 
+    assert type(exc.value) is TimeSeriesJobFailedError
     assert exc.value.user_error is True
+    assert exc.value.job_id == JOB_ID
+
+
+@pytest.mark.parametrize(
+    ("kind", "user_error", "error_type"),
+    [
+        ("parse", True, TimeSeriesInputParseError),
+        ("validation", True, TimeSeriesInputValidationError),
+        (None, False, TimeSeriesJobFailedError),
+    ],
+    ids=["parse", "validation", "internal"],
+)
+def test__forecast__job_fails_with_error_kind__raises_matching_type(
+    server, kind, user_error, error_type
+):
+    server.router.post("/forecast/submit_job").respond(
+        200, json={"job_id": str(JOB_ID)}
+    )
+    server.router.post("/forecast/get_job_result").respond(
+        200,
+        json={
+            "status": "failed",
+            "job_id": str(JOB_ID),
+            "error": "the reason",
+            "user_error": user_error,
+            "error_kind": kind,
+        },
+    )
+
+    with pytest.raises(TimeSeriesJobFailedError, match="the reason") as exc:
+        timeseries.forecast(_series(), horizon=3, freq="D", target_columns=["y"])
+
+    assert type(exc.value) is error_type
+    assert exc.value.user_error is user_error
     assert exc.value.job_id == JOB_ID
 
 
