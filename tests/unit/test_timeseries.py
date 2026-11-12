@@ -223,6 +223,16 @@ def test__validate_series__bad_freq__raises(freq, match):
         validate_series(_series(), freq=freq, **COLS)
 
 
+@pytest.mark.parametrize("column", ["item_id", "timestamp", "y"])
+def test__validate_series__duplicate_column_name__raises_naming_it(column):
+    df = _series()
+    df = pd.concat([df, df[[column]]], axis=1)
+    with pytest.raises(
+        InvalidSeriesError, match=rf"more than one column named \['{column}'\]"
+    ):
+        validate_series(df, freq="D", **COLS)
+
+
 def test__validate_series__column_in_two_roles__raises():
     with pytest.raises(InvalidSeriesError, match="one role"):
         validate_series(

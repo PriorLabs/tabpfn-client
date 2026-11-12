@@ -126,9 +126,9 @@ def validate_series(
 ) -> None:
     """Raise `InvalidSeriesError` if the server would reject `series`.
 
-    The rules are the same as the worker's, in its order: every column has exactly one
-    role, the table has rows, the targets are finite numbers, the timestamps parse,
-    and each item's timestamps are on the `freq` grid with no gaps or duplicates.
+    The rules are the same as the worker's, in its order: no column has two roles,
+    the column names are unique, every column has a role, the table has rows, the targets are finite
+    numbers, the timestamps parse, and each item's timestamps are on the `freq` grid with no gaps or duplicates.
     """
     roles = [id_column, timestamp_column, *target_columns]
     if not target_columns:
@@ -138,6 +138,12 @@ def validate_series(
         raise InvalidSeriesError(
             f"Column(s) {repeated} have more than one role, and a column can have "
             "only one role. Name each column once."
+        )
+    duplicated = sorted(set(series.columns[series.columns.duplicated()]))
+    if duplicated:
+        raise InvalidSeriesError(
+            f"The series table has more than one column named {duplicated}. Give "
+            "each column of the table a different name."
         )
     missing = sorted(set(roles) - set(series.columns))
     if missing:
