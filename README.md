@@ -92,7 +92,7 @@ Knobs:
 
 - `thinking_mode: bool = False` — enable thinking with default effort. Equivalent to `thinking_effort="medium"`.
 - `thinking_effort: {"micro", "mini", "low", "medium", "high", "xhigh", "max"} | None` — effort level, from least to most compute. Setting this also enables thinking, so `thinking_mode=True` is optional when you've set the level explicitly. Levels other than `"medium"` and `"high"` are not available to every account; the server rejects a level your account cannot use.
-- `thinking_timeout_s: float | None` — budget for the fit, in seconds. Only consulted when thinking is enabled. Capped at 2400 (40 minutes).
+- `thinking_timeout_s: float | None` — time limit for the fit, in seconds. Only consulted when thinking is enabled. Each effort level has a maximum; the server rejects a longer value.
 - `thinking_metric: str | None` — optimization metric for the fit. Only consulted when thinking is enabled. See the constructor docstring of `TabPFNClassifier` / `TabPFNRegressor` for the full list of supported metrics per task (classification, multiclass, regression) and their aliases.
 - `group_col: str | list[str] | None` — column(s) of `X` identifying groups of related rows, e.g. a patient or session id. Rows of one group are never split between training and validation during the fit. Thinking mode only.
 - `time_col: str | None` — column of `X` holding time. Validation uses contiguous time blocks. Cannot be combined with `group_col`. Thinking mode only.
