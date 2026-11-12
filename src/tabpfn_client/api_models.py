@@ -568,10 +568,15 @@ class ForecastLimits(BaseModel):
 
     max_horizon: int
     max_inline_table_bytes: int
-    max_upload_bytes: int
     max_items: int
     max_rows: int
     quantiles: list[float]
+    max_targets: int = 16
+    max_cells: int = 30_000_000
+    max_output_rows: int = 10_000_000
+    max_table_bytes: int = 512 * 1024 * 1024
+    covariates: bool = False
+    max_covariates: int = 32
 
 
 class GetSettingsResponse(BaseModel):

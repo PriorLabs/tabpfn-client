@@ -43,7 +43,6 @@ def _settings(**limits) -> GetSettingsResponse:
         **{
             "max_horizon": 64,
             "max_inline_table_bytes": 1_000_000,
-            "max_upload_bytes": 10_000_000,
             "max_items": 100,
             "max_rows": 10_000,
             "quantiles": GRID,
@@ -286,39 +285,17 @@ def test__forecast__job_succeeds__returns_result_and_metadata(server):
     assert b"preset" not in body
 
 
-def test__forecast__job_fails__raises_with_user_error(server):
-    server.router.post("/forecast/submit_job").respond(
-        200, json={"job_id": str(JOB_ID)}
-    )
-    server.router.post("/forecast/get_job_result").respond(
-        200,
-        json={
-            "status": "failed",
-            "job_id": str(JOB_ID),
-            "error": "Item 'i0' has duplicate timestamps.",
-            "user_error": True,
-        },
-    )
-
-    with pytest.raises(TimeSeriesJobFailedError, match="duplicate") as exc:
-        timeseries.forecast(_series(), horizon=3, freq="D", target_columns=["y"])
-
-    assert type(exc.value) is TimeSeriesJobFailedError
-    assert exc.value.user_error is True
-    assert exc.value.job_id == JOB_ID
-
-
 @pytest.mark.parametrize(
-    ("kind", "user_error", "error_type"),
+    ("kind", "error_type"),
     [
-        ("parse", True, TimeSeriesInputParseError),
-        ("validation", True, TimeSeriesInputValidationError),
-        (None, False, TimeSeriesJobFailedError),
+        ("parse", TimeSeriesInputParseError),
+        ("validation", TimeSeriesInputValidationError),
+        (None, TimeSeriesJobFailedError),
     ],
     ids=["parse", "validation", "internal"],
 )
 def test__forecast__job_fails_with_error_kind__raises_matching_type(
-    server, kind, user_error, error_type
+    server, kind, error_type
 ):
     server.router.post("/forecast/submit_job").respond(
         200, json={"job_id": str(JOB_ID)}
@@ -329,7 +306,6 @@ def test__forecast__job_fails_with_error_kind__raises_matching_type(
             "status": "failed",
             "job_id": str(JOB_ID),
             "error": "the reason",
-            "user_error": user_error,
             "error_kind": kind,
         },
     )
@@ -338,7 +314,6 @@ def test__forecast__job_fails_with_error_kind__raises_matching_type(
         timeseries.forecast(_series(), horizon=3, freq="D", target_columns=["y"])
 
     assert type(exc.value) is error_type
-    assert exc.value.user_error is user_error
     assert exc.value.job_id == JOB_ID
 
 
@@ -383,7 +358,6 @@ def _mock_upload_then_fail(server: MockTabPFNServer) -> tuple[respx.Route, ...]:
             "status": "failed",
             "job_id": str(JOB_ID),
             "error": "stop here",
-            "user_error": False,
         },
     )
 

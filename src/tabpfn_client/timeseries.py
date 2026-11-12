@@ -32,17 +32,15 @@ class InvalidSeriesError(ValueError):
 class TimeSeriesJobFailedError(RuntimeError):
     """The server reports that a time-series job failed."""
 
-    def __init__(self, message: str, *, job_id: UUID, user_error: bool):
+    def __init__(self, message: str, *, job_id: UUID):
         """Initialize the error.
 
         Args:
             message: The server's reason.
             job_id: The failed job.
-            user_error: True when the input was at fault, False when the service was.
         """
         super().__init__(message)
         self.job_id = job_id
-        self.user_error = user_error
 
 
 class TimeSeriesInputParseError(TimeSeriesJobFailedError):
@@ -101,8 +99,7 @@ class _JobFailed(BaseModel):
     status: Literal["failed"]
     job_id: UUID
     error: str
-    user_error: bool
-    # Set exactly when `user_error` is true. Servers that predate it send none.
+    # What was wrong with the input; None when the service was at fault.
     error_kind: Literal["parse", "validation"] | None = None
 
 
@@ -167,7 +164,8 @@ def validate_series(
                 f"Target column {t!r} has type {series[t].dtype}, not a number type. "
                 "Convert it to int or float."
             )
-        # In float32, the models' dtype, so a float64 value too large for it is refused.
+        # In float32, the precision the service computes in, so a float64 value too large
+        # for it is refused.
         with np.errstate(over="ignore"):
             values = series[t].to_numpy(dtype=np.float32)
         if not np.isfinite(values).all():
@@ -372,7 +370,7 @@ def _run(
         match result:
             case _JobSucceeded(result_url=url, metadata=metadata):
                 return _download(url), metadata
-            case _JobFailed(error=error, user_error=user_error, error_kind=kind):
+            case _JobFailed(error=error, error_kind=kind):
                 match kind:
                     case "parse":
                         error_type = TimeSeriesInputParseError
@@ -382,7 +380,7 @@ def _run(
                         error_type = TimeSeriesJobFailedError
                     case _:
                         assert_never(kind)
-                raise error_type(error, job_id=job_id, user_error=user_error)
+                raise error_type(error, job_id=job_id)
             case _JobPending():
                 if time.monotonic() > deadline:
                     raise TimeoutError(
