@@ -613,13 +613,13 @@ class TestServiceClient:
         self._route_upload(mock_server)
         assert mock_server.router is not None
         mock_server.router.post("/tabpfn/cross_validate").respond(
-            403,
+            422,
             json={
-                "message": "Cross-validation is not enabled for this account.",
-                "error_code": "FORBIDDEN",
+                "message": "A job has at most 100 splits over all repeats.",
+                "error_code": "REQUEST_VALIDATION_ERROR",
             },
         )
-        with self._patched(), pytest.raises(RuntimeError, match="not enabled"):
+        with self._patched(), pytest.raises(RuntimeError, match="at most 100 splits"):
             self._cross_validate(ApiMode.SYNC)
 
     def test_downloads_the_predictions_as_a_frame(self):
@@ -630,3 +630,16 @@ class TestServiceClient:
                 [OOF_URL], ClientOptions()
             )
         pd.testing.assert_frame_equal(downloaded, frame)
+
+    def test_downloads_one_frame_per_repeat_in_order(self):
+        frames = {f"{OOF_URL}?r={r}": _oof_frame([r, -1], ["a"]) for r in range(3)}
+
+        def get(url: str, **kwargs: Any) -> httpx.Response:
+            return httpx.Response(200, content=_parquet(frames[url]))
+
+        with patch.object(ServiceClient.storage_client, "get", side_effect=get):
+            downloaded = ServiceClient.download_cross_validate_predictions(
+                list(frames), ClientOptions()
+            )
+        for got, expected in zip(downloaded, frames.values(), strict=True):
+            pd.testing.assert_frame_equal(got, expected)

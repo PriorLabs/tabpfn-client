@@ -1435,7 +1435,11 @@ class ServiceClient(Singleton):
             prediction columns.
         """
         timeout = (client_options or ClientOptions()).timeout
-        return [cls._download_parquet(url, timeout=timeout) for url in urls]
+        workers = max(1, min(get_opts().TABPFN_CLIENT_MAX_THREAD_PER_UPLOAD, len(urls)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            return list(
+                pool.map(lambda url: cls._download_parquet(url, timeout=timeout), urls)
+            )
 
     # NOTE: no backoff decorator here on purpose — the polling loop already
     # retries transient errors until its deadline.
