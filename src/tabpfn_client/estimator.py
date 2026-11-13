@@ -1187,8 +1187,7 @@ class TabPFNClassifier(
                 exceeds the model limits, or the splits are invalid.
             CrossValidateFailedError: If the server reports that the job
                 failed.
-            RuntimeError: If the server rejects the request, for instance
-                because cross-validation is not enabled for the account.
+            RuntimeError: If the server rejects the request.
             TimeoutError: If a job the client polls for has not completed
                 within `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds. The model
                 then holds it: call `wait_for_cross_val_predict()`.
@@ -2006,8 +2005,7 @@ class TabPFNRegressor(
                 invalid.
             CrossValidateFailedError: If the server reports that the job
                 failed.
-            RuntimeError: If the server rejects the request, for instance
-                because cross-validation is not enabled for the account.
+            RuntimeError: If the server rejects the request.
             TimeoutError: If a job the client polls for has not completed
                 within `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds. The model
                 then holds it: call `wait_for_cross_val_predict()`.
