@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-13
+
+### Added
+
+- A `thinking_timeout_s` above the server's limit now raises a `ValueError` before the data is uploaded. ([#438](https://github.com/PriorLabs/tabpfn-client/pull/438))
+- `tabpfn_client.hosted.TabPFNClassifier` and `TabPFNRegressor` accept `tabpfn_systems` to choose which systems the serving container runs around the model, for example `[]` to send the tables with only minimal cleaning. Older containers keep working: the field is only sent when set. ([#439](https://github.com/PriorLabs/tabpfn-client/pull/439))
+- The hosted estimators can run each prediction as a job on the endpoint with `use_async=True`, so a long prediction no longer holds one connection open. ([#440](https://github.com/PriorLabs/tabpfn-client/pull/440))
+- A thinking-mode `TabPFNRegressor` documents the outputs it returns: `"mean"`, `"median"` and `"quantiles"`, where `"mean"` is the prediction that scores best on `thinking_metric`. ([#441](https://github.com/PriorLabs/tabpfn-client/pull/441))
+
+### Changed
+
+- `thinking_timeout_s` is now checked against the maximum of the chosen `thinking_effort` before the data is uploaded. ([#445](https://github.com/PriorLabs/tabpfn-client/pull/445))
+
+
 ## [0.7.1] - 2026-10-30
 
 ### Added
