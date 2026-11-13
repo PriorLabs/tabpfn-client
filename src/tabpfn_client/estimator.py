@@ -590,12 +590,14 @@ class _AsyncMixin(ModelPersistenceMixin):
             method=method,
             classes=classes,
         )
-        if result.status == "completed" and not submit:
-            return _cross_val_predictions(result, pending, self.client_options)
         self._drop_pending_cross_val_predict()
         self._pending_cross_val_predict = pending
         if submit:
             return None
+        if result.status == "completed":
+            output = _cross_val_predictions(result, pending, self.client_options)
+            self._pending_cross_val_predict = None
+            return output
         return self._await_cross_val_predict(result.retry_in_secs or 0.0)
 
     def _drop_pending_cross_val_predict(self) -> None:

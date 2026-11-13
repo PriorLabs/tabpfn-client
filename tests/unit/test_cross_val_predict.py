@@ -105,12 +105,14 @@ def _offline_server(
     *,
     first: str = "completed",
     wait_outcome: BaseException | None = None,
+    download_outcome: BaseException | None = None,
     classes: list[Any] = list(CLASSES),
 ) -> Generator[SimpleNamespace]:
     """Run the estimators with no network: no auth, mocked inference.
 
     The server answers a cross-validation `first` (completed or pending), as
     `CV_JOB_ID`; waiting for it raises `wait_outcome`, or finds it completed.
+    The first download of the predictions raises `download_outcome`.
     A classification job reports `classes`. The predictions follow
     `_oof_frame` for the fold ids it was sent.
     """
@@ -131,8 +133,12 @@ def _offline_server(
             raise wait_outcome
         return _completed(classes=job_classes())
 
+    failures = [download_outcome] if download_outcome is not None else []
+
     def download(urls: list[str], client_options: Any = None) -> list[pd.DataFrame]:
         assert urls == [OOF_URL]
+        if failures:
+            raise failures.pop()
         return [_oof_frame(sent["fold_ids"][0], job_classes())]
 
     try:
@@ -378,6 +384,25 @@ class TestSubmitAndWait:
             model.submit_cross_val_predict(X, Y_REGRESSION)
             with pytest.raises(CrossValidateFailedError):
                 model.wait_for_cross_val_predict()
+        assert model._pending_cross_val_predict is None
+
+    def test_a_job_completed_on_submit_replaces_the_pending_job(self):
+        model = TabPFNRegressor()
+        with _offline_server(first="pending") as server:
+            model.submit_cross_val_predict(X, Y_REGRESSION)
+            server.cv.side_effect = None
+            server.cv.return_value = _completed(NEW_CV_JOB_ID)
+            assert len(model.cross_val_predict(X, Y_REGRESSION)) == N_ROWS
+        assert model._pending_cross_val_predict is None
+
+    def test_a_completed_job_whose_download_fails_stays_pending(self):
+        model = TabPFNRegressor()
+        with _offline_server(download_outcome=OSError("reset")) as server:
+            with pytest.raises(OSError):
+                model.cross_val_predict(X, Y_REGRESSION)
+            assert _pending_id(model) == CV_JOB_ID
+            server.wait.assert_not_called()
+            assert len(model.wait_for_cross_val_predict()) == N_ROWS
         assert model._pending_cross_val_predict is None
 
     def test_a_new_submit_replaces_the_pending_job(self, caplog):
