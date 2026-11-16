@@ -140,6 +140,30 @@ def test__validate_series__bad_table__raises(mutate, match):
         validate_series(mutate(_series()), freq="D", **COLS)
 
 
+def test__validate_series__items_without_data__raises_naming_them():
+    df = _series(n_items=3).assign(y=lambda d: d["y"].mask(d["item_id"] != "i1"))
+    with pytest.raises(InvalidSeriesError) as e:
+        validate_series(df, freq="D", **COLS)
+    assert str(e.value) == (
+        "2 item(s) have no data: 'i0', 'i2'. Every item needs at least one observed "
+        "(non-NaN) value in each target. Drop these items, or send their values."
+    )
+
+
+def test__validate_series__items_without_data__names_ten_and_counts_the_rest():
+    df = _series(n_items=13).assign(y=float("nan"))
+    with pytest.raises(InvalidSeriesError, match="13 item") as e:
+        validate_series(df, freq="D", **COLS)
+    assert "'i6' and 3 more." in str(e.value)
+    assert "'i7'" not in str(e.value)
+
+
+def test__validate_series__one_target_empty_for_an_item__raises():
+    df = _series().assign(z=lambda d: d["y"].mask(d["item_id"] == "i0"))
+    with pytest.raises(InvalidSeriesError, match=r"1 item\(s\) have no data: 'i0'"):
+        validate_series(df, freq="D", **{**COLS, "target_columns": ["y", "z"]})
+
+
 # The worker takes a target of any type `is_numeric_dtype` accepts, bools included.
 _NUMBER_TARGETS = {
     "int64": lambda y: y.astype("int64"),

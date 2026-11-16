@@ -110,6 +110,9 @@ _JobResult = TypeAdapter(
 )
 
 
+_MAX_NAMED_ITEMS = 10
+
+
 # --- checks -------------------------------------------------------------------------
 
 
@@ -124,7 +127,8 @@ def validate_series(
     """Raise `InvalidSeriesError` if the server would reject `series`.
 
     The rules are the same as the worker's, in its order: no column has two roles,
-    the column names are unique, every column has a role, the table has rows, the targets are finite
+    the column names are unique, every column has a role, the table has rows, every item has an observed value in each target, the targets
+    are finite
     numbers, the timestamps parse, and each item's timestamps are on the `freq` grid with no gaps or duplicates.
     """
     roles = [id_column, timestamp_column, *target_columns]
@@ -164,6 +168,8 @@ def validate_series(
                 f"Target column {t!r} has type {series[t].dtype}, not a number type. "
                 "Convert it to int or float."
             )
+    _check_items_have_data(series, id_column=id_column, target_columns=target_columns)
+    for t in target_columns:
         # In float32, the precision the service computes in, so a float64 value too large
         # for it is refused.
         with np.errstate(over="ignore"):
@@ -194,6 +200,25 @@ def validate_series(
         _check_item(
             pd.DatetimeIndex(g["ts"]), item_id=item_id, freq=freq, offset=offset
         )
+
+
+def _check_items_have_data(
+    series: pd.DataFrame, *, id_column: str, target_columns: Sequence[str]
+) -> None:
+    """Refuse the request if an item has no observed value in some target column."""
+    ids = series[id_column].astype(str)
+    observed = series[list(target_columns)].notna().groupby(ids).any()
+    empty = [str(i) for i in observed.index[~observed.all(axis=1)]]
+    if not empty:
+        return
+    shown = ", ".join(repr(i) for i in empty[:_MAX_NAMED_ITEMS])
+    if len(empty) > _MAX_NAMED_ITEMS:
+        shown += f" and {len(empty) - _MAX_NAMED_ITEMS} more"
+    raise InvalidSeriesError(
+        f"{len(empty)} item(s) have no data: {shown}. Every item needs at least one "
+        "observed (non-NaN) value in each target. Drop these items, or send their "
+        "values."
+    )
 
 
 def _offset(freq: str) -> pd.DateOffset:
