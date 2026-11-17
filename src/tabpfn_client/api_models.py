@@ -122,9 +122,13 @@ class ClassifierTabPFNConfig(BaseModel):
         default=None,
         description="`autocast` always uses mixed precision. `auto` selects the precision from the hardware.",
     )
-    presets: str | list[str] | None = Field(
+    presets: (
+        Annotated[Literal["zero_inflated", "grouped"] | str, Field(union_mode="left_to_right")]
+        | list[Annotated[Literal["zero_inflated", "grouped"] | str, Field(union_mode="left_to_right")]]
+        | None
+    ) = Field(
         default=None,
-        description="Names of bundles of inference settings, such as `zero_inflated` for regression targets with many exact zeros. A later preset wins over an earlier one, and the keys of `inference_config` win over every preset. If unset, the model uses the settings of its checkpoint.",
+        description="Names of bundles of inference settings. `zero_inflated` is for regression targets with many exact zeros. `grouped` pools the predictions of a group and needs `group_col`. Several presets combine, a later one winning over an earlier one, and the keys of `inference_config` win over every preset. If unset, the model uses the settings of its checkpoint.",
     )
     ignore_pretraining_limits: bool | None = Field(
         default=None,
@@ -391,9 +395,13 @@ class RegressorTabPFNConfig(BaseModel):
         default=None,
         description="`autocast` always uses mixed precision. `auto` selects the precision from the hardware.",
     )
-    presets: str | list[str] | None = Field(
+    presets: (
+        Annotated[Literal["zero_inflated", "grouped"] | str, Field(union_mode="left_to_right")]
+        | list[Annotated[Literal["zero_inflated", "grouped"] | str, Field(union_mode="left_to_right")]]
+        | None
+    ) = Field(
         default=None,
-        description="Names of bundles of inference settings, such as `zero_inflated` for regression targets with many exact zeros. A later preset wins over an earlier one, and the keys of `inference_config` win over every preset. If unset, the model uses the settings of its checkpoint.",
+        description="Names of bundles of inference settings. `zero_inflated` is for regression targets with many exact zeros. `grouped` pools the predictions of a group and needs `group_col`. Several presets combine, a later one winning over an earlier one, and the keys of `inference_config` win over every preset. If unset, the model uses the settings of its checkpoint.",
     )
     ignore_pretraining_limits: bool | None = Field(
         default=None,
