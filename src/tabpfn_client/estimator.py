@@ -67,7 +67,7 @@ from tabpfn_client.api_models import (
     FitTimings,
     GetCrossValidateResultResponse,
 )
-from tabpfn_client.models import ApiMode, TabPFNConfig, FitModeLiteral
+from tabpfn_client.models import ApiMode, TabPFNConfig, FitModeLiteral, PresetLiteral
 from tabpfn_client.persistence import ModelPersistenceMixin, _PendingPredict
 
 try:
@@ -670,7 +670,7 @@ class TabPFNClassifier(
         inference_precision: Literal["autocast", "auto"] | None = None,
         random_state: int | None = 0,
         inference_config: dict[str, Any] | None = None,
-        presets: str | list[str] | None = None,
+        presets: PresetLiteral | list[PresetLiteral] | None = None,
         categorical_features_indices: list[int] | None = None,
         fit_mode: FitModeLiteral | None = None,
         # end: tabpfn_config
@@ -757,9 +757,10 @@ class TabPFNClassifier(
                 and the preprocess transforms need to be dictionaries.
 
             presets:
-                Names of bundles of `inference_config` values. A later preset wins over
-                an earlier one, and the keys of `inference_config` win over every
-                preset. If None, the model uses the settings of its checkpoint.
+                Names of bundles of `inference_config` values. `"grouped"` pools the
+                predictions of a group and needs `group_col`. The keys of
+                `inference_config` win over every preset. If None, the model uses the
+                settings of its checkpoint.
 
             categorical_features_indices:
                 The indices of the columns that should be treated as categorical.
@@ -1472,7 +1473,7 @@ class TabPFNRegressor(
         inference_precision: Literal["autocast", "auto"] | None = None,
         random_state: int | None = 0,
         inference_config: dict[str, Any] | None = None,
-        presets: str | list[str] | None = None,
+        presets: PresetLiteral | list[PresetLiteral] | None = None,
         categorical_features_indices: list[int] | None = None,
         fit_mode: FitModeLiteral | None = None,
         # end: tabpfn_config
@@ -1554,9 +1555,11 @@ class TabPFNRegressor(
 
             presets:
                 Names of bundles of `inference_config` values. `"zero_inflated"` is
-                for nonnegative targets with many exact zeros. A later preset wins over
-                an earlier one, and the keys of `inference_config` win over every
-                preset. If None, the model uses the settings of its checkpoint.
+                for nonnegative targets with many exact zeros. `"grouped"` pools the
+                predictions of a group and needs `group_col`. Presets combine, as in
+                `["zero_inflated", "grouped"]`: a later preset wins over an earlier
+                one, and the keys of `inference_config` win over every preset. If
+                None, the model uses the settings of its checkpoint.
 
             categorical_features_indices:
                 The indices of the columns that should be treated as categorical.

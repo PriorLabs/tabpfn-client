@@ -52,6 +52,8 @@ def _normalize_type(tp: object) -> object:
             return _normalize_type(args[0])
         parts = tuple(_normalize_type(a) for a in args)
         return parts[0] if len(parts) == 1 else frozenset(parts)
+    if get_origin(tp) is list:
+        return list[_normalize_type(get_args(tp)[0])]
     # A str-backed ``Enum`` compares equal to the ``Literal`` of its values, so
     # the server's enum fields line up with the estimator's ``Literal[...]`` ones.
     if isinstance(tp, type) and issubclass(tp, Enum):

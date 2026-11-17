@@ -17,6 +17,7 @@ TabPFNConfig = ClassifierTabPFNConfig | RegressorTabPFNConfig
 
 # Literal over enum to keep same static checks as the tabpfn package.
 FitModeLiteral = Literal["fit_preprocessors", "fit_with_cache"]
+PresetLiteral = Literal["zero_inflated", "grouped"]
 
 
 class ApiMode(str, Enum):
