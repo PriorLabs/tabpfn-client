@@ -55,6 +55,7 @@ from tabpfn_client.api_models import (
     ClassifierConfig,
     RegressorConfig,
     ThinkingConfig,
+    ThinkingLimit,
     FitTaskConfig,
     ClassifierFitTaskConfig,
     RegressorFitTaskConfig,
@@ -949,12 +950,14 @@ class TabPFNClassifier(
         init()
         tabpfn_config = self._get_tabpfn_config()
 
-        validate_train_set(X, y, model_path=tabpfn_config.model_path)
+        # NOTE: Always resolve, do not re-assign to self.thinking_mode, user could change effort.
+        thinking_mode = _resolve_thinking_mode(self.thinking_mode, self.thinking_effort)
+        validate_train_set(
+            X, y, model_path=tabpfn_config.model_path, thinking=thinking_mode
+        )
         X_clean = _clean_text_features(X)
         classes = self._validate_targets_and_classes(y)
 
-        # NOTE: Always resolve, do not re-assign to self.thinking_mode, user could change effort.
-        thinking_mode = _resolve_thinking_mode(self.thinking_mode, self.thinking_effort)
         # Only thinking needs 2 classes; a standard fit accepts one, like the local
         # package. Checked here so the caller doesn't wait for the upload to find out.
         if thinking_mode and len(classes) < 2:
@@ -1722,11 +1725,13 @@ class TabPFNRegressor(
         init()
         tabpfn_config = self._get_tabpfn_config()
 
-        validate_train_set(X, y, model_path=tabpfn_config.model_path)
+        thinking_mode = _resolve_thinking_mode(self.thinking_mode, self.thinking_effort)
+        validate_train_set(
+            X, y, model_path=tabpfn_config.model_path, thinking=thinking_mode
+        )
         self._validate_targets(y)
         X_clean = _clean_text_features(X)
 
-        thinking_mode = _resolve_thinking_mode(self.thinking_mode, self.thinking_effort)
         task_config = _build_fit_task_config(tabpfn_config)
         tabpfn_systems = _build_tabpfn_systems(self.paper_version, thinking_mode)
         thinking_config = _build_thinking_config(
@@ -2266,6 +2271,8 @@ def validate_train_set(
     X: pd.DataFrame | np.ndarray,
     y: pd.Series | np.ndarray | None = None,
     model_path: str | None = None,
+    *,
+    thinking: bool = False,
 ) -> None:
     """Check the integrity of the training data.
 
@@ -2273,6 +2280,7 @@ def validate_train_set(
         X: The training input data.
         y: The training targets, if available.
         model_path: The model the data is fitted with; selects the limits.
+        thinking: Whether the fit runs in thinking mode, which has its own limits.
 
     Raises:
         ValueError: If `X` and `y` differ in length, or `X` exceeds the model's
@@ -2283,7 +2291,11 @@ def validate_train_set(
         if X.shape[0] != y.shape[0]:
             raise ValueError("X and y must have the same number of samples")
 
-    limit = _limit_for_model_path(model_path)
+    limit: ModelLimit | ThinkingLimit | None = None
+    if thinking:
+        limit = _thinking_limit(ServiceClient.get_settings(), model_path)
+    if limit is None:
+        limit = _limit_for_model_path(model_path)
     if limit is None:
         return
 
@@ -2638,7 +2650,19 @@ def _thinking_level_timeout_cap(
     settings: GetSettingsResponse, *, effort: str | None, model_path: str | None
 ) -> float | None:
     """The longest timeout the server takes at `effort` for this fit, if it says."""
-    if effort is None or settings.thinking_model_limits is None:
+    if effort is None:
+        return None
+    limit = _thinking_limit(settings, model_path)
+    if limit is None or limit.max_timeout_secs is None:
+        return None
+    return limit.max_timeout_secs.get(effort)
+
+
+def _thinking_limit(
+    settings: GetSettingsResponse | None, model_path: str | None
+) -> ThinkingLimit | None:
+    """The server's limits for a thinking fit of `model_path`, if it advertises them."""
+    if settings is None or settings.thinking_model_limits is None:
         return None
     version = (
         settings.thinking_default_model_version
@@ -2647,10 +2671,7 @@ def _thinking_level_timeout_cap(
     )
     if version is None:
         return None
-    limit = settings.thinking_model_limits.get(version)
-    if limit is None or limit.max_timeout_secs is None:
-        return None
-    return limit.max_timeout_secs.get(effort)
+    return settings.thinking_model_limits.get(version)
 
 
 def _validate_group_columns(
