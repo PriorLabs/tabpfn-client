@@ -765,9 +765,9 @@ class TabPFNClassifier(
 
             presets:
                 Names of bundles of `inference_config` values. `"grouped"` pools the
-                predictions of a group and needs `group_col`. The keys of
-                `inference_config` win over every preset. If None, the model uses the
-                settings of its checkpoint.
+                predictions of a group and needs `group_col`; predict all rows of a
+                group in one call. The keys of `inference_config` win over every
+                preset. If None, the model uses the settings of its checkpoint.
 
             categorical_features_indices:
                 The indices of the columns that should be treated as categorical.
@@ -1563,10 +1563,12 @@ class TabPFNRegressor(
             presets:
                 Names of bundles of `inference_config` values. `"zero_inflated"` is
                 for nonnegative targets with many exact zeros. `"grouped"` pools the
-                predictions of a group and needs `group_col`. Presets combine, as in
-                `["zero_inflated", "grouped"]`: a later preset wins over an earlier
-                one, and the keys of `inference_config` win over every preset. If
-                None, the model uses the settings of its checkpoint.
+                predictions of a group and needs `group_col`; predict all rows of a
+                group in one call. Presets combine, as in
+                `["zero_inflated", "grouped"]`, and none overrides another: presets
+                that set one setting to different values are rejected. The keys of
+                `inference_config` win over every preset. If None, the model uses
+                the settings of its checkpoint.
 
             categorical_features_indices:
                 The indices of the columns that should be treated as categorical.
