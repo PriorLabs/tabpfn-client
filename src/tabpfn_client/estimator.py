@@ -827,11 +827,12 @@ class TabPFNClassifier(
 
             group_col:
                 New since 0.6.0. Column(s) of `X` that identify groups of related
-                rows, e.g. a patient or a session id. During the fit, the rows of
-                one group are never split between training and validation. The fit
-                may also use the other rows of a group to predict a row of it.
-                Requires thinking mode, and `X` passed to `fit` and `predict` must
-                be a pandas DataFrame that holds the column(s).
+                rows, e.g. a patient or a session id. The model replaces them with
+                one categorical feature that holds the group. In thinking mode, the
+                rows of one group are also never split between training and
+                validation, and the fit may use the other rows of a group to predict
+                a row of it. `X` passed to `fit` and `predict` must be a pandas
+                DataFrame that holds the column(s).
 
             time_col:
                 New since 0.6.0. Column of `X` that holds time, as datetimes or
@@ -1376,6 +1377,9 @@ class TabPFNClassifier(
             # Nones are treated as unset
             if k in ClassifierTabPFNConfig.model_fields and v is not None
         }
+        if _resolve_thinking_mode(self.thinking_mode, self.thinking_effort):
+            # Thinking mode sends the group columns in its own config.
+            cfg.pop("group_col", None)
         return ClassifierTabPFNConfig.model_validate(cfg)
 
     def _get_predict_params(self, kwargs: dict[str, Any]) -> ClassifierPredictParams:
@@ -1611,11 +1615,12 @@ class TabPFNRegressor(
 
             group_col:
                 New since 0.6.0. Column(s) of `X` that identify groups of related
-                rows, e.g. a patient or a session id. During the fit, the rows of
-                one group are never split between training and validation. The fit
-                may also use the other rows of a group to predict a row of it.
-                Requires thinking mode, and `X` passed to `fit` and `predict` must
-                be a pandas DataFrame that holds the column(s).
+                rows, e.g. a patient or a session id. The model replaces them with
+                one categorical feature that holds the group. In thinking mode, the
+                rows of one group are also never split between training and
+                validation, and the fit may use the other rows of a group to predict
+                a row of it. `X` passed to `fit` and `predict` must be a pandas
+                DataFrame that holds the column(s).
 
             time_col:
                 New since 0.6.0. Column of `X` that holds time, as datetimes or
@@ -2259,6 +2264,9 @@ class TabPFNRegressor(
             # Nones are treated as unset
             if k in RegressorTabPFNConfig.model_fields and v is not None
         }
+        if _resolve_thinking_mode(self.thinking_mode, self.thinking_effort):
+            # Thinking mode sends the group columns in its own config.
+            cfg.pop("group_col", None)
         return RegressorTabPFNConfig.model_validate(cfg)
 
     def _get_predict_params(self, kwargs: dict[str, Any]) -> RegressorPredictParams:
@@ -2700,21 +2708,22 @@ def _validate_group_columns(
     """Check `group_col`, `time_col` and `group_time_col` against `X` and thinking mode.
 
     The server reads these columns by name from the data passed to `fit` and to
-    `predict`, so `X` must be a DataFrame that holds them. For now only thinking mode
-    uses them.
+    `predict`, so `X` must be a DataFrame that holds them. `time_col` and
+    `group_time_col` need thinking mode.
 
     Raises:
-        ValueError: A column is named without thinking mode, the combination is
-            invalid, `X` is not a DataFrame, or `X` lacks a named column.
+        ValueError: `time_col` or `group_time_col` is set without thinking mode, the
+            combination is invalid, `X` is not a DataFrame, or `X` lacks a named
+            column.
     """
     group_cols = [group_col] if isinstance(group_col, str) else list(group_col or [])
     named = [*group_cols, *(c for c in (time_col, group_time_col) if c is not None)]
     if not named:
         return
-    if not enabled:
+    if not enabled and (time_col is not None or group_time_col is not None):
         raise ValueError(
-            "`group_col`, `time_col` and `group_time_col` are only supported in "
-            "thinking mode. Set `thinking_mode=True`."
+            "`time_col` and `group_time_col` are only supported in thinking mode. "
+            "Set `thinking_mode=True`."
         )
     if group_col is not None and time_col is not None:
         raise ValueError("`group_col` and `time_col` cannot be combined.")
