@@ -239,6 +239,9 @@ class _AsyncMixin(ModelPersistenceMixin):
     paper_version: bool
     thinking_mode: bool
     thinking_effort: ThinkingEffort | None
+    group_col: str | list[str] | None
+    time_col: str | None
+    group_time_col: str | None
     api_mode: ApiMode
     _fit_count: int
 

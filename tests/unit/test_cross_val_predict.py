@@ -282,7 +282,7 @@ class TestClassifier:
         ("X_cv", "match"),
         [
             (X, "must be a pandas DataFrame"),
-            (pd.DataFrame(X, columns=["a", "b"]), "missing the columns"),
+            (pd.DataFrame(X, columns=pd.Index(["a", "b"])), "missing the columns"),
         ],
     )
     def test_an_invalid_group_col_raises_before_any_request(self, X_cv, match):
@@ -292,7 +292,7 @@ class TestClassifier:
         server.cv.assert_not_called()
 
     def test_group_col_is_sent_in_the_tabpfn_config(self):
-        X_groups = pd.DataFrame(X, columns=["a", "patient"])
+        X_groups = pd.DataFrame(X, columns=pd.Index(["a", "patient"]))
         with _offline_server() as server:
             TabPFNClassifier(group_col="patient").cross_val_predict(
                 X_groups, Y_CLASSES, cv=3
