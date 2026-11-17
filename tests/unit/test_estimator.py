@@ -266,3 +266,10 @@ def test_sklearn_compatible(
             )
     finally:
         Config.use_server = use_server_before
+
+
+@pytest.mark.parametrize("estimator", [TabPFNClassifier, TabPFNRegressor])
+@pytest.mark.parametrize("value", [True, "auto"])
+def test_average_before_softmax_reaches_the_tabpfn_config(estimator, value):
+    config = estimator(average_before_softmax=value)._get_tabpfn_config()
+    assert config.average_before_softmax == value
