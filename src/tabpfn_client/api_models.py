@@ -104,9 +104,9 @@ class ClassifierTabPFNConfig(BaseModel):
         default=None,
         description="A lower value makes the predicted probabilities more confident. The value 1.0 has no effect. If unset, the model uses its default value.",
     )
-    average_before_softmax: bool | None = Field(
+    average_before_softmax: bool | Literal["auto"] | None = Field(
         default=None,
-        description="If true, the model averages the logits of the ensemble members before the softmax. If false, it averages their probabilities after the softmax.",
+        description="If true, the model averages the logits of the ensemble members before the softmax. If false, it averages their probabilities after the softmax. `auto` takes the setting of the checkpoint, as does unset. A true or false value cannot be combined with `AVERAGE_BEFORE_SOFTMAX` in `inference_config`.",
     )
     random_state: int | None = Field(
         default=None,
@@ -377,9 +377,9 @@ class RegressorTabPFNConfig(BaseModel):
         default=None,
         description="A lower value makes the predicted probabilities more confident. The value 1.0 has no effect. If unset, the model uses its default value.",
     )
-    average_before_softmax: bool | None = Field(
+    average_before_softmax: bool | Literal["auto"] | None = Field(
         default=None,
-        description="If true, the model averages the logits of the ensemble members before the softmax. If false, it averages their probabilities after the softmax.",
+        description="If true, the model averages the logits of the ensemble members before the softmax. If false, it averages their probabilities after the softmax. `auto` takes the setting of the checkpoint, as does unset. A true or false value cannot be combined with `AVERAGE_BEFORE_SOFTMAX` in `inference_config`.",
     )
     random_state: int | None = Field(
         default=None,

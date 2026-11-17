@@ -665,7 +665,7 @@ class TabPFNClassifier(
         n_estimators: int | None = None,
         softmax_temperature: float | None = None,
         balance_probabilities: bool = False,
-        average_before_softmax: bool | None = None,
+        average_before_softmax: bool | Literal["auto"] | None = None,
         ignore_pretraining_limits: bool = False,
         inference_precision: Literal["autocast", "auto"] | None = None,
         random_state: int | None = 0,
@@ -731,7 +731,9 @@ class TabPFNClassifier(
                 the estimators before applying the softmax function. This can help to
                 improve predictive performance when there are many classes or when
                 calibrating the model's confidence. This is only applied when predicting
-                during a post-processing step. If None, the server default is used.
+                during a post-processing step. `"auto"` or None take the setting of
+                the checkpoint. True or False cannot be combined with
+                `AVERAGE_BEFORE_SOFTMAX` in `inference_config`.
 
             ignore_pretraining_limits:
                 Whether to ignore the pre-training limits of the model. The TabPFN
@@ -1464,7 +1466,7 @@ class TabPFNRegressor(
         model_path: str | None = None,
         n_estimators: int | None = None,
         softmax_temperature: float | None = None,
-        average_before_softmax: bool | None = None,
+        average_before_softmax: bool | Literal["auto"] | None = None,
         ignore_pretraining_limits: bool = False,
         inference_precision: Literal["autocast", "auto"] | None = None,
         random_state: int | None = 0,
@@ -1523,8 +1525,9 @@ class TabPFNRegressor(
                 Only used if `n_estimators > 1`. Whether to average the predictions of
                 the estimators before applying the softmax function. This can help to
                 improve predictive performance when calibrating the model's confidence.
-                This is only applied when predicting during a post-processing step. If
-                None, the server default is used.
+                This is only applied when predicting during a post-processing step.
+                `"auto"` or None take the setting of the checkpoint. True or False
+                cannot be combined with `AVERAGE_BEFORE_SOFTMAX` in `inference_config`.
 
             ignore_pretraining_limits:
                 Whether to ignore the pre-training limits of the model. The TabPFN
