@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-17
+
+### Added
+
+- `TabPFNClassifier` and `TabPFNRegressor` gain `cross_val_predict()`, with `submit_cross_val_predict()` and `wait_for_cross_val_predict()`, which return out-of-fold predictions from one cross-validation job on the server. ([#444](https://github.com/PriorLabs/tabpfn-client/pull/444))
+
+### Fixed
+
+- A thinking-mode `fit()` now checks the training data against the server's thinking limits instead of the standard model limits, so it no longer rejects data the server accepts. ([#449](https://github.com/PriorLabs/tabpfn-client/pull/449))
+
+
 ## [0.8.0] - 2026-11-13
 
 ### Added
