@@ -670,6 +670,7 @@ class TabPFNClassifier(
         inference_precision: Literal["autocast", "auto"] | None = None,
         random_state: int | None = 0,
         inference_config: dict[str, Any] | None = None,
+        presets: str | list[str] | None = None,
         categorical_features_indices: list[int] | None = None,
         fit_mode: FitModeLiteral | None = None,
         # end: tabpfn_config
@@ -754,6 +755,11 @@ class TabPFNClassifier(
                 behavior of the model interface. See `InferenceConfig` in the tabpfn
                 package for details and options. For the client, the inference_config
                 and the preprocess transforms need to be dictionaries.
+
+            presets:
+                Names of bundles of `inference_config` values. A later preset wins over
+                an earlier one, and the keys of `inference_config` win over every
+                preset. If None, the model uses the settings of its checkpoint.
 
             categorical_features_indices:
                 The indices of the columns that should be treated as categorical.
@@ -878,6 +884,7 @@ class TabPFNClassifier(
         self.inference_precision = inference_precision
         self.random_state = random_state
         self.inference_config = inference_config
+        self.presets = presets
         self.fit_mode = fit_mode
         self.text_handling = text_handling
         self.paper_version = paper_version
@@ -1461,6 +1468,7 @@ class TabPFNRegressor(
         inference_precision: Literal["autocast", "auto"] | None = None,
         random_state: int | None = 0,
         inference_config: dict[str, Any] | None = None,
+        presets: str | list[str] | None = None,
         categorical_features_indices: list[int] | None = None,
         fit_mode: FitModeLiteral | None = None,
         # end: tabpfn_config
@@ -1539,6 +1547,12 @@ class TabPFNRegressor(
                 behavior of the model interface. See `InferenceConfig` in the tabpfn
                 package for details and options. For the client, the inference_config
                 and the preprocess transforms need to be dictionaries.
+
+            presets:
+                Names of bundles of `inference_config` values. `"zero_inflated"` is
+                for nonnegative targets with many exact zeros. A later preset wins over
+                an earlier one, and the keys of `inference_config` win over every
+                preset. If None, the model uses the settings of its checkpoint.
 
             categorical_features_indices:
                 The indices of the columns that should be treated as categorical.
@@ -1653,6 +1667,7 @@ class TabPFNRegressor(
         self.inference_precision = inference_precision
         self.random_state = random_state
         self.inference_config = inference_config
+        self.presets = presets
         self.fit_mode = fit_mode
         self.text_handling = text_handling
         self.paper_version = paper_version

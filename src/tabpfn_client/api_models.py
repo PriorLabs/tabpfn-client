@@ -122,6 +122,10 @@ class ClassifierTabPFNConfig(BaseModel):
         default=None,
         description="`autocast` always uses mixed precision. `auto` selects the precision from the hardware.",
     )
+    presets: str | list[str] | None = Field(
+        default=None,
+        description="Names of bundles of inference settings, such as `zero_inflated` for regression targets with many exact zeros. A later preset wins over an earlier one, and the keys of `inference_config` win over every preset. If unset, the model uses the settings of its checkpoint.",
+    )
     ignore_pretraining_limits: bool | None = Field(
         default=None,
         description="If true, the server accepts data outside the size ranges of the model's pre-training, and predictions on that data may be worse. If false, the server rejects that data.",
@@ -386,6 +390,10 @@ class RegressorTabPFNConfig(BaseModel):
     ) = Field(
         default=None,
         description="`autocast` always uses mixed precision. `auto` selects the precision from the hardware.",
+    )
+    presets: str | list[str] | None = Field(
+        default=None,
+        description="Names of bundles of inference settings, such as `zero_inflated` for regression targets with many exact zeros. A later preset wins over an earlier one, and the keys of `inference_config` win over every preset. If unset, the model uses the settings of its checkpoint.",
     )
     ignore_pretraining_limits: bool | None = Field(
         default=None,
