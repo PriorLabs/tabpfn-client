@@ -537,14 +537,21 @@ class _AsyncMixin(ModelPersistenceMixin):
 
         Raises:
             ValueError: If thinking mode is on, the data exceeds the model
-                limits, or the splits are not disjoint test sets that each
-                train on every other row.
+                limits, the group columns are invalid for `X`, or the splits are
+                not disjoint test sets that each train on every other row.
         """
         text_handling = validate_text_handling(self.text_handling)
         if _resolve_thinking_mode(self.thinking_mode, self.thinking_effort):
             raise ValueError("cross_val_predict() does not support thinking mode.")
         init()
         validate_train_set(X, y, model_path=self._get_tabpfn_config().model_path)
+        _validate_group_columns(
+            X,
+            enabled=False,
+            group_col=self.group_col,
+            time_col=self.time_col,
+            group_time_col=self.group_time_col,
+        )
         fold_ids = _cv_fold_ids(cv, X, y, groups, classifier=classifier)
         return _clean_text_features(X), fold_ids, text_handling
 
