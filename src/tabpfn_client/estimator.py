@@ -67,7 +67,13 @@ from tabpfn_client.api_models import (
     FitTimings,
     GetCrossValidateResultResponse,
 )
-from tabpfn_client.models import ApiMode, TabPFNConfig, FitModeLiteral, PresetLiteral
+from tabpfn_client.models import (
+    ApiMode,
+    ClassifierPresetLiteral,
+    FitModeLiteral,
+    RegressorPresetLiteral,
+    TabPFNConfig,
+)
 from tabpfn_client.persistence import ModelPersistenceMixin, _PendingPredict
 
 try:
@@ -680,7 +686,7 @@ class TabPFNClassifier(
         inference_precision: Literal["autocast", "auto"] | None = None,
         random_state: int | None = 0,
         inference_config: dict[str, Any] | None = None,
-        presets: PresetLiteral | list[PresetLiteral] | None = None,
+        presets: ClassifierPresetLiteral | list[ClassifierPresetLiteral] | None = None,
         categorical_features_indices: list[int] | None = None,
         fit_mode: FitModeLiteral | None = None,
         # end: tabpfn_config
@@ -1390,6 +1396,11 @@ class TabPFNClassifier(
             # Nones are treated as unset
             if k in ClassifierTabPFNConfig.model_fields and v is not None
         }
+        presets = [self.presets] if isinstance(self.presets, str) else self.presets
+        if "zero_inflated" in (presets or []):
+            raise ValueError(
+                "The `zero_inflated` preset is for regression only. Use TabPFNRegressor."
+            )
         if _resolve_thinking_mode(self.thinking_mode, self.thinking_effort):
             # Thinking mode sends the group columns in its own config.
             cfg.pop("group_col", None)
@@ -1485,7 +1496,7 @@ class TabPFNRegressor(
         inference_precision: Literal["autocast", "auto"] | None = None,
         random_state: int | None = 0,
         inference_config: dict[str, Any] | None = None,
-        presets: PresetLiteral | list[PresetLiteral] | None = None,
+        presets: RegressorPresetLiteral | list[RegressorPresetLiteral] | None = None,
         categorical_features_indices: list[int] | None = None,
         fit_mode: FitModeLiteral | None = None,
         # end: tabpfn_config
