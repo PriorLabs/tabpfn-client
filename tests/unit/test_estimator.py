@@ -70,13 +70,27 @@ _NOT_YET_EXPOSED_VALUES = {
 _NOT_YET_EXPOSED_PARAMS = {"top_k"}
 
 
+# Server options shared by both tasks that one estimator does not offer.
+_NOT_OFFERED_BY_ESTIMATOR = {
+    ("TabPFNClassifier", "presets"): {"zero_inflated"},
+}
+
+
+def _without(tp: object, hidden: set[str]) -> object:
+    """Drop ``hidden`` from the ``Literal`` values in a normalized type."""
+    if get_origin(tp) is Literal:
+        return Literal[tuple(v for v in get_args(tp) if v not in hidden)]
+    if get_origin(tp) is list:
+        return list[_without(get_args(tp)[0], hidden)]
+    if isinstance(tp, frozenset):
+        return frozenset(_without(t, hidden) for t in tp)
+    return tp
+
+
 def _exposed(param: str, tp: object) -> object:
-    """Drop from a normalized ``Literal`` the values of ``param`` the estimators
+    """Drop from a normalized type the values of ``param`` the estimators
     don't expose yet."""
-    hidden = _NOT_YET_EXPOSED_VALUES.get(param)
-    if hidden is None or get_origin(tp) is not Literal:
-        return tp
-    return Literal[tuple(v for v in get_args(tp) if v not in hidden)]
+    return _without(tp, _NOT_YET_EXPOSED_VALUES.get(param, set()))
 
 
 _ALLOWED_NON_NULL_DEFAULT_TABPFN_CONFIG_PARAMS = [
@@ -107,7 +121,10 @@ def test_client_config_includes_server_config(
         assert param in init_params, (
             f"Field `{param}` is absent from {estimator.__name__}.__init__()."
         )
-        expected = _exposed(param, _normalize_type(field.annotation))
+        expected = _without(
+            _exposed(param, _normalize_type(field.annotation)),
+            _NOT_OFFERED_BY_ESTIMATOR.get((estimator.__name__, param), set()),
+        )
         actual = _normalize_type(init_hints[param])
         assert actual == expected, (
             f"Type of `{param}` on {estimator.__name__}.__init__() is {actual}, "
