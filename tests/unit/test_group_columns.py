@@ -1,4 +1,8 @@
-"""`group_col`, `time_col` and `group_time_col` are checked client side and sent with the fit."""
+"""`group_col`, `time_col` and `group_time_col` are checked client side and sent with the fit.
+
+Without thinking mode, `group_col` goes in the `tabpfn_config`; with it, in the thinking
+config.
+"""
 
 import time
 from uuid import UUID
@@ -55,6 +59,31 @@ def test_fit_sends_group_columns_in_the_thinking_config():
     assert thinking_config.group_time_col == "visit"
 
 
+@pytest.mark.parametrize("estimator", [TabPFNClassifier, TabPFNRegressor])
+def test_fit_without_thinking_sends_group_col_in_the_tabpfn_config(estimator):
+    X, y = _data()
+    with patch.object(
+        InferenceClient, "fit_with_result", return_value=_FIT_RESULT
+    ) as mock_fit:
+        estimator(group_col=["patient", "visit"]).fit(X, y)
+
+    kwargs = mock_fit.call_args.kwargs
+    assert kwargs["task_config"].tabpfn_config.group_col == ["patient", "visit"]
+    assert kwargs["thinking_config"] is None
+
+
+def test_fit_with_thinking_leaves_group_col_out_of_the_tabpfn_config():
+    X, y = _data()
+    with patch.object(
+        InferenceClient, "fit_with_result", return_value=_FIT_RESULT
+    ) as mock_fit:
+        TabPFNClassifier(thinking_effort="low", group_col="patient").fit(X, y)
+
+    kwargs = mock_fit.call_args.kwargs
+    assert kwargs["task_config"].tabpfn_config.group_col is None
+    assert kwargs["thinking_config"].group_col == "patient"
+
+
 def test_regressor_fit_sends_time_col_in_the_thinking_config():
     X, y = _data()
     with patch.object(
@@ -68,7 +97,8 @@ def test_regressor_fit_sends_time_col_in_the_thinking_config():
 @pytest.mark.parametrize(
     ("kwargs", "X", "match"),
     [
-        ({"group_col": "patient"}, _data()[0], "only supported in thinking mode"),
+        ({"time_col": "visit"}, _data()[0], "only supported in thinking mode"),
+        ({"group_col": "patient"}, _data()[0].to_numpy(), "must be a pandas DataFrame"),
         (
             {"thinking_mode": True, "group_col": "patient"},
             _data()[0].to_numpy(),

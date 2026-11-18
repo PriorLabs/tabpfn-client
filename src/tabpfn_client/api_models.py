@@ -130,6 +130,10 @@ class ClassifierTabPFNConfig(BaseModel):
         default=None,
         description="Names of bundles of inference settings. `zero_inflated` is for regression targets with many exact zeros. `grouped` pools the predictions of a group and needs `group_col`; predict all rows of a group in one request. Several presets combine. Presets that set one setting to different values are rejected. The keys of `inference_config` win over every preset. If unset, the model uses the settings of its checkpoint.",
     )
+    group_col: str | list[str] | None = Field(
+        default=None,
+        description="The column that says which group a row belongs to, such as a patient, or a list of columns whose joint value is the group. The model replaces them with one categorical feature. Fit and predict data must hold these columns. Thinking mode takes `group_col` in `thinking_config` instead.",
+    )
     ignore_pretraining_limits: bool | None = Field(
         default=None,
         description="If true, the server accepts data outside the size ranges of the model's pre-training, and predictions on that data may be worse. If false, the server rejects that data.",
@@ -402,6 +406,10 @@ class RegressorTabPFNConfig(BaseModel):
     ) = Field(
         default=None,
         description="Names of bundles of inference settings. `zero_inflated` is for regression targets with many exact zeros. `grouped` pools the predictions of a group and needs `group_col`; predict all rows of a group in one request. Several presets combine. Presets that set one setting to different values are rejected. The keys of `inference_config` win over every preset. If unset, the model uses the settings of its checkpoint.",
+    )
+    group_col: str | list[str] | None = Field(
+        default=None,
+        description="The column that says which group a row belongs to, such as a patient, or a list of columns whose joint value is the group. The model replaces them with one categorical feature. Fit and predict data must hold these columns. Thinking mode takes `group_col` in `thinking_config` instead.",
     )
     ignore_pretraining_limits: bool | None = Field(
         default=None,
