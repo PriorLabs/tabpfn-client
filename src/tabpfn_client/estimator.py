@@ -67,7 +67,13 @@ from tabpfn_client.api_models import (
     FitTimings,
     GetCrossValidateResultResponse,
 )
-from tabpfn_client.models import ApiMode, TabPFNConfig, FitModeLiteral
+from tabpfn_client.models import (
+    ApiMode,
+    ClassifierPresetLiteral,
+    FitModeLiteral,
+    RegressorPresetLiteral,
+    TabPFNConfig,
+)
 from tabpfn_client.persistence import ModelPersistenceMixin, _PendingPredict
 
 try:
@@ -665,11 +671,12 @@ class TabPFNClassifier(
         n_estimators: int | None = None,
         softmax_temperature: float | None = None,
         balance_probabilities: bool = False,
-        average_before_softmax: bool | None = None,
+        average_before_softmax: bool | Literal["auto"] | None = None,
         ignore_pretraining_limits: bool = False,
         inference_precision: Literal["autocast", "auto"] | None = None,
         random_state: int | None = 0,
         inference_config: dict[str, Any] | None = None,
+        presets: ClassifierPresetLiteral | list[ClassifierPresetLiteral] | None = None,
         categorical_features_indices: list[int] | None = None,
         fit_mode: FitModeLiteral | None = None,
         # end: tabpfn_config
@@ -730,7 +737,9 @@ class TabPFNClassifier(
                 the estimators before applying the softmax function. This can help to
                 improve predictive performance when there are many classes or when
                 calibrating the model's confidence. This is only applied when predicting
-                during a post-processing step. If None, the server default is used.
+                during a post-processing step. `"auto"` or None take the setting of
+                the checkpoint. True or False cannot be combined with
+                `AVERAGE_BEFORE_SOFTMAX` in `inference_config`.
 
             ignore_pretraining_limits:
                 Whether to ignore the pre-training limits of the model. The TabPFN
@@ -754,6 +763,12 @@ class TabPFNClassifier(
                 behavior of the model interface. See `InferenceConfig` in the tabpfn
                 package for details and options. For the client, the inference_config
                 and the preprocess transforms need to be dictionaries.
+
+            presets:
+                Names of bundles of `inference_config` values. `"grouped"` pools the
+                predictions of a group and needs `group_col`; predict all rows of a
+                group in one call. The keys of `inference_config` win over every
+                preset. If None, the model uses the settings of its checkpoint.
 
             categorical_features_indices:
                 The indices of the columns that should be treated as categorical.
@@ -878,6 +893,7 @@ class TabPFNClassifier(
         self.inference_precision = inference_precision
         self.random_state = random_state
         self.inference_config = inference_config
+        self.presets = presets
         self.fit_mode = fit_mode
         self.text_handling = text_handling
         self.paper_version = paper_version
@@ -1369,6 +1385,11 @@ class TabPFNClassifier(
             # Nones are treated as unset
             if k in ClassifierTabPFNConfig.model_fields and v is not None
         }
+        presets = [self.presets] if isinstance(self.presets, str) else self.presets
+        if "zero_inflated" in (presets or []):
+            raise ValueError(
+                "The `zero_inflated` preset is for regression only. Use TabPFNRegressor."
+            )
         return ClassifierTabPFNConfig.model_validate(cfg)
 
     def _get_predict_params(self, kwargs: dict[str, Any]) -> ClassifierPredictParams:
@@ -1456,11 +1477,12 @@ class TabPFNRegressor(
         model_path: str | None = None,
         n_estimators: int | None = None,
         softmax_temperature: float | None = None,
-        average_before_softmax: bool | None = None,
+        average_before_softmax: bool | Literal["auto"] | None = None,
         ignore_pretraining_limits: bool = False,
         inference_precision: Literal["autocast", "auto"] | None = None,
         random_state: int | None = 0,
         inference_config: dict[str, Any] | None = None,
+        presets: RegressorPresetLiteral | list[RegressorPresetLiteral] | None = None,
         categorical_features_indices: list[int] | None = None,
         fit_mode: FitModeLiteral | None = None,
         # end: tabpfn_config
@@ -1514,8 +1536,9 @@ class TabPFNRegressor(
                 Only used if `n_estimators > 1`. Whether to average the predictions of
                 the estimators before applying the softmax function. This can help to
                 improve predictive performance when calibrating the model's confidence.
-                This is only applied when predicting during a post-processing step. If
-                None, the server default is used.
+                This is only applied when predicting during a post-processing step.
+                `"auto"` or None take the setting of the checkpoint. True or False
+                cannot be combined with `AVERAGE_BEFORE_SOFTMAX` in `inference_config`.
 
             ignore_pretraining_limits:
                 Whether to ignore the pre-training limits of the model. The TabPFN
@@ -1539,6 +1562,16 @@ class TabPFNRegressor(
                 behavior of the model interface. See `InferenceConfig` in the tabpfn
                 package for details and options. For the client, the inference_config
                 and the preprocess transforms need to be dictionaries.
+
+            presets:
+                Names of bundles of `inference_config` values. `"zero_inflated"` is
+                for nonnegative targets with many exact zeros. `"grouped"` pools the
+                predictions of a group and needs `group_col`; predict all rows of a
+                group in one call. Presets combine, as in
+                `["zero_inflated", "grouped"]`, and none overrides another: presets
+                that set one setting to different values are rejected. The keys of
+                `inference_config` win over every preset. If None, the model uses
+                the settings of its checkpoint.
 
             categorical_features_indices:
                 The indices of the columns that should be treated as categorical.
@@ -1653,6 +1686,7 @@ class TabPFNRegressor(
         self.inference_precision = inference_precision
         self.random_state = random_state
         self.inference_config = inference_config
+        self.presets = presets
         self.fit_mode = fit_mode
         self.text_handling = text_handling
         self.paper_version = paper_version
