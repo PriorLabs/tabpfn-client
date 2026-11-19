@@ -469,7 +469,9 @@ class TestFoldSizes:
             _fold_sizes(fold_ids, 4)
 
 
-class TestServiceClient:
+class _ServiceClientHarness:
+    """The real HTTP layer against a mocked server, with no waiting or uploads."""
+
     UPLOAD_ID = "00000000-0000-0000-0000-000000000001"
     FOLD_IDS_UPLOAD_ID = "00000000-0000-0000-0000-000000000002"
     FOLD_IDS = [[0, 1, 0, 1, -1, 0]]
@@ -518,6 +520,8 @@ class TestServiceClient:
             },
         )
 
+
+class TestServiceClient(_ServiceClientHarness):
     def _cross_validate(self, api_mode: ApiMode) -> Any:
         return ServiceClient.cross_validate(
             np.arange(12.0).reshape(6, 2),
@@ -665,3 +669,194 @@ class TestServiceClient:
             )
         for got, expected in zip(downloaded, frames.values(), strict=True):
             pd.testing.assert_frame_equal(got, expected)
+
+
+SPLIT_URL = "https://storage.example/split_{}.parquet"
+
+
+def _split_frame(n_rows: int, classes: list[Any] | None, labels: Any) -> pd.DataFrame:
+    """What the server writes for a split: its test rows, shuffled."""
+    rows = np.arange(n_rows)[::-1]
+    if classes is None:
+        return pd.DataFrame({"row": rows, "prediction": rows.astype(float)})
+    frame = pd.DataFrame({"row": rows})
+    for c in classes:
+        frame[f"proba_{c}"] = [float(labels[r] == c) for r in rows]
+    return frame
+
+
+@contextmanager
+def _offline_splits_server(
+    classes: list[Any] | None = list(CLASSES),
+) -> Generator[SimpleNamespace]:
+    """Run `cross_val_predict_splits()` with no network.
+
+    Each split's predictions put probability 1 on the label of `Y_CLASSES` at
+    the test row's position; a regressor predicts the row's position.
+    """
+    use_server_before = Config.use_server
+    Config.use_server = True
+    sent: dict[str, Any] = {}
+
+    def cross_validate_splits(splits: Any, **kwargs: Any) -> Any:
+        sent.update(kwargs, splits=splits)
+        is_classifier = isinstance(kwargs["task_config"], ClassifierConfig)
+        return GetCrossValidateResultResponse(
+            cv_job_id=CV_JOB_ID,
+            status="completed",
+            split_urls=[SPLIT_URL.format(i) for i in range(len(splits))],
+            classes=classes if is_classifier else None,
+        )
+
+    def download(urls: list[str], client_options: Any = None) -> list[pd.DataFrame]:
+        is_classifier = isinstance(sent["task_config"], ClassifierConfig)
+        return [
+            _split_frame(num_val_rows, classes if is_classifier else None, Y_CLASSES)
+            for _, _, num_val_rows in sent["splits"]
+        ]
+
+    try:
+        with (
+            patch("tabpfn_client.estimator.init"),
+            patch.object(ServiceClient, "get_settings", return_value=None),
+            patch.object(
+                InferenceClient,
+                "cross_validate_splits",
+                side_effect=cross_validate_splits,
+            ),
+            patch.object(
+                InferenceClient,
+                "download_cross_validate_predictions",
+                side_effect=download,
+            ),
+        ):
+            yield SimpleNamespace(sent=sent)
+    finally:
+        Config.use_server = use_server_before
+
+
+def _splits(y: Any, n_test: tuple[int, ...] = (3, 4)) -> list[Any]:
+    """Splits whose test rows are the first rows of X, of different lengths."""
+    return [(X[n:], y[n:], X[:n]) for n in n_test]
+
+
+class TestCrossValPredictSplits:
+    def test_classifier_probas_follow_test_row_order(self):
+        with _offline_splits_server() as server:
+            outputs = TabPFNClassifier().cross_val_predict_splits(
+                _splits(Y_CLASSES), method="predict_proba"
+            )
+        assert [o.shape for o in outputs] == [(3, 3), (4, 3)]
+        for output in outputs:
+            assert (output.argmax(axis=1) == np.arange(len(output)) % 3).all()
+        assert server.sent["task_config"].predict_params.output_type == "probas"
+        assert [num_val_rows for _, _, num_val_rows in server.sent["splits"]] == [
+            3,
+            4,
+        ]
+
+    def test_classifier_predict_returns_the_target_labels(self):
+        with _offline_splits_server():
+            outputs = TabPFNClassifier().cross_val_predict_splits(_splits(Y_CLASSES))
+        assert [o.tolist() for o in outputs] == [
+            Y_CLASSES[:3].tolist(),
+            Y_CLASSES[:4].tolist(),
+        ]
+
+    def test_uploads_training_rows_then_test_rows(self):
+        with _offline_splits_server() as server:
+            TabPFNClassifier().cross_val_predict_splits(_splits(Y_CLASSES, (3,)))
+        ((x_split, y_split, num_val_rows),) = server.sent["splits"]
+        assert num_val_rows == 3
+        np.testing.assert_array_equal(
+            np.asarray(x_split), np.concatenate([X[3:], X[:3]])
+        )
+        # The test rows' targets repeat a training label: they add no class.
+        assert y_split[:-3].tolist() == Y_CLASSES[3:].tolist()
+        assert set(y_split[-3:]) == {Y_CLASSES[3]}
+
+    def test_regressor_sends_the_output_type(self):
+        with _offline_splits_server() as server:
+            outputs = TabPFNRegressor().cross_val_predict_splits(
+                _splits(Y_REGRESSION), output_type="median"
+            )
+        assert [o.tolist() for o in outputs] == [[0.0, 1.0, 2.0], [0.0, 1.0, 2.0, 3.0]]
+        assert server.sent["task_config"].predict_params.output_type == "median"
+
+    def test_passes_per_split_categorical_indices(self):
+        with _offline_splits_server() as server:
+            TabPFNRegressor().cross_val_predict_splits(
+                _splits(Y_REGRESSION), categorical_features_indices=[[0], None]
+            )
+        assert server.sent["categorical_features_indices"] == [[0], None]
+
+    def test_mismatched_test_columns_are_rejected(self):
+        train = pd.DataFrame(X[3:], columns=pd.Index(["a", "b"]))
+        test = pd.DataFrame(X[:3], columns=pd.Index(["a", "c"]))
+        splits = [(train, Y_REGRESSION[3:], test)]
+        with _offline_splits_server(), pytest.raises(ValueError, match="columns"):
+            TabPFNRegressor().cross_val_predict_splits(splits)
+
+    def test_no_splits_are_rejected(self):
+        with _offline_splits_server(), pytest.raises(ValueError, match="no splits"):
+            TabPFNRegressor().cross_val_predict_splits([])
+
+    def test_missing_rows_in_a_split_file_raise(self):
+        with (
+            _offline_splits_server(),
+            patch.object(
+                InferenceClient,
+                "download_cross_validate_predictions",
+                return_value=[_split_frame(2, None, None)],
+            ),
+            pytest.raises(RuntimeError, match="2 predictions"),
+        ):
+            TabPFNRegressor().cross_val_predict_splits(_splits(Y_REGRESSION, (3,)))
+
+
+class TestServiceClientSplits(_ServiceClientHarness):
+    def test_submits_one_upload_per_split(self, mock_server):
+        self._route_upload(mock_server)
+        assert mock_server.router is not None
+        submit_route = mock_server.router.post("/tabpfn/submit_cross_validate_job")
+        submit_route.respond(200, json={"cv_job_id": str(CV_JOB_ID)})
+        mock_server.router.post("/tabpfn/get_cross_validate_result").respond(
+            200,
+            json={
+                "cv_job_id": str(CV_JOB_ID),
+                "status": "completed",
+                "split_urls": [SPLIT_URL.format(0), SPLIT_URL.format(1)],
+            },
+        )
+        x = pd.DataFrame(np.arange(12.0).reshape(6, 2))
+        y = np.array([0, 1, 0, 1, 0, 1])
+        with self._patched():
+            result = ServiceClient.cross_validate_splits(
+                [(x, y, 2), (x, y, 3)],
+                task_config=ClassifierConfig(),
+                tabpfn_systems=["preprocessing", "text"],
+                categorical_features_indices=[[1], None],
+                api_mode=ApiMode.ASYNC,
+            )
+        assert result.split_urls == [SPLIT_URL.format(0), SPLIT_URL.format(1)]
+        body = json.loads(submit_route.calls[0].request.content)
+        assert body["splits"] == [
+            {
+                "train_set_upload_id": self.UPLOAD_ID,
+                "num_val_rows": 2,
+                "categorical_features_indices": [1],
+            },
+            {"train_set_upload_id": self.UPLOAD_ID, "num_val_rows": 3},
+        ]
+        assert "train_set_upload_id" not in body
+        assert "fold_ids_upload_id" not in body
+
+    @pytest.mark.parametrize("num_val_rows", [0, 6])
+    def test_a_split_without_train_or_test_rows_is_rejected(self, num_val_rows):
+        x = pd.DataFrame(np.arange(12.0).reshape(6, 2))
+        with pytest.raises(ValueError, match="num_val_rows"):
+            ServiceClient.cross_validate_splits(
+                [(x, np.zeros(6), num_val_rows)],
+                task_config=RegressorConfig(),
+                tabpfn_systems=["preprocessing"],
+            )

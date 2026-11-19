@@ -64,6 +64,7 @@ import httpx
 from omegaconf import DictConfig, OmegaConf
 from tabpfn_common_utils.utils import Singleton
 from tabpfn_client.api_models import (
+    CrossValidateUploadSplit,
     GetSettingsResponse,
     GetCrossValidateResultRequest,
     GetCrossValidateResultResponse,
@@ -1331,6 +1332,135 @@ class ServiceClient(Singleton):
             fold_ids_upload_id=fold_ids_upload_id,
             fold_sizes=fold_sizes,
         )
+        return cls._run_cross_validate(
+            req, use_async=use_async, client_options=client_options, wait=wait
+        )
+
+    @classmethod
+    def cross_validate_splits(
+        cls,
+        splits: list[tuple[pd.DataFrame, pd.Series | np.ndarray, int]],
+        *,
+        task_config: ClassifierConfig | RegressorConfig,
+        tabpfn_systems: list[TabPFNSystem],
+        categorical_features_indices: list[list[int] | None] | None = None,
+        text_handling: TextHandling = "advanced",
+        api_mode: ApiMode = ApiMode.AUTO,
+        client_options: ClientOptions | None = None,
+        wait: bool = True,
+    ) -> GetCrossValidateResultResponse:
+        """Upload one train set per split, and cross-validate on them.
+
+        For splits the caller built itself, such as ones whose features were
+        transformed per split. The server fits each split on its leading rows
+        and predicts its last `num_val_rows`, and stores one parquet per split,
+        in the order given. API modes behave as for `cross_validate`, by the
+        total size of the splits.
+
+        Args:
+            splits: Per split, the rows `X`, their targets `y`, and
+                `num_val_rows`: how many of the last rows are predicted rather
+                than trained on. Their targets are uploaded but not used, except
+                that a classification job's class axis spans them.
+            task_config: The classification or regression task configuration,
+                whose predict parameters say what each split predicts.
+            tabpfn_systems: The systems to use, as for a fit. Thinking is not
+                supported.
+            categorical_features_indices: Per split, the categorical columns of
+                its `X`; None for a split keeps `task_config`'s.
+            text_handling: Text-processing preset, `"advanced"` or `"simple"`.
+            api_mode: The API mode to use: SYNC, ASYNC, or AUTO.
+            client_options: Client specific options (e.g. timeout, headers).
+            wait: Whether to poll the server until the job completes.
+
+        Returns:
+            The job as the server reports it: completed, with `split_urls`, or,
+            when not waited for, possibly pending.
+
+        Raises:
+            ValueError: If there are no splits, a split predicts no row or
+                trains on none, `categorical_features_indices` is not one entry
+                per split, `text_handling` is invalid, or a split exceeds the
+                server's size limit.
+            CrossValidateFailedError: If the server reports that the job
+                failed, or no longer has it.
+            RuntimeError: If the server does not run cross-validation or
+                rejects the request.
+            TimeoutError: If a job waited for has not completed within the
+                poll timeout.
+        """
+        validate_text_handling(text_handling)
+        api_mode = ApiMode(api_mode)
+        client_options = client_options or ClientOptions()
+        if not splits:
+            raise ValueError("There are no splits to cross-validate.")
+        split_categoricals: list[list[int] | None] = (
+            [None] * len(splits)
+            if categorical_features_indices is None
+            else list(categorical_features_indices)
+        )
+        if len(split_categoricals) != len(splits):
+            raise ValueError(
+                f"categorical_features_indices has {len(split_categoricals)} "
+                f"entries for {len(splits)} splits."
+            )
+        frames = []
+        for index, (X, y, num_val_rows) in enumerate(splits):
+            if not 0 < num_val_rows < len(X):
+                raise ValueError(
+                    f"Split {index} has {len(X)} rows, so num_val_rows="
+                    f"{num_val_rows} leaves no row to train on or to predict."
+                )
+            frames.append(cls._train_set_frames(X, y))
+        use_async = cls._runs_as_job(api_mode, sum(size for _, _, size in frames))
+        workers = max(
+            1, min(get_opts().TABPFN_CLIENT_MAX_THREAD_PER_UPLOAD, len(frames))
+        )
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            upload_ids = list(
+                pool.map(
+                    lambda frame: cls._upload_train_set(
+                        frame[0],
+                        frame[1],
+                        description=None,
+                        client_options=client_options,
+                    ),
+                    frames,
+                )
+            )
+        req = SubmitCrossValidateRequest(
+            task_config=task_config,
+            tabpfn_systems=list(tabpfn_systems),
+            text_handling=None if text_handling == "advanced" else text_handling,
+            splits=[
+                CrossValidateUploadSplit(
+                    train_set_upload_id=upload_id,
+                    num_val_rows=num_val_rows,
+                    categorical_features_indices=indices,
+                )
+                for upload_id, (_, _, num_val_rows), indices in zip(
+                    upload_ids, splits, split_categoricals
+                )
+            ],
+        )
+        return cls._run_cross_validate(
+            req, use_async=use_async, client_options=client_options, wait=wait
+        )
+
+    @classmethod
+    def _run_cross_validate(
+        cls,
+        req: SubmitCrossValidateRequest,
+        *,
+        use_async: bool,
+        client_options: ClientOptions,
+        wait: bool,
+    ) -> GetCrossValidateResultResponse:
+        """Send a cross-validation as a job or as one held-open request.
+
+        Returns:
+            The completed job or, unless `wait`, possibly the pending one.
+        """
         if use_async:
             submit_resp = cls._submit_cross_validate_job(
                 req, timeout=client_options.timeout, headers=client_options.headers

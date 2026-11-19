@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `TabPFNClassifier` and `TabPFNRegressor` gain `cross_val_predict_splits()`, which fits and predicts splits the caller built, each with its own rows, in one cross-validation job on the server. Each split's features can then come from preprocessing fitted on that split's training rows only.
+
 ## [0.9.0] - 2026-11-17
 
 ### Added
