@@ -711,6 +711,35 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         )
 
     @classmethod
+    def cross_validate_splits(
+        cls,
+        splits: list[tuple[pd.DataFrame, pd.Series | np.ndarray, int]],
+        *,
+        task_config: ClassifierConfig | RegressorConfig,
+        tabpfn_systems: list[TabPFNSystem],
+        categorical_features_indices: list[list[int] | None] | None = None,
+        text_handling: TextHandling = "advanced",
+        api_mode: ApiMode = ApiMode.AUTO,
+        client_options: ClientOptions | None = None,
+        wait: bool = True,
+    ) -> GetCrossValidateResultResponse:
+        """Upload one train set per split and cross-validate on them.
+
+        See `ServiceClient.cross_validate_splits`, which documents the
+        arguments, the result and the errors.
+        """
+        return ServiceClient.cross_validate_splits(
+            splits,
+            task_config=task_config,
+            tabpfn_systems=tabpfn_systems,
+            categorical_features_indices=categorical_features_indices,
+            text_handling=text_handling,
+            api_mode=api_mode,
+            client_options=client_options,
+            wait=wait,
+        )
+
+    @classmethod
     def wait_for_cross_validate(
         cls,
         cv_job_id: UUID | str,
