@@ -21,6 +21,8 @@ import pandas as pd
 from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.utils.validation import check_is_fitted
 
+from tabpfn_client.constants import MIN_TRAIN_ROWS
+
 try:
     import boto3  # type: ignore[import-untyped]
 except ImportError:  # pragma: no cover
@@ -204,8 +206,9 @@ class _SagemakerBase(BaseEstimator):
             The estimator itself.
 
         Raises:
-            ValueError: If `X` and `y` have different numbers of samples, or
-                thinking mode is on and `y` has only one class.
+            ValueError: If `X` and `y` have different numbers of samples, there
+                are fewer than 2 training samples, or thinking mode is on and
+                `y` has only one class.
         """
         X_arr = X if isinstance(X, pd.DataFrame) else np.asarray(X)
         y_arr = y if isinstance(y, (pd.DataFrame, pd.Series)) else np.asarray(y)
@@ -213,6 +216,11 @@ class _SagemakerBase(BaseEstimator):
             raise ValueError(
                 f"X and y must have the same number of samples; "
                 f"got X={X_arr.shape}, y={y_arr.shape}"
+            )
+        if X_arr.shape[0] < MIN_TRAIN_ROWS:
+            raise ValueError(
+                f"Found {X_arr.shape[0]} sample(s) in the training set, but at least "
+                f"{MIN_TRAIN_ROWS} are required."
             )
         classes = np.unique(y_arr) if self._TASK == "classification" else None
         # Only thinking needs 2 classes; refused here rather than after the first

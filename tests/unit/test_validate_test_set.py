@@ -133,3 +133,21 @@ def test_subsampled_context_validation_is_deferred_to_server(
                 train_rows=30,
                 inference_config=config.inference_config,
             )
+
+
+@pytest.mark.parametrize("n_rows", [0, 1])
+def test_validate_train_set_rejects_fewer_than_two_rows(n_rows: int) -> None:
+    # Checked before any limits are fetched, so no server settings are needed.
+    with patch.object(ServiceClient, "get_settings") as get_settings:
+        with pytest.raises(ValueError, match="at least 2 are required"):
+            validate_train_set(np.zeros((n_rows, 3)), np.zeros(n_rows))
+        get_settings.assert_not_called()
+
+
+def test_validate_train_set_accepts_two_rows() -> None:
+    with patch.object(ServiceClient, "get_settings", return_value=_limits()):
+        validate_train_set(
+            np.zeros((2, 3)),
+            np.zeros(2),
+            model_path=ClassifierTabPFNConfig().model_path,
+        )
