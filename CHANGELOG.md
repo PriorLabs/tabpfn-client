@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-19
+
+### Added
+
+- Add `presets` to `TabPFNClassifier` and `TabPFNRegressor`, named bundles of `inference_config` values. `TabPFNRegressor(presets="zero_inflated")` is for targets with many exact zeros, and `"grouped"` pools the predictions of a group. Presets combine, as in `["zero_inflated", "grouped"]`. The classifier offers only `"grouped"`. ([#453](https://github.com/PriorLabs/tabpfn-client/pull/453))
+- `TabPFNClassifier` and `TabPFNRegressor` gain `cross_val_predict_splits()`, which fits and predicts splits the caller built, each with its own rows, in one cross-validation job on the server, so each split's features can come from preprocessing fitted on that split's training rows only. A job it stopped waiting for is resumed with `wait_for_cross_val_predict_splits()`. ([#456](https://github.com/PriorLabs/tabpfn-client/pull/456))
+
+### Changed
+
+- Accept `average_before_softmax="auto"`, which takes the setting of the checkpoint, as the default does. ([#453](https://github.com/PriorLabs/tabpfn-client/pull/453))
+- Allow `group_col` without thinking mode: the client sends it to the server in `tabpfn_config`, and the model replaces the group columns with one categorical feature. ([#454](https://github.com/PriorLabs/tabpfn-client/pull/454))
+
+### Fixed
+
+- Training sets with fewer than 2 rows now raise a clear `ValueError` before uploading, in the hosted, Azure AI Foundry and SageMaker estimators as well, instead of failing on the server with a 500. ([#447](https://github.com/PriorLabs/tabpfn-client/pull/447))
+
+
 ## [0.9.0] - 2026-11-17
 
 ### Added
