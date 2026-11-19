@@ -785,3 +785,10 @@ class TestSklearnContract:
 
         with pytest.raises(ValueError, match="newer tabpfn-client"):
             restored.__setstate__(state)
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test_fit_rejects_a_single_training_row(estimator_cls) -> None:
+    est = estimator_cls(endpoint_url=URL)
+    with pytest.raises(ValueError, match="at least 2 are required"):
+        est.fit(X.iloc[:1], Y.iloc[:1])

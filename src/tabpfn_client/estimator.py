@@ -29,7 +29,10 @@ from tabpfn_client.client import (
     _resume_hint,
 )
 from tabpfn_client.config import Config, init
-from tabpfn_client.constants import URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE
+from tabpfn_client.constants import (
+    MIN_TRAIN_ROWS,
+    URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE,
+)
 from tabpfn_client.errors import (
     CrossValidateFailedError,
     FitFailedError,
@@ -2335,13 +2338,20 @@ def validate_train_set(
         thinking: Whether the fit runs in thinking mode, which has its own limits.
 
     Raises:
-        ValueError: If `X` and `y` differ in length, or `X` exceeds the model's
-            row, column or upload-cell limits.
+        ValueError: If `X` has fewer than 2 rows, `X` and `y` differ in length,
+            or `X` exceeds the model's row, column or upload-cell limits.
     """
     # check if the number of samples is consistent (ValueError)
     if y is not None:
         if X.shape[0] != y.shape[0]:
             raise ValueError("X and y must have the same number of samples")
+
+    # Reject before uploading; the server can't fit fewer rows (issue #73).
+    if X.shape[0] < MIN_TRAIN_ROWS:
+        raise ValueError(
+            f"Found {X.shape[0]} training sample(s), but at least "
+            f"{MIN_TRAIN_ROWS} are required."
+        )
 
     limit: ModelLimit | ThinkingLimit | None = None
     if thinking:

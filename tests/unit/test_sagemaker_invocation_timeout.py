@@ -12,7 +12,7 @@ import numpy as np
 from sklearn.exceptions import NotFittedError
 from sklearn.utils.validation import check_is_fitted
 
-from tabpfn_client.sagemaker import TabPFNClassifier
+from tabpfn_client.sagemaker import TabPFNClassifier, TabPFNRegressor
 
 
 def _fake_s3_client() -> MagicMock:
@@ -78,6 +78,23 @@ class TestSagemakerSingleClass(unittest.TestCase):
     def test_a_single_class_is_accepted_without_thinking(self):
         clf = TabPFNClassifier(endpoint_name="ep").fit(np.zeros((3, 2)), np.zeros(3))
         self.assertEqual(list(clf.classes_), [0])
+
+
+class TestSagemakerMinTrainRows(unittest.TestCase):
+    def test_rejects_a_single_training_row(self):
+        for estimator_cls in (TabPFNClassifier, TabPFNRegressor):
+            with self.subTest(estimator_cls=estimator_cls.__name__):
+                est = estimator_cls(endpoint_name="ep")
+                with (
+                    patch.object(est, "_runtime_client") as runtime,
+                    patch.object(est, "_s3_client") as s3,
+                ):
+                    with self.assertRaisesRegex(ValueError, "at least 2 are required"):
+                        est.fit(np.zeros((1, 2)), np.zeros(1))
+                runtime.assert_not_called()
+                s3.assert_not_called()
+                with self.assertRaises(NotFittedError):
+                    check_is_fitted(est)
 
 
 if __name__ == "__main__":
