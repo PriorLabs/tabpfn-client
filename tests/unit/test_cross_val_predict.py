@@ -691,12 +691,13 @@ def _offline_splits_server(
     *,
     first: str = "completed",
     wait_outcome: BaseException | None = None,
+    labels: np.ndarray = Y_CLASSES,
 ) -> Generator[SimpleNamespace]:
     """Run `cross_val_predict_splits()` with no network.
 
-    The server answers `first` (completed or pending); waiting raises
-    `wait_outcome`, or finds the job completed. Each split's predictions put
-    probability 1 on the label of `Y_CLASSES` at the test row's position; a
+    The server answers `first` (completed or pending); the first wait raises
+    `wait_outcome`, later ones find the job completed. Each split's predictions
+    put probability 1 on the label in `labels` at the test row's position; a
     regressor predicts the row's position.
     """
     use_server_before = Config.use_server
@@ -716,15 +717,17 @@ def _offline_splits_server(
         sent.update(kwargs, splits=splits)
         return _pending() if first == "pending" else completed()
 
+    wait_failures = [wait_outcome] if wait_outcome is not None else []
+
     def wait_for_cross_validate(cv_job_id: UUID, **kwargs: Any) -> Any:
-        if wait_outcome is not None:
-            raise wait_outcome
+        if wait_failures:
+            raise wait_failures.pop()
         return completed()
 
     def download(urls: list[str], client_options: Any = None) -> list[pd.DataFrame]:
         is_classifier = isinstance(sent["task_config"], ClassifierConfig)
         return [
-            _split_frame(num_val_rows, classes if is_classifier else None, Y_CLASSES)
+            _split_frame(num_val_rows, classes if is_classifier else None, labels)
             for _, _, num_val_rows in sent["splits"]
         ]
 
@@ -817,15 +820,14 @@ class TestCrossValPredictSplits:
 
     def test_a_timeout_holds_the_job_for_wait_for_cross_val_predict(self):
         model = TabPFNClassifier()
-        with (
-            _offline_splits_server(first="pending", wait_outcome=TimeoutError()),
-            pytest.raises(TimeoutError),
-        ):
-            model.cross_val_predict_splits(_splits(Y_CLASSES), method="predict_proba")
-        assert _pending_id(model) == CV_JOB_ID
-        with pytest.raises(RuntimeError, match="splits"):
-            model.wait_for_cross_val_predict()
-        with _offline_splits_server():
+        with _offline_splits_server(first="pending", wait_outcome=TimeoutError()):
+            with pytest.raises(TimeoutError):
+                model.cross_val_predict_splits(
+                    _splits(Y_CLASSES), method="predict_proba"
+                )
+            assert _pending_id(model) == CV_JOB_ID
+            with pytest.raises(RuntimeError, match="splits"):
+                model.wait_for_cross_val_predict()
             outputs = model.wait_for_cross_val_predict_splits()
         assert [o.shape for o in outputs] == [(3, 3), (4, 3)]
         assert _pending_id(model) is None
@@ -842,7 +844,8 @@ class TestCrossValPredictSplits:
 
     def test_server_classes_in_another_form_label_the_predictions(self):
         y = np.arange(N_ROWS) % 3
-        with _offline_splits_server(classes=["0", "1", "2"]):
+        served = ["0", "1", "2"]
+        with _offline_splits_server(classes=served, labels=np.array(served)[y]):
             outputs = TabPFNClassifier().cross_val_predict_splits(_splits(y))
         assert [o.tolist() for o in outputs] == [[0, 1, 2], [0, 1, 2, 0]]
 
