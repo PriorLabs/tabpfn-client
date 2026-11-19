@@ -2349,7 +2349,7 @@ def validate_train_set(
     # Reject before uploading; the server can't fit fewer rows (issue #73).
     if X.shape[0] < MIN_TRAIN_ROWS:
         raise ValueError(
-            f"Found {X.shape[0]} training sample(s), but at least "
+            f"Found {X.shape[0]} sample(s) in the training set, but at least "
             f"{MIN_TRAIN_ROWS} are required."
         )
 

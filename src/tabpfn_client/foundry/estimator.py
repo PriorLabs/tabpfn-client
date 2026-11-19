@@ -382,7 +382,7 @@ class _FoundryBase(BaseEstimator):
             )
         if X_arr.shape[0] < MIN_TRAIN_ROWS:
             raise ValueError(
-                f"Found {X_arr.shape[0]} training sample(s), but at least "
+                f"Found {X_arr.shape[0]} sample(s) in the training set, but at least "
                 f"{MIN_TRAIN_ROWS} are required."
             )
 
