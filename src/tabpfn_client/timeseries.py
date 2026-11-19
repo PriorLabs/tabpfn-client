@@ -58,6 +58,9 @@ class _ColumnRoles(BaseModel):
     id: str
     timestamp: str
     targets: list[str]
+    past_covariates: list[str]
+    known_covariates: list[str]
+    static_covariates: list[str]
 
 
 class _ForecastTask(BaseModel):
@@ -81,6 +84,7 @@ class _SubmitJobResponse(BaseModel):
 class _PrepareUploadResponse(BaseModel):
     job_id: UUID
     series_info: FileUploadInfo
+    known_covariates_info: FileUploadInfo | None = None
 
 
 class _JobPending(BaseModel):
@@ -123,15 +127,25 @@ def validate_series(
     id_column: str,
     timestamp_column: str,
     target_columns: Sequence[str],
+    past_covariate_columns: Sequence[str] = (),
+    known_covariate_columns: Sequence[str] = (),
+    static_covariate_columns: Sequence[str] = (),
 ) -> None:
     """Raise `InvalidSeriesError` if the server would reject `series`.
 
     The rules are the same as the worker's, in its order: no column has two roles,
     the column names are unique, every column has a role, the table has rows, every item has an observed value in each target, the targets
     are finite
-    numbers, the timestamps parse, and each item's timestamps are on the `freq` grid with no gaps or duplicates.
+    numbers, the timestamps parse, each item's timestamps are on the `freq` grid with no gaps or duplicates, and each static covariate has one value per item.
     """
-    roles = [id_column, timestamp_column, *target_columns]
+    roles = [
+        id_column,
+        timestamp_column,
+        *target_columns,
+        *past_covariate_columns,
+        *known_covariate_columns,
+        *static_covariate_columns,
+    ]
     if not target_columns:
         raise InvalidSeriesError("Name at least one target column.")
     repeated = sorted({name for name in roles if roles.count(name) > 1})
@@ -200,6 +214,118 @@ def validate_series(
         _check_item(
             pd.DatetimeIndex(g["ts"]), item_id=item_id, freq=freq, offset=offset
         )
+    _check_static_covariates(
+        series, id_column=id_column, static_covariate_columns=static_covariate_columns
+    )
+
+
+def _check_static_covariates(
+    series: pd.DataFrame, *, id_column: str, static_covariate_columns: Sequence[str]
+) -> None:
+    """Refuse a static covariate that takes more than one value in an item."""
+    ids = series[id_column].astype(str)
+    for name in static_covariate_columns:
+        # `dropna=False`: NaN counts as a value.
+        varying = series[name].groupby(ids).nunique(dropna=False) > 1
+        if varying.any():
+            shown = [str(i) for i in varying.index[varying][:_MAX_NAMED_ITEMS]]
+            raise InvalidSeriesError(
+                f"Static covariate {name!r} has more than one value in item(s) "
+                f"{shown}. Give each item one value, or name the column as a past "
+                "covariate."
+            )
+
+
+def validate_known_covariates(
+    known_covariates: pd.DataFrame,
+    series: pd.DataFrame,
+    *,
+    horizon: int,
+    freq: str,
+    id_column: str,
+    timestamp_column: str,
+) -> None:
+    """Raise `InvalidSeriesError` if the known-covariates table breaks a rule.
+
+    Per item of `series`, the table needs `horizon` rows on the `freq` grid, from the
+    step after the item's last timestamp.
+    """
+    table = known_covariates
+    duplicated = sorted(set(table.columns[table.columns.duplicated()]))
+    if duplicated:
+        raise InvalidSeriesError(
+            f"The known covariates table has more than one column named {duplicated}. "
+            "Give each column of the table a different name."
+        )
+    missing = sorted({id_column, timestamp_column} - set(table.columns))
+    if missing:
+        raise InvalidSeriesError(
+            f"The known covariates table has no column(s) {missing}. Add them."
+        )
+    if len(table.columns) == 2:
+        raise InvalidSeriesError(
+            "The known covariates table has no covariate column. Add the known "
+            "covariates as columns, or send no table."
+        )
+    try:
+        stamps = pd.to_datetime(table[timestamp_column])
+    except (ValueError, TypeError, OverflowError) as e:
+        raise InvalidSeriesError(
+            f"Column {timestamp_column!r} of the known covariates table does not parse "
+            "as timestamps. Send datetime values or ISO 8601 strings."
+        ) from e
+    if stamps.hasnans:
+        raise InvalidSeriesError(
+            f"Column {timestamp_column!r} of the known covariates table has missing "
+            "timestamps. Fill them or drop their rows."
+        )
+    offset = _offset(freq)
+
+    series_ids = series[id_column].astype(str)
+    last = pd.to_datetime(series[timestamp_column]).groupby(series_ids).max()
+    frame = pd.DataFrame({"id": table[id_column].astype(str), "ts": stamps})
+    absent = sorted(set(last.index) - set(frame["id"]))
+    if absent:
+        raise InvalidSeriesError(
+            f"The known covariates table has no rows for item(s) {absent[:_MAX_NAMED_ITEMS]}. "
+            "Send `horizon` rows for every item of the series table."
+        )
+    unknown = sorted(set(frame["id"]) - set(last.index))
+    if unknown:
+        raise InvalidSeriesError(
+            f"The known covariates table has item(s) {unknown[:_MAX_NAMED_ITEMS]} that "
+            "the series table does not have. Drop their rows."
+        )
+    for item_id, g in frame.sort_values(["id", "ts"]).groupby("id", sort=True):
+        ts = pd.DatetimeIndex(g["ts"])
+        if ts.has_duplicates:
+            raise InvalidSeriesError(
+                f"Item {item_id!r} has duplicate timestamps in the known covariates "
+                "table. Keep one row per item and timestamp."
+            )
+        if len(ts) != horizon:
+            raise InvalidSeriesError(
+                f"Item {item_id!r} has {len(ts)} rows in the known covariates table, "
+                f"not horizon={horizon}. Send one row per forecast step."
+            )
+        try:
+            expected = pd.date_range(
+                start=last[item_id] + offset, periods=horizon, freq=offset
+            )
+        except (ValueError, OverflowError) as e:
+            raise InvalidSeriesError(
+                f"With freq {freq!r}, the forecast steps of item {item_id!r} run past "
+                "the year 2262, the last date the service can hold."
+            ) from e
+        off = np.flatnonzero(ts != expected)
+        if len(off) > 0:
+            row = int(off[0])
+            raise InvalidSeriesError(
+                f"Item {item_id!r} has timestamp {ts[row]} in the known covariates "
+                f"table where {expected[row]} is due. The rows must be the {horizon} "
+                f"{freq!r} steps that follow the item's last series timestamp, "
+                f"{last[item_id]}."
+            )
 
 
 def _check_items_have_data(
@@ -274,6 +400,22 @@ def _check_item(
     )
 
 
+def _check_covariates(
+    *, names: Sequence[str], has_table: bool, limits: ForecastLimits
+) -> None:
+    """Check the covariates against the server's limits."""
+    if not limits.covariates:
+        if len(names) > 0 or has_table:
+            raise InvalidSeriesError(
+                "Covariates are not supported yet. Name no covariate columns and send "
+                "no known covariates table."
+            )
+    elif len(names) > limits.max_covariates:
+        raise InvalidSeriesError(
+            f"at most {limits.max_covariates} covariates are allowed, got {len(names)}"
+        )
+
+
 def _check_task(
     *, horizon: int, quantiles: list[float] | None, limits: ForecastLimits | None
 ) -> None:
@@ -307,12 +449,9 @@ def _is_reserved_column(name: str) -> bool:
     return name in _RESERVED_COLUMNS or name.startswith(_QUANTILE_PREFIX)
 
 
-def _check_reserved_names(
-    *, id_column: str, timestamp_column: str, target_columns: Sequence[str]
-) -> None:
+def _check_reserved_names(*, names: Sequence[str]) -> None:
     """Raise if a caller's column name is reserved for the output."""
-    names = {id_column, timestamp_column, *target_columns}
-    reserved = sorted(name for name in names if _is_reserved_column(name))
+    reserved = sorted({name for name in names if _is_reserved_column(name)})
     if reserved:
         raise InvalidSeriesError(
             f"column(s) {reserved} have reserved names: {sorted(_RESERVED_COLUMNS)} and "
@@ -324,21 +463,34 @@ def _check_reserved_names(
 # --- transport ----------------------------------------------------------------------
 
 
-def _submit(series: pd.DataFrame, spec: _JobSpec, *, inline_max_bytes: int) -> UUID:
+def _parquet(table: pd.DataFrame) -> bytes:
     buf = io.BytesIO()
-    series.to_parquet(buf, index=False)
-    table = buf.getvalue()
+    table.to_parquet(buf, index=False)
+    return buf.getvalue()
+
+
+def _submit(
+    series: pd.DataFrame,
+    spec: _JobSpec,
+    *,
+    known_covariates: pd.DataFrame | None,
+    inline_max_bytes: int,
+) -> UUID:
+    tables = {"series": _parquet(series)}
+    if known_covariates is not None:
+        tables["known_covariates"] = _parquet(known_covariates)
     data = {"spec": spec.model_dump_json(exclude_none=True)}
-    if len(table) <= inline_max_bytes:
+    if sum(len(t) for t in tables.values()) <= inline_max_bytes:
         res = ServiceClient.httpx_client.post(
             _SUBMIT_PATH,
             data=data,
             files={
-                "series": ("series.parquet", table, "application/vnd.apache.parquet")
+                name: (f"{name}.parquet", t, "application/vnd.apache.parquet")
+                for name, t in tables.items()
             },
         )
     else:
-        data["job_id"] = str(_upload(table))
+        data["job_id"] = str(_upload(tables))
         res = ServiceClient.httpx_client.post(_SUBMIT_PATH, data=data)
     if res.status_code in (413, 422):
         raise InvalidSeriesError(ServiceClient._read_json_body(res)[1])
@@ -347,14 +499,15 @@ def _submit(series: pd.DataFrame, spec: _JobSpec, *, inline_max_bytes: int) -> U
     ).job_id
 
 
-def _upload(table: bytes) -> UUID:
-    """Write `table` to a signed URL; return the job it is for."""
+def _upload(tables: dict[str, bytes]) -> UUID:
+    """Write the tables to signed URLs; return the job they are for."""
     res = ServiceClient.httpx_client.post(
         _UPLOAD_PATH,
         json={
-            "series_info": FileInfo(format="parquet", size_bytes=len(table)).model_dump(
+            f"{name}_info": FileInfo(format="parquet", size_bytes=len(t)).model_dump(
                 exclude_none=True
             )
+            for name, t in tables.items()
         },
     )
     if res.status_code == 422:
@@ -362,7 +515,13 @@ def _upload(table: bytes) -> UUID:
     up = ServiceClient._validate_response(
         res, "prepare_upload", success_model=_PrepareUploadResponse
     )
-    ServiceClient._upload_to_gcs("series", table, up.series_info)
+    ServiceClient._upload_to_gcs("series", tables["series"], up.series_info)
+    if "known_covariates" in tables:
+        if up.known_covariates_info is None:
+            raise RuntimeError("prepare_upload returned no known_covariates_info")
+        ServiceClient._upload_to_gcs(
+            "known_covariates", tables["known_covariates"], up.known_covariates_info
+        )
     return up.job_id
 
 
@@ -384,11 +543,17 @@ def _run(
     series: pd.DataFrame,
     spec: _JobSpec,
     *,
+    known_covariates: pd.DataFrame | None,
     inline_max_bytes: int,
     timeout: float,
     poll_interval: float,
 ) -> tuple[pd.DataFrame, dict]:
-    job_id = _submit(series, spec, inline_max_bytes=inline_max_bytes)
+    job_id = _submit(
+        series,
+        spec,
+        known_covariates=known_covariates,
+        inline_max_bytes=inline_max_bytes,
+    )
     deadline = time.monotonic() + timeout
     while True:
         result = _poll(job_id)
@@ -422,6 +587,9 @@ def _spec(
     id_column: str,
     timestamp_column: str,
     target_columns: Sequence[str],
+    past_covariate_columns: Sequence[str],
+    known_covariate_columns: Sequence[str],
+    static_covariate_columns: Sequence[str],
 ) -> _JobSpec:
     validate_series(
         series,
@@ -429,11 +597,19 @@ def _spec(
         id_column=id_column,
         timestamp_column=timestamp_column,
         target_columns=target_columns,
+        past_covariate_columns=past_covariate_columns,
+        known_covariate_columns=known_covariate_columns,
+        static_covariate_columns=static_covariate_columns,
     )
     return _JobSpec(
         freq=freq,
         columns=_ColumnRoles(
-            id=id_column, timestamp=timestamp_column, targets=list(target_columns)
+            id=id_column,
+            timestamp=timestamp_column,
+            targets=list(target_columns),
+            past_covariates=list(past_covariate_columns),
+            known_covariates=list(known_covariate_columns),
+            static_covariates=list(static_covariate_columns),
         ),
         task=task,
     )
@@ -450,6 +626,9 @@ def forecast(
     id_column: str = "item_id",
     timestamp_column: str = "timestamp",
     target_columns: Sequence[str] = ("target",),
+    past_covariate_columns: Sequence[str] = (),
+    static_covariate_columns: Sequence[str] = (),
+    known_covariates: pd.DataFrame | None = None,
     quantiles: Sequence[float] | None = None,
     timeout: float = 1800.0,
     poll_interval: float = 5.0,
@@ -465,6 +644,12 @@ def forecast(
         id_column: Column that names the item.
         timestamp_column: Column with the timestamps.
         target_columns: Columns to forecast.
+        past_covariate_columns: Columns of `series` that are known for the history
+            only.
+        static_covariate_columns: Columns of `series` with one value per item.
+        known_covariates: Table of the id column, the timestamp column and the known
+            covariates, one row per item and forecast step. Its other columns are the
+            known covariates, and each is also a column of `series`.
         quantiles: Quantiles to return, from the `forecast.quantiles` grid of
             `ServiceClient.get_settings()`. None returns the whole grid.
         timeout: Seconds to wait for the job.
@@ -490,10 +675,22 @@ def forecast(
     limits = None if settings is None else settings.forecast
     requested = None if quantiles is None else sorted(set(quantiles))
     _check_task(horizon=horizon, quantiles=requested, limits=limits)
+    known_columns = (
+        []
+        if known_covariates is None
+        else [
+            c
+            for c in known_covariates.columns
+            if c not in (id_column, timestamp_column)
+        ]
+    )
+    covariates = [*past_covariate_columns, *known_columns, *static_covariate_columns]
+    if limits is not None:
+        _check_covariates(
+            names=covariates, has_table=known_covariates is not None, limits=limits
+        )
     _check_reserved_names(
-        id_column=id_column,
-        timestamp_column=timestamp_column,
-        target_columns=target_columns,
+        names=[id_column, timestamp_column, *target_columns, *covariates]
     )
     task = _ForecastTask(horizon=horizon, quantiles=requested)
     spec = _spec(
@@ -503,10 +700,23 @@ def forecast(
         id_column=id_column,
         timestamp_column=timestamp_column,
         target_columns=target_columns,
+        past_covariate_columns=past_covariate_columns,
+        known_covariate_columns=known_columns,
+        static_covariate_columns=static_covariate_columns,
     )
+    if known_covariates is not None:
+        validate_known_covariates(
+            known_covariates,
+            series,
+            horizon=horizon,
+            freq=freq,
+            id_column=id_column,
+            timestamp_column=timestamp_column,
+        )
     return _run(
         series,
         spec,
+        known_covariates=known_covariates,
         # Without limits, upload every table: the signed URL takes any size.
         inline_max_bytes=0 if limits is None else limits.max_inline_table_bytes,
         timeout=timeout,

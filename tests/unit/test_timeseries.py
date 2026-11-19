@@ -24,6 +24,7 @@ from tabpfn_client.timeseries import (
     TimeSeriesInputParseError,
     TimeSeriesInputValidationError,
     TimeSeriesJobFailedError,
+    validate_known_covariates,
     validate_series,
 )
 from tests.mock_tabpfn_server import MockTabPFNServer
@@ -60,6 +61,34 @@ def _series(n_items: int = 2, length: int = 6) -> pd.DataFrame:
                 pd.date_range("2024-01-01", periods=length, freq="D"), n_items
             ),
             "y": np.arange(n_items * length, dtype=float),
+        }
+    )
+
+
+def _covariate_series() -> pd.DataFrame:
+    df = _series()
+    return df.assign(
+        price=df["y"] * 2, promo=df["y"] % 2, region=df["item_id"].map({"i0": "a"})
+    ).assign(region=lambda d: d["region"].fillna("b"))
+
+
+COVARIATES: dict[str, Any] = dict(
+    past_covariate_columns=["price"],
+    static_covariate_columns=["region"],
+)
+HORIZON = 3
+
+
+def _known() -> pd.DataFrame:
+    """The next `HORIZON` days of every item, with one known covariate."""
+    last = _series()["timestamp"].max()
+    steps = pd.date_range(last + pd.Timedelta(days=1), periods=HORIZON, freq="D")
+    items = sorted(_series()["item_id"].unique())
+    return pd.DataFrame(
+        {
+            "item_id": np.repeat(items, HORIZON),
+            "timestamp": np.tile(steps, len(items)),
+            "promo": 1.0,
         }
     )
 
@@ -267,6 +296,131 @@ def test__validate_series__column_in_two_roles__raises():
         )
 
 
+def test__validate_series__all_covariate_kinds__passes():
+    validate_series(
+        _covariate_series(),
+        freq="D",
+        **COLS,
+        **COVARIATES,
+        known_covariate_columns=["promo"],
+    )
+
+
+def test__validate_series__covariate_missing_from_table__raises():
+    with pytest.raises(InvalidSeriesError, match="no column"):
+        validate_series(_series(), freq="D", **COLS, past_covariate_columns=["price"])
+
+
+def test__validate_series__covariate_also_target__raises():
+    with pytest.raises(InvalidSeriesError, match="one role"):
+        validate_series(
+            _covariate_series(), freq="D", **COLS, past_covariate_columns=["y"]
+        )
+
+
+def test__validate_series__unnamed_covariate_column__raises():
+    with pytest.raises(InvalidSeriesError, match="which the job does not name"):
+        validate_series(_covariate_series(), freq="D", **COLS)
+
+
+@pytest.mark.parametrize(
+    "region",
+    [
+        lambda d: d["item_id"] + d["timestamp"].dt.day.astype(str),
+        lambda d: d["item_id"].where(d["timestamp"].dt.day != 2),
+    ],
+    ids=["two_values", "value_and_nan"],
+)
+def test__validate_series__static_covariate_varies_in_item__raises(region):
+    df = _covariate_series()
+    with pytest.raises(InvalidSeriesError, match="Static covariate 'region'"):
+        validate_series(
+            df.assign(region=region(df)),
+            freq="D",
+            **COLS,
+            past_covariate_columns=["price"],
+            known_covariate_columns=["promo"],
+            static_covariate_columns=["region"],
+        )
+
+
+def test__validate_series__static_covariate_all_nan_in_item__passes():
+    df = _covariate_series()
+    validate_series(
+        df.assign(region=df["region"].where(df["item_id"] != "i0")),
+        freq="D",
+        **COLS,
+        past_covariate_columns=["price"],
+        known_covariate_columns=["promo"],
+        static_covariate_columns=["region"],
+    )
+
+
+# --- validate_known_covariates --------------------------------------------------------
+
+
+def _check_known(known: pd.DataFrame) -> None:
+    validate_known_covariates(
+        known,
+        _series(),
+        horizon=HORIZON,
+        freq="D",
+        id_column="item_id",
+        timestamp_column="timestamp",
+    )
+
+
+def test__validate_known_covariates__valid_table__passes():
+    _check_known(_known().sample(frac=1, random_state=0))
+
+
+@pytest.mark.parametrize(
+    ("mutate", "match"),
+    [
+        (lambda k: k.drop(columns="item_id"), "no column"),
+        (lambda k: k.drop(columns="promo"), "no covariate column"),
+        (lambda k: pd.concat([k, k[["promo"]]], axis=1), "more than one column"),
+        (lambda k: k.assign(timestamp="not a date"), "parse"),
+        (
+            lambda k: k.assign(timestamp=k["timestamp"].where(k.index != 3)),
+            "missing timestamps",
+        ),
+        (lambda k: k[k["item_id"] != "i1"], r"no rows for item\(s\) \['i1'\]"),
+        (lambda k: pd.concat([k, k.assign(item_id="i9")]), "that the series table"),
+        (lambda k: k.iloc[1:], "Item 'i0' has 2 rows in the known covariates"),
+        (lambda k: pd.concat([k, k.iloc[[0]]]), "duplicate timestamps"),
+        (
+            lambda k: k.assign(timestamp=k["timestamp"] + pd.Timedelta(days=1)),
+            "2024-01-08 00:00:00 in the known covariates table where 2024-01-07",
+        ),
+        (
+            lambda k: k.assign(
+                timestamp=k["timestamp"].where(
+                    k.index % HORIZON != 1, k["timestamp"] + pd.Timedelta(days=2)
+                )
+            ),
+            "where 2024-01-08 00:00:00 is due",
+        ),
+    ],
+    ids=[
+        "no_id",
+        "no_covariate",
+        "duplicate_column",
+        "bad_ts",
+        "missing_ts",
+        "missing_item",
+        "extra_item",
+        "too_few_rows",
+        "duplicate_row",
+        "starts_late",
+        "gap",
+    ],
+)
+def test__validate_known_covariates__bad_table__raises(mutate, match):
+    with pytest.raises(InvalidSeriesError, match=match):
+        _check_known(mutate(_known()))
+
+
 # --- forecast over HTTP -----------------------------------------------------------
 
 
@@ -369,6 +523,11 @@ def _mock_upload_then_fail(server: MockTabPFNServer) -> tuple[respx.Route, ...]:
                 "signed_urls": [f"{server.base_url}/signed/series.parquet"],
                 "expires_at": 0.0,
                 "required_headers": {"X-Goog-Content-Length-Range": "0,10"},
+            },
+            "known_covariates_info": {
+                "signed_urls": [f"{server.base_url}/signed/known_covariates.parquet"],
+                "expires_at": 0.0,
+                "required_headers": {"X-Goog-Content-Length-Range": "0,20"},
             },
         },
     )
@@ -478,4 +637,145 @@ def test__forecast__column_with_a_reserved_name__raises_before_any_request(
     ):
         timeseries.forecast(
             horizon=3, freq="D", quantiles=[0.5], **_renamed(column, new)
+        )
+
+
+# --- covariates over HTTP -----------------------------------------------------------
+
+_ROLES = (
+    b'"columns":{"id":"item_id","timestamp":"timestamp","targets":["y"],'
+    b'"past_covariates":["price"],"known_covariates":["promo"],'
+    b'"static_covariates":["region"]}'
+)
+
+
+def _forecast_with_covariates(**kwargs) -> None:
+    with pytest.raises(TimeSeriesJobFailedError):
+        timeseries.forecast(
+            _covariate_series(),
+            horizon=HORIZON,
+            freq="D",
+            target_columns=["y"],
+            known_covariates=_known(),
+            **COVARIATES,
+            **kwargs,
+        )
+
+
+def test__forecast__all_covariate_kinds_inline__sends_roles_and_both_tables(server):
+    submit = server.router.post("/forecast/submit_job").respond(
+        200, json={"job_id": str(JOB_ID)}
+    )
+    server.router.post("/forecast/get_job_result").respond(
+        200, json={"status": "failed", "job_id": str(JOB_ID), "error": "stop here"}
+    )
+
+    with patch.object(
+        ServiceClient, "get_settings", return_value=_settings(covariates=True)
+    ):
+        _forecast_with_covariates()
+
+    body = submit.calls.last.request.content
+    assert _ROLES in body
+    assert b'name="series"; filename="series.parquet"' in body
+    assert b'name="known_covariates"; filename="known_covariates.parquet"' in body
+
+
+def test__forecast__all_covariate_kinds_uploaded__uploads_both_tables(server):
+    prepare, put, submit = _mock_upload_then_fail(server)
+    put_known = server.router.put("/signed/known_covariates.parquet").respond(200)
+    sizes = [len(timeseries._parquet(t)) for t in (_covariate_series(), _known())]
+
+    # Each table fits inline alone, the two together do not.
+    with patch.object(
+        ServiceClient,
+        "get_settings",
+        return_value=_settings(covariates=True, max_inline_table_bytes=max(sizes)),
+    ):
+        _forecast_with_covariates()
+
+    request = json.loads(prepare.calls.last.request.content)
+    assert request == {
+        "series_info": {"format": "parquet", "size_bytes": sizes[0]},
+        "known_covariates_info": {"format": "parquet", "size_bytes": sizes[1]},
+    }
+    assert put.calls.last.request.headers["X-Goog-Content-Length-Range"] == "0,10"
+    assert put_known.calls.last.request.headers["X-Goog-Content-Length-Range"] == "0,20"
+    form = parse_qs(submit.calls.last.request.content.decode())
+    assert form["job_id"] == [str(JOB_ID)]
+    assert "parquet" not in submit.calls.last.request.content.decode()
+    assert _ROLES.decode().replace(" ", "") in form["spec"][0]
+
+
+def test__forecast__covariates_not_supported__raises_before_any_request(server):
+    # The default settings have `covariates=False`; the mock server has no routes.
+    with pytest.raises(InvalidSeriesError, match="Covariates are not supported yet"):
+        timeseries.forecast(
+            _covariate_series(),
+            horizon=HORIZON,
+            freq="D",
+            target_columns=["y"],
+            **COVARIATES,
+        )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"past_covariate_columns": ["price"]},
+        {"static_covariate_columns": ["region"]},
+        {"known_covariates": "table"},
+    ],
+    ids=["past", "static", "known"],
+)
+def test__forecast__any_covariate_kind_not_supported__raises(server, kwargs):
+    if kwargs.get("known_covariates") == "table":
+        kwargs = {"known_covariates": _known()}
+    with pytest.raises(InvalidSeriesError, match="Covariates are not supported yet"):
+        timeseries.forecast(
+            _covariate_series(),
+            horizon=HORIZON,
+            freq="D",
+            target_columns=["y"],
+            **kwargs,
+        )
+
+
+def test__forecast__more_covariates_than_the_limit__raises(server):
+    with (
+        patch.object(
+            ServiceClient,
+            "get_settings",
+            return_value=_settings(covariates=True, max_covariates=2),
+        ),
+        pytest.raises(InvalidSeriesError, match="at most 2 covariates"),
+    ):
+        _forecast_with_covariates()
+
+
+@pytest.mark.parametrize("kind", ["past", "static", "known"])
+def test__forecast__covariate_with_a_reserved_name__raises_before_any_request(
+    server, kind
+):
+    series = _covariate_series()
+    column = {"past": "price", "static": "region", "known": "promo"}[kind]
+    known = _known()
+    if kind == "known":
+        known = known.rename(columns={"promo": "mean"})
+    with (
+        patch.object(
+            ServiceClient, "get_settings", return_value=_settings(covariates=True)
+        ),
+        pytest.raises(
+            InvalidSeriesError, match=r"column\(s\) \['mean'\] have reserved"
+        ),
+    ):
+        timeseries.forecast(
+            series.rename(columns={column: "mean"}),
+            horizon=HORIZON,
+            freq="D",
+            target_columns=["y"],
+            known_covariates=known,
+            past_covariate_columns=["mean" if kind == "past" else "price"],
+            static_covariate_columns=["mean" if kind == "static" else "region"],
         )
