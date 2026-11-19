@@ -816,8 +816,15 @@ class TestCrossValPredictSplits:
 
 class TestServiceClientSplits(_ServiceClientHarness):
     def test_submits_one_upload_per_split(self, mock_server):
-        self._route_upload(mock_server)
         assert mock_server.router is not None
+        mock_server.router.post("/tabpfn/prepare_train_set_upload").respond(
+            409,
+            json={
+                "message": "duplicate",
+                "error_code": "DUPLICATE_TRAIN_SET_UPLOAD",
+                "train_set_upload_id": self.UPLOAD_ID,
+            },
+        )
         submit_route = mock_server.router.post("/tabpfn/submit_cross_validate_job")
         submit_route.respond(200, json={"cv_job_id": str(CV_JOB_ID)})
         mock_server.router.post("/tabpfn/get_cross_validate_result").respond(
