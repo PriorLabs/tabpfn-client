@@ -4,11 +4,11 @@
 """Helpers for model version resolution and argument validation."""
 
 from typing import Any
-from tabpfn_client.api_models import ModelLimit, ModelVersion, TextHandling
+from tabpfn_client.api_models import ModelLimit, ModelVersion, TextHandling, UnknownEnum
 
 
 def model_limit_from_version(
-    model_version: ModelVersion, model_limits: dict[Any, ModelLimit]
+    model_version: ModelVersion | UnknownEnum, model_limits: dict[Any, ModelLimit]
 ) -> ModelLimit:
     """Resolve limit of a model to the same or closest previous version limit.
 
