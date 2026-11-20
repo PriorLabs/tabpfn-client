@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-20
+
+### Fixed
+
+- Data checks before upload now use the limits of the model version the server reports, so models newer than the installed client are no longer checked against older limits. ([#463](https://github.com/PriorLabs/tabpfn-client/pull/463))
+
+
 ## [0.10.0] - 2026-11-19
 
 ### Added
