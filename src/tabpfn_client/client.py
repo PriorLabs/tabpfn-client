@@ -719,6 +719,7 @@ class ServiceClient(Singleton):
         description: str | None = None,
         text_handling: TextHandling = "advanced",
         wait: bool = True,
+        row_weights: pd.DataFrame | None = None,
     ) -> FitResponse:
         """Upload a train set to server and fit it.
 
@@ -737,6 +738,8 @@ class ServiceClient(Singleton):
                 which in ASYNC mode is right after it accepted the job; the
                 result's ``status`` then says whether the fit is still running,
                 and ``_wait_for_fit`` waits for it.
+            row_weights: The ``sample_weight`` and ``label_reliability``
+                columns to fit with, one row per row of ``X``.
 
         Returns:
             The fit as the server reports it: the unique ID of the fitted train
@@ -759,7 +762,11 @@ class ServiceClient(Singleton):
         df_X, df_y, total_mem_usage = cls._train_set_frames(X, y)
         use_async = cls._runs_as_job(api_mode, total_mem_usage)
         train_set_upload_id = cls._upload_train_set(
-            df_X, df_y, description=description, client_options=client_options
+            df_X,
+            df_y,
+            row_weights=row_weights,
+            description=description,
+            client_options=client_options,
         )
 
         if use_async:
@@ -869,23 +876,32 @@ class ServiceClient(Singleton):
         df_X: pd.DataFrame,
         df_y: pd.DataFrame,
         *,
+        row_weights: pd.DataFrame | None = None,
         description: str | None,
         client_options: ClientOptions,
     ) -> UUID:
         """Upload a train set, or reuse the server's copy of an identical one.
+
+        `row_weights` holds the `sample_weight` and `label_reliability` columns
+        the fit passes to the model, one row per row of `df_X`.
 
         Returns:
             The id of the upload, which a fit or a cross-validation takes.
         """
         x_bytes, x_crc32c_hash = _serialize_to_parquet(df_X)
         y_bytes, y_crc32c_hash = _serialize_to_parquet(df_y)
+        w_bytes, w_crc32c_hash = (
+            (None, None) if row_weights is None else _serialize_to_parquet(row_weights)
+        )
 
         if get_opts().TABPFN_CLIENT_DEDUP_DATASETS:
             x_dedup_hash = x_crc32c_hash
             y_dedup_hash = y_crc32c_hash
+            w_dedup_hash = w_crc32c_hash
         else:
             x_dedup_hash = None
             y_dedup_hash = None
+            w_dedup_hash = None
 
         prepare_req = PrepareTrainSetUploadRequest(
             x_train_info=FileInfo(
@@ -894,6 +910,9 @@ class ServiceClient(Singleton):
             y_train_info=FileInfo(
                 format="parquet", hash=y_dedup_hash, size_bytes=len(y_bytes)
             ),
+            row_weights_info=None
+            if w_bytes is None
+            else FileInfo(format="parquet", hash=w_dedup_hash, size_bytes=len(w_bytes)),
             description=description,
             force_reupload=get_opts().TABPFN_CLIENT_FORCE_REUPLOAD,
         )
@@ -913,20 +932,21 @@ class ServiceClient(Singleton):
         if isinstance(prepare_resp, DuplicateTrainSetErrorResponse):
             logger.debug("Train set already exists, skipping upload.")
         else:
-            with ThreadPoolExecutor(max_workers=2) as pool:
+            files = [
+                ("x_train", x_bytes, prepare_resp.x_train_info),
+                ("y_train", y_bytes, prepare_resp.y_train_info),
+            ]
+            if w_bytes is not None:
+                if prepare_resp.row_weights_info is None:
+                    raise RuntimeError(
+                        "The server does not take `sample_weight` or "
+                        "`label_reliability`."
+                    )
+                files.append(("row_weights", w_bytes, prepare_resp.row_weights_info))
+            with ThreadPoolExecutor(max_workers=len(files)) as pool:
                 futures = [
-                    pool.submit(
-                        cls._upload_to_gcs,
-                        "x_train",
-                        x_bytes,
-                        prepare_resp.x_train_info,
-                    ),
-                    pool.submit(
-                        cls._upload_to_gcs,
-                        "y_train",
-                        y_bytes,
-                        prepare_resp.y_train_info,
-                    ),
+                    pool.submit(cls._upload_to_gcs, name, data, info)
+                    for name, data, info in files
                 ]
                 try:
                     for future in as_completed(futures):
@@ -1270,6 +1290,7 @@ class ServiceClient(Singleton):
         api_mode: ApiMode = ApiMode.AUTO,
         client_options: ClientOptions | None = None,
         wait: bool = True,
+        row_weights: pd.DataFrame | None = None,
     ) -> GetCrossValidateResultResponse:
         """Upload a train set and its fold ids, and cross-validate on them.
 
@@ -1295,6 +1316,9 @@ class ServiceClient(Singleton):
             wait: Whether to poll the server until the job completes. When
                 False, a job the server is still running comes back pending,
                 and `wait_for_cross_validate` waits for it.
+            row_weights: The `sample_weight` and `label_reliability` columns,
+                one row per row of `X`. Each fold fits with the weights of its
+                training rows.
 
         Returns:
             The job as the server reports it: completed, with the signed URLs
@@ -1319,7 +1343,11 @@ class ServiceClient(Singleton):
         use_async = cls._runs_as_job(api_mode, total_mem_usage)
         fold_sizes = _fold_sizes(fold_ids, len(df_X))
         train_set_upload_id = cls._upload_train_set(
-            df_X, df_y, description=None, client_options=client_options
+            df_X,
+            df_y,
+            row_weights=row_weights,
+            description=None,
+            client_options=client_options,
         )
         fold_ids_upload_id = cls._upload_fold_ids(
             train_set_upload_id, fold_ids, client_options=client_options

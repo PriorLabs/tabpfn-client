@@ -742,6 +742,10 @@ class PrepareTestSetUploadResponse(BaseModel):
 class PrepareTrainSetUploadRequest(BaseModel):
     x_train_info: FileInfo
     y_train_info: FileInfo
+    row_weights_info: FileInfo | None = Field(
+        default=None,
+        description="Optional per-row weights for the fit: a table with one row per train-set row and a `sample_weight` column, a `label_reliability` column, or both.",
+    )
     description: str | None = None
     force_reupload: bool | None = Field(
         default=None,
@@ -753,6 +757,7 @@ class PrepareTrainSetUploadResponse(BaseModel):
     train_set_upload_id: UUID
     x_train_info: FileUploadInfo
     y_train_info: FileUploadInfo
+    row_weights_info: FileUploadInfo | None = None
 
 
 class SubmitCrossValidateRequest(BaseModel):
