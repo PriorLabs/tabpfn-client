@@ -2627,7 +2627,7 @@ def _limit_for_model_path(model_path: str | None) -> ModelLimit | None:
         return None
     if model_path in _AUTO_MODEL_PATH_ALIASES:
         return api_settings.model_limits[api_settings.default_model_version]
-    model_version = model_version_from_path(model_path)
+    model_version = model_version_from_path(model_path, api_settings.model_limits)
     return model_limit_from_version(model_version, api_settings.model_limits)
 
 
@@ -2972,7 +2972,7 @@ def _thinking_limit(
     version = (
         settings.thinking_default_model_version
         if model_path is None or model_path in _AUTO_MODEL_PATH_ALIASES
-        else model_version_from_path(model_path)
+        else model_version_from_path(model_path, settings.thinking_model_limits)
     )
     if version is None:
         return None
