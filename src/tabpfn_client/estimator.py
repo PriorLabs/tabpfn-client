@@ -40,7 +40,7 @@ from tabpfn_client.errors import (
     PredictFailedError,
     PredictionGoneError,
 )
-from tabpfn_client.api_models import ModelVersion, UnknownEnum
+from tabpfn_client.api_models import ModelVersion
 from tabpfn_client.utils import (
     model_limit_from_version,
     model_version_from_path,
@@ -2627,24 +2627,8 @@ def _limit_for_model_path(model_path: str | None) -> ModelLimit | None:
         return None
     if model_path in _AUTO_MODEL_PATH_ALIASES:
         return api_settings.model_limits[api_settings.default_model_version]
-    model_version = _model_version(api_settings, model_path)
-    if model_version is None:
-        return None
+    model_version = model_version_from_path(model_path, api_settings.model_limits)
     return model_limit_from_version(model_version, api_settings.model_limits)
-
-
-def _model_version(
-    settings: GetSettingsResponse, model_path: str
-) -> ModelVersion | UnknownEnum | None:
-    """The model version of `model_path` as the server names it, None if unknown.
-
-    The server is asked first, so a version newer than this client still gets
-    its own limits. Servers that do not list their model names fall back to
-    reading the version from the name.
-    """
-    if settings.model_names is None:
-        return model_version_from_path(model_path)
-    return settings.model_names.get(model_path.rsplit("/", 1)[-1])
 
 
 def _full_output_row_limit(model_path: str | None) -> int | None:
@@ -2988,7 +2972,7 @@ def _thinking_limit(
     version = (
         settings.thinking_default_model_version
         if model_path is None or model_path in _AUTO_MODEL_PATH_ALIASES
-        else _model_version(settings, model_path)
+        else model_version_from_path(model_path, settings.thinking_model_limits)
     )
     if version is None:
         return None

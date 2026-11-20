@@ -649,9 +649,6 @@ class GetSettingsResponse(BaseModel):
     model_limits: dict[
         Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")], ModelLimit
     ]
-    model_names: (
-        dict[str, Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")]] | None
-    ) = None
     dataset_max_size_bytes: int
     async_settings: AsyncSettings
     inline_test_set_max_parquet_bytes: int | None = None

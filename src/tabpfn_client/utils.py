@@ -3,7 +3,9 @@
 
 """Helpers for model version resolution and argument validation."""
 
+from collections.abc import Iterable
 from typing import Any
+
 from tabpfn_client.api_models import ModelLimit, ModelVersion, TextHandling, UnknownEnum
 
 
@@ -30,7 +32,9 @@ def model_limit_from_version(
     raise ValueError(f"No model limits registered at or below {model_version}")
 
 
-def model_version_from_path(model_path: str) -> ModelVersion:
+def model_version_from_path(
+    model_path: str, versions: Iterable[ModelVersion | UnknownEnum]
+) -> ModelVersion | UnknownEnum:
     """Best-effort model version of a `model_path` as the caller passed it.
 
     Accepts checkpoint filenames (`tabpfn-v3-classifier-v3_default.ckpt`) and
@@ -41,13 +45,14 @@ def model_version_from_path(model_path: str) -> ModelVersion:
 
     Args:
         model_path: Checkpoint filename or short model name.
+        versions: The versions to match, the server's `model_limits` keys, so a
+            version newer than this client is still found.
 
     Returns:
         The model version the name refers to, or V2 when it has no version marker.
     """
-    for version in ModelVersion:
-        # "v3" cannot shadow "v3.5" here: both patterns need the separator that
-        # follows the version, and "v3.5" continues with "." instead.
+    # Longest first, so "v3.5-fast_default" is not read as "v3.5" with "-fast".
+    for version in sorted(versions, key=lambda v: len(v.value), reverse=True):
         prefixes = (f"{version.value}_", f"{version.value}-fast_")
         if f"-{version.value}-" in model_path or model_path.startswith(prefixes):
             return version
