@@ -42,3 +42,15 @@ def test_a_version_newer_than_the_client_gets_its_own_limits():
     assert _rows(_limit_for_model_path("v99_default")) == 99
     assert _rows(_thinking_limit(settings, "v99_default")) == 99
     assert _rows(_limit_for_model_path("gn2p4bpt")) == 2
+
+
+def test_a_known_version_the_server_omits_gets_the_closest_lower_limits():
+    payload = _api_settings_payload()
+    payload["model_limits"] = {
+        "v2": _api_settings_payload(max_rows=2)["max_model_limit"],
+        "v2.5": _api_settings_payload(max_rows=25)["max_model_limit"],
+    }
+    ServiceClient._api_settings = GetSettingsResponse(**payload)
+    ServiceClient._api_settings_ts = time.monotonic()
+
+    assert _rows(_limit_for_model_path("v2.6_default")) == 25

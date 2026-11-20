@@ -33,7 +33,7 @@ def model_limit_from_version(
 
 
 def model_version_from_path(
-    model_path: str, versions: Iterable[ModelVersion | UnknownEnum]
+    model_path: str, server_versions: Iterable[ModelVersion | UnknownEnum]
 ) -> ModelVersion | UnknownEnum:
     """Best-effort model version of a `model_path` as the caller passed it.
 
@@ -45,13 +45,15 @@ def model_version_from_path(
 
     Args:
         model_path: Checkpoint filename or short model name.
-        versions: The versions to match, the server's `model_limits` keys, so a
-            version newer than this client is still found.
+        server_versions: The versions the server lists, matched along with the
+            ones this client knows, so a version newer than this client is
+            still found.
 
     Returns:
         The model version the name refers to, or V2 when it has no version marker.
     """
     # Longest first, so "v3.5-fast_default" is not read as "v3.5" with "-fast".
+    versions = {*ModelVersion, *server_versions}
     for version in sorted(versions, key=lambda v: len(v.value), reverse=True):
         prefixes = (f"{version.value}_", f"{version.value}-fast_")
         if f"-{version.value}-" in model_path or model_path.startswith(prefixes):
