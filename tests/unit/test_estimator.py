@@ -197,6 +197,7 @@ _EXPECTED_FAILED_CHECKS = {
     "check_estimator_sparse_matrix": "Sparse input is not supported with an sklearn-style message.",
     "check_classifier_data_not_an_array": "Non-array array-likes are not coerced.",
     "check_classifiers_train": "Non-array array-likes are not coerced.",
+    "check_sample_weights_not_an_array": "Non-array array-likes are not coerced.",
     "check_parameters_default_constructible": "client_options default is materialized in __init__.",
     "check_estimators_overwrite_params": "fit() mutates client_options.headers (e.g. sentry-trace).",
     "check_do_not_raise_errors_in_init_or_set_params": "__init__ evaluates client_options truthiness.",
