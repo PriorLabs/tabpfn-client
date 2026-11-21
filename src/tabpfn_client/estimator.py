@@ -638,6 +638,7 @@ class _AsyncMixin(ModelPersistenceMixin):
         y: pd.Series | np.ndarray,
         *,
         fold_ids: list[int],
+        row_weights: pd.DataFrame | None,
         text_handling: TextHandling,
         task_config: ClassifierConfig | RegressorConfig,
         method: str,
@@ -657,6 +658,7 @@ class _AsyncMixin(ModelPersistenceMixin):
             X_clean,
             y,
             fold_ids=[fold_ids],
+            row_weights=row_weights,
             task_config=task_config,
             tabpfn_systems=_build_tabpfn_systems(self.paper_version, False),
             text_handling=text_handling,
@@ -1358,6 +1360,8 @@ class TabPFNClassifier(
         cv: Any = 5,
         *,
         groups: Any = None,
+        sample_weight: npt.ArrayLike | None = None,
+        label_reliability: npt.ArrayLike | None = None,
         method: ClassifierCrossValMethodLiteral = "predict",
     ) -> np.ndarray:
         """Cross-validate on the server, and return the out-of-fold predictions.
@@ -1380,6 +1384,10 @@ class TabPFNClassifier(
                 train every fold and come back as NaN.
             groups: Group labels for the rows, for a splitter that takes them,
                 such as `GroupKFold`.
+            sample_weight: Experimental. One weight per row, as for `fit()`.
+                Each fold fits with the weights of its training rows.
+            label_reliability: Experimental. One value in [0, 1] per row, as
+                for `fit()`.
             method: `"predict"` for class labels, `"predict_proba"` for the
                 probabilities of the classes in sorted order.
 
@@ -1398,7 +1406,16 @@ class TabPFNClassifier(
                 within `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds. The model
                 then holds it: call `wait_for_cross_val_predict()`.
         """
-        output = self._cross_val_predict(X, y, cv, groups, method, submit=False)
+        output = self._cross_val_predict(
+            X,
+            y,
+            cv,
+            groups,
+            method,
+            submit=False,
+            sample_weight=sample_weight,
+            label_reliability=label_reliability,
+        )
         return cast("np.ndarray", output)
 
     def submit_cross_val_predict(
@@ -1408,6 +1425,8 @@ class TabPFNClassifier(
         cv: Any = 5,
         *,
         groups: Any = None,
+        sample_weight: npt.ArrayLike | None = None,
+        label_reliability: npt.ArrayLike | None = None,
         method: ClassifierCrossValMethodLiteral = "predict",
     ) -> Self:
         """Start a cross-validation on the server, without waiting for it.
@@ -1423,6 +1442,8 @@ class TabPFNClassifier(
             y: The target variable.
             cv: The splits, as for `cross_val_predict()`.
             groups: Group labels for the rows, as for `cross_val_predict()`.
+            sample_weight: One weight per row, as for `cross_val_predict()`.
+            label_reliability: One value per row, as for `cross_val_predict()`.
             method: `"predict"` or `"predict_proba"`, as for
                 `cross_val_predict()`.
 
@@ -1434,7 +1455,16 @@ class TabPFNClassifier(
                 exceeds the model limits, or the splits are invalid.
             RuntimeError: If the server rejects the request.
         """
-        self._cross_val_predict(X, y, cv, groups, method, submit=True)
+        self._cross_val_predict(
+            X,
+            y,
+            cv,
+            groups,
+            method,
+            submit=True,
+            sample_weight=sample_weight,
+            label_reliability=label_reliability,
+        )
         return self
 
     def cross_val_predict_splits(
@@ -1505,6 +1535,8 @@ class TabPFNClassifier(
         method: str,
         *,
         submit: bool,
+        sample_weight: npt.ArrayLike | None,
+        label_reliability: npt.ArrayLike | None,
     ) -> np.ndarray | None:
         """Cross-validate as `cross_val_predict()` or, with `submit`, as
         `submit_cross_val_predict()` does.
@@ -1513,6 +1545,7 @@ class TabPFNClassifier(
         X_clean, fold_ids, text_handling = self._prepare_cross_val_predict(
             X, y, cv, groups, classifier=True
         )
+        row_weights = _row_weights(sample_weight, label_reliability, len(fold_ids))
         classes = self._validate_targets_and_classes(y)
         task_config = ClassifierConfig(
             tabpfn_config=self._get_tabpfn_config(),
@@ -1524,6 +1557,7 @@ class TabPFNClassifier(
             X_clean,
             y,
             fold_ids=fold_ids,
+            row_weights=row_weights,
             text_handling=text_handling,
             task_config=task_config,
             method=method,
@@ -2282,6 +2316,8 @@ class TabPFNRegressor(
         cv: Any = 5,
         *,
         groups: Any = None,
+        sample_weight: npt.ArrayLike | None = None,
+        label_reliability: npt.ArrayLike | None = None,
         method: RegressorCrossValMethodLiteral = "predict",
         output_type: RegressorCrossValOutputLiteral = "mean",
     ) -> np.ndarray:
@@ -2305,6 +2341,10 @@ class TabPFNRegressor(
                 come back as NaN.
             groups: Group labels for the rows, for a splitter that takes them,
                 such as `GroupKFold`.
+            sample_weight: Experimental. One weight per row, as for `fit()`.
+                Each fold fits with the weights of its training rows.
+            label_reliability: Experimental. One value in [0, 1] per row, as
+                for `fit()`.
             method: `"predict"`, the only method of a regressor.
             output_type: `"mean"`, `"median"` or `"mode"` of the predicted
                 distribution, as for `predict()`.
@@ -2324,7 +2364,15 @@ class TabPFNRegressor(
                 then holds it: call `wait_for_cross_val_predict()`.
         """
         output = self._cross_val_predict(
-            X, y, cv, groups, method, output_type, submit=False
+            X,
+            y,
+            cv,
+            groups,
+            method,
+            output_type,
+            submit=False,
+            sample_weight=sample_weight,
+            label_reliability=label_reliability,
         )
         return cast("np.ndarray", output)
 
@@ -2335,6 +2383,8 @@ class TabPFNRegressor(
         cv: Any = 5,
         *,
         groups: Any = None,
+        sample_weight: npt.ArrayLike | None = None,
+        label_reliability: npt.ArrayLike | None = None,
         method: RegressorCrossValMethodLiteral = "predict",
         output_type: RegressorCrossValOutputLiteral = "mean",
     ) -> Self:
@@ -2351,6 +2401,8 @@ class TabPFNRegressor(
             y: The target variable.
             cv: The splits, as for `cross_val_predict()`.
             groups: Group labels for the rows, as for `cross_val_predict()`.
+            sample_weight: One weight per row, as for `cross_val_predict()`.
+            label_reliability: One value per row, as for `cross_val_predict()`.
             method: `"predict"`, as for `cross_val_predict()`.
             output_type: `"mean"`, `"median"` or `"mode"`, as for
                 `cross_val_predict()`.
@@ -2364,7 +2416,17 @@ class TabPFNRegressor(
                 invalid.
             RuntimeError: If the server rejects the request.
         """
-        self._cross_val_predict(X, y, cv, groups, method, output_type, submit=True)
+        self._cross_val_predict(
+            X,
+            y,
+            cv,
+            groups,
+            method,
+            output_type,
+            submit=True,
+            sample_weight=sample_weight,
+            label_reliability=label_reliability,
+        )
         return self
 
     def cross_val_predict_splits(
@@ -2436,6 +2498,8 @@ class TabPFNRegressor(
         output_type: str,
         *,
         submit: bool,
+        sample_weight: npt.ArrayLike | None,
+        label_reliability: npt.ArrayLike | None,
     ) -> np.ndarray | None:
         """Cross-validate as `cross_val_predict()` or, with `submit`, as
         `submit_cross_val_predict()` does.
@@ -2445,6 +2509,7 @@ class TabPFNRegressor(
         X_clean, fold_ids, text_handling = self._prepare_cross_val_predict(
             X, y, cv, groups, classifier=False
         )
+        row_weights = _row_weights(sample_weight, label_reliability, len(fold_ids))
         self._validate_targets(y)
         task_config = RegressorConfig(
             tabpfn_config=self._get_tabpfn_config(),
@@ -2456,6 +2521,7 @@ class TabPFNRegressor(
             X_clean,
             y,
             fold_ids=fold_ids,
+            row_weights=row_weights,
             text_handling=text_handling,
             task_config=task_config,
             method=method,

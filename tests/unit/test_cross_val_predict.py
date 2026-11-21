@@ -240,6 +240,32 @@ class TestClassifier:
             labels = TabPFNClassifier().cross_val_predict(X, Y_CLASSES, cv=3)
         assert labels.tolist() == Y_CLASSES.tolist()
 
+    @pytest.mark.parametrize(
+        "method", ["cross_val_predict", "submit_cross_val_predict"]
+    )
+    def test_the_weights_are_sent_with_the_train_set(self, method):
+        weights = np.linspace(0.0, 1.0, N_ROWS)
+        with _offline_server() as server:
+            getattr(TabPFNRegressor(), method)(
+                X,
+                Y_REGRESSION,
+                cv=3,
+                sample_weight=weights + 1,
+                label_reliability=weights,
+            )
+        pd.testing.assert_frame_equal(
+            server.sent["row_weights"],
+            pd.DataFrame({"sample_weight": weights + 1, "label_reliability": weights}),
+        )
+
+    def test_bad_weights_raise_before_any_request(self):
+        with _offline_server() as server:
+            with pytest.raises(ValueError, match="negative"):
+                TabPFNClassifier().cross_val_predict(
+                    X, Y_CLASSES, cv=3, sample_weight=-np.ones(N_ROWS)
+                )
+        server.cv.assert_not_called()
+
     def test_rows_in_no_test_set_are_nan(self):
         rows = np.arange(N_ROWS)
         splits = [(rows[rows != 0], rows[:1]), (rows[rows != 1], rows[1:2])]
