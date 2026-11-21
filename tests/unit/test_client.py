@@ -1,3 +1,5 @@
+import io
+import json
 import time
 import unittest
 from contextlib import contextmanager
@@ -7,6 +9,7 @@ from unittest.mock import Mock, patch
 
 import httpx
 import numpy as np
+import pandas as pd
 from pydantic import ValidationError
 from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
@@ -508,6 +511,47 @@ class TestServiceClient(unittest.TestCase):
         self.assertEqual(fitted_train_set_id_1, fitted_train_set_id_2)
         self.assertEqual(prepare_route.call_count, 2)
         self.assertEqual(fit_route.call_count, 2)
+
+    @with_mock_server()
+    def test_fit_uploads_the_row_weights_with_the_train_set(self, mock_server):
+        prepare_route = mock_server.router.post("/tabpfn/prepare_train_set_upload")
+        prepare_route.respond(
+            200,
+            json={
+                **self._prepare_train_set_upload_response(
+                    "00000000-0000-0000-0000-000000000001"
+                ),
+                "row_weights_info": self._upload_info(
+                    "https://upload.example/row_weights"
+                ),
+            },
+        )
+        mock_server.router.post("/tabpfn/fit").respond(
+            200,
+            json={
+                "fitted_train_set_id": "00000000-0000-0000-0000-000000000002",
+                "status": "completed",
+            },
+        )
+        ServiceClient.authorize("dummy_access_token")
+        weights = pd.DataFrame({"sample_weight": np.ones(len(self.X_train))})
+
+        with patch.object(ServiceClient, "_upload_to_gcs") as upload:
+            ServiceClient.fit_with_result(
+                self.X_train,
+                self.y_train,
+                tabpfn_systems=["preprocessing", "text"],
+                task_config=ClassifierFitTaskConfig(),
+                row_weights=weights,
+            )
+
+        prepare_body = json.loads(prepare_route.calls.last.request.content)
+        self.assertEqual(prepare_body["row_weights_info"]["format"], "parquet")
+        uploaded = {call.args[0]: call.args[1] for call in upload.call_args_list}
+        self.assertEqual(set(uploaded), {"x_train", "y_train", "row_weights"})
+        pd.testing.assert_frame_equal(
+            pd.read_parquet(io.BytesIO(uploaded["row_weights"])), weights
+        )
 
     def _sync_fit(self) -> FitResponse:
         return ServiceClient._fit(
