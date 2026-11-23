@@ -45,6 +45,7 @@ from tabpfn_client.api_models import ModelVersion
 from tabpfn_client.utils import (
     model_limit_from_version,
     model_version_from_path,
+    row_weights_frame,
     validate_text_handling,
 )
 from tabpfn_client.service_wrapper import InferenceClient
@@ -1153,7 +1154,7 @@ class TabPFNClassifier(
         validate_train_set(
             X, y, model_path=tabpfn_config.model_path, thinking=thinking_mode
         )
-        row_weights = _row_weights(sample_weight, label_reliability, X.shape[0])
+        row_weights = row_weights_frame(sample_weight, label_reliability, X.shape[0])
         X_clean = _clean_text_features(X)
         classes = self._validate_targets_and_classes(y)
 
@@ -1545,7 +1546,7 @@ class TabPFNClassifier(
         X_clean, fold_ids, text_handling = self._prepare_cross_val_predict(
             X, y, cv, groups, classifier=True
         )
-        row_weights = _row_weights(sample_weight, label_reliability, len(fold_ids))
+        row_weights = row_weights_frame(sample_weight, label_reliability, len(fold_ids))
         classes = self._validate_targets_and_classes(y)
         task_config = ClassifierConfig(
             tabpfn_config=self._get_tabpfn_config(),
@@ -2062,7 +2063,7 @@ class TabPFNRegressor(
         validate_train_set(
             X, y, model_path=tabpfn_config.model_path, thinking=thinking_mode
         )
-        row_weights = _row_weights(sample_weight, label_reliability, X.shape[0])
+        row_weights = row_weights_frame(sample_weight, label_reliability, X.shape[0])
         self._validate_targets(y)
         X_clean = _clean_text_features(X)
 
@@ -2509,7 +2510,7 @@ class TabPFNRegressor(
         X_clean, fold_ids, text_handling = self._prepare_cross_val_predict(
             X, y, cv, groups, classifier=False
         )
-        row_weights = _row_weights(sample_weight, label_reliability, len(fold_ids))
+        row_weights = row_weights_frame(sample_weight, label_reliability, len(fold_ids))
         self._validate_targets(y)
         task_config = RegressorConfig(
             tabpfn_config=self._get_tabpfn_config(),
@@ -2694,50 +2695,6 @@ class TabPFNRegressor(
         y_ = column_or_1d(y, warn=True)
         if sum(pd.isnull(y_)) > 0:
             raise ValueError("Input y contains NaN.")
-
-
-def _row_weights(
-    sample_weight: Any, label_reliability: Any, n_rows: int
-) -> pd.DataFrame | None:
-    """The `sample_weight` and `label_reliability` given to `fit`, as one frame.
-
-    Returns:
-        A frame with a column for each argument that is not None, or None if
-        both are None.
-
-    Raises:
-        ValueError: If an argument does not hold one finite number per row,
-            `sample_weight` is negative or all zero, or `label_reliability`
-            lies outside [0, 1].
-    """
-    columns: dict[str, np.ndarray] = {}
-    for name, values in (
-        ("sample_weight", sample_weight),
-        ("label_reliability", label_reliability),
-    ):
-        if values is None:
-            continue
-        try:
-            array = np.asarray(values, dtype=np.float64)
-        except (TypeError, ValueError) as e:
-            raise ValueError(f"`{name}` must hold numbers.") from e
-        if array.shape != (n_rows,):
-            raise ValueError(
-                f"`{name}` must hold one value per row of X: got shape "
-                f"{array.shape} for {n_rows} rows."
-            )
-        if not np.isfinite(array).all():
-            raise ValueError(f"`{name}` must hold finite numbers.")
-        columns[name] = array
-    weight = columns.get("sample_weight")
-    if weight is not None and (weight < 0).any():
-        raise ValueError("`sample_weight` must not be negative.")
-    if weight is not None and not weight.any():
-        raise ValueError("`sample_weight` must not be all zero.")
-    reliability = columns.get("label_reliability")
-    if reliability is not None and ((reliability < 0) | (reliability > 1)).any():
-        raise ValueError("`label_reliability` must lie in [0, 1].")
-    return pd.DataFrame(columns) if columns else None
 
 
 def validate_train_set(

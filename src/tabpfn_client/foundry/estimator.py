@@ -25,6 +25,7 @@ from sklearn.utils.validation import check_is_fitted
 
 from tabpfn_client.constants import MIN_TRAIN_ROWS
 from tabpfn_client.models import FitModeLiteral
+from tabpfn_client.utils import row_weight_fields, row_weights_frame
 
 
 ThinkingEffort = Literal["medium", "high"]
@@ -358,12 +359,22 @@ class _FoundryBase(BaseEstimator):
         state.pop("_cached_client", None)
         return state
 
-    def fit(self, X: Any, y: Any) -> "_FoundryBase":
+    def fit(
+        self,
+        X: Any,
+        y: Any,
+        sample_weight: Optional[Any] = None,
+        label_reliability: Optional[Any] = None,
+    ) -> "_FoundryBase":
         """Store the training data; the endpoint fits on the next `predict*` call.
 
         Args:
             X: Training features.
             y: Training targets.
+            sample_weight: How much each row counts in the fit, one value per
+                row. Experimental: needs a model that takes weights.
+            label_reliability: How far to trust each target, one value in
+                [0, 1] per row. Experimental: needs a model that takes weights.
 
         Returns:
             The estimator itself.
@@ -372,6 +383,8 @@ class _FoundryBase(BaseEstimator):
             ValueError: If `X` and `y` have different numbers of samples, there
                 are fewer than 2 training samples, or thinking mode is on and
                 `y` has only one class.
+            ValueError: If `sample_weight` or `label_reliability` is not valid,
+                or is given for a fit that the endpoint keeps.
         """
         X_arr = X if isinstance(X, pd.DataFrame) else np.asarray(X)
         y_arr = y if isinstance(y, (pd.DataFrame, pd.Series)) else np.asarray(y)
@@ -395,8 +408,18 @@ class _FoundryBase(BaseEstimator):
                 "y contains only one class; thinking mode needs at least 2 classes."
             )
 
+        row_weights = row_weights_frame(
+            sample_weight, label_reliability, X_arr.shape[0]
+        )
+        if row_weights is not None and self._cache_active:
+            raise ValueError(
+                "`sample_weight` and `label_reliability` are not supported for a fit "
+                "that the endpoint keeps: `use_kv_cache`, "
+                "`fit_mode='fit_with_cache'` or thinking mode."
+            )
         self.X_train_ = X_arr
         self.y_train_ = y_arr
+        self.row_weights_ = row_weights
         self._cached_model_id: Optional[str] = None
         if classes is not None:
             self.classes_ = classes
@@ -429,6 +452,8 @@ class _FoundryBase(BaseEstimator):
             cached_model_id=self._cached_model_id if self._cache_active else None,
             thinking_block=self._build_thinking_block(),
         )
+        if "x_train" in body:
+            body.update(row_weight_fields(getattr(self, "row_weights_", None)))
         resp = self._http_client().post(
             self.endpoint_url,
             json=body,

@@ -4,6 +4,10 @@
 """Helpers for model version resolution and argument validation."""
 
 from typing import Any
+
+import numpy as np
+import pandas as pd
+
 from tabpfn_client.api_models import ModelLimit, ModelVersion, TextHandling
 
 
@@ -69,3 +73,59 @@ def validate_text_handling(value: object) -> TextHandling:
     if value not in ("advanced", "simple"):
         raise ValueError("text_handling must be 'advanced' or 'simple'")
     return value
+
+
+def row_weights_frame(
+    sample_weight: Any, label_reliability: Any, n_rows: int
+) -> pd.DataFrame | None:
+    """The `sample_weight` and `label_reliability` given to `fit`, as one frame.
+
+    Returns:
+        A frame with a column for each argument that is not None, or None if
+        both are None.
+
+    Raises:
+        ValueError: If an argument does not hold one finite number per row,
+            `sample_weight` is negative or all zero, or `label_reliability`
+            lies outside [0, 1].
+    """
+    columns: dict[str, np.ndarray] = {}
+    for name, values in (
+        ("sample_weight", sample_weight),
+        ("label_reliability", label_reliability),
+    ):
+        if values is None:
+            continue
+        try:
+            array = np.asarray(values, dtype=np.float64)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"`{name}` must hold numbers.") from e
+        if array.shape != (n_rows,):
+            raise ValueError(
+                f"`{name}` must hold one value per row of X: got shape "
+                f"{array.shape} for {n_rows} rows."
+            )
+        if not np.isfinite(array).all():
+            raise ValueError(f"`{name}` must hold finite numbers.")
+        columns[name] = array
+    weight = columns.get("sample_weight")
+    if weight is not None and (weight < 0).any():
+        raise ValueError("`sample_weight` must not be negative.")
+    if weight is not None and not weight.any():
+        raise ValueError("`sample_weight` must not be all zero.")
+    reliability = columns.get("label_reliability")
+    if reliability is not None and ((reliability < 0) | (reliability > 1)).any():
+        raise ValueError("`label_reliability` must lie in [0, 1].")
+    return pd.DataFrame(columns) if columns else None
+
+
+def row_weight_fields(row_weights: pd.DataFrame | None) -> dict[str, list[float]]:
+    """The request fields that carry the frame of `row_weights_frame` to a container.
+
+    Returns:
+        A list of values for each column of `row_weights`, by column name; empty
+        if `row_weights` is None.
+    """
+    if row_weights is None:
+        return {}
+    return {str(name): row_weights[name].tolist() for name in row_weights.columns}
