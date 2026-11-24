@@ -87,6 +87,7 @@ from sklearn.utils.validation import check_is_fitted
 
 from tabpfn_client.api_models import TabPFNSystem
 from tabpfn_client.constants import MIN_TRAIN_ROWS
+from tabpfn_client.utils import row_weight_fields, row_weights_frame
 
 
 # Multipart form field name -> JSON body key for the same dataset.
@@ -306,7 +307,13 @@ class _HostedBase(BaseEstimator):
         restored.pop("_state_version", None)
         super().__setstate__(restored)
 
-    def fit(self, X: Any, y: Any) -> "_HostedBase":
+    def fit(
+        self,
+        X: Any,
+        y: Any,
+        sample_weight: Optional[Any] = None,
+        label_reliability: Optional[Any] = None,
+    ) -> "_HostedBase":
         """Store the training data; the endpoint fits on the next `predict*` call.
 
         Clears any `model_id_` captured from an earlier fit.
@@ -314,6 +321,10 @@ class _HostedBase(BaseEstimator):
         Args:
             X: Training features.
             y: Training targets.
+            sample_weight: How much each row counts in the fit, one value per
+                row. Experimental: needs a model that takes weights.
+            label_reliability: How far to trust each target, one value in
+                [0, 1] per row. Experimental: needs a model that takes weights.
 
         Returns:
             The estimator itself.
@@ -321,6 +332,8 @@ class _HostedBase(BaseEstimator):
         Raises:
             ValueError: If `X` and `y` have different numbers of samples, or
                 there are fewer than 2 training samples.
+            ValueError: If `sample_weight` or `label_reliability` is not valid,
+                or is given for a fit that the endpoint keeps.
         """
         X_arr = X if isinstance(X, pd.DataFrame) else np.asarray(X)
         y_arr = y if isinstance(y, (pd.DataFrame, pd.Series)) else np.asarray(y)
@@ -334,8 +347,20 @@ class _HostedBase(BaseEstimator):
                 f"Found {X_arr.shape[0]} sample(s) in the training set, but at least "
                 f"{MIN_TRAIN_ROWS} are required."
             )
+        row_weights = row_weights_frame(
+            sample_weight, label_reliability, X_arr.shape[0]
+        )
+        if row_weights is not None and (
+            self.use_kv_cache or self.fit_mode == "fit_with_cache"
+        ):
+            raise ValueError(
+                "`sample_weight` and `label_reliability` are not supported for a fit "
+                "that the endpoint keeps: `use_kv_cache` or "
+                "`fit_mode='fit_with_cache'`."
+            )
         self.X_train_ = X_arr
         self.y_train_ = y_arr
+        self.row_weights_ = row_weights
         # New training data invalidates any cached model_id captured from a
         # prior predict; otherwise `predict(X, model_id=self.model_id_)` would
         # keep hitting the old server-side model.
@@ -409,6 +434,7 @@ class _HostedBase(BaseEstimator):
                 y_arr = y_arr.reshape(-1, 1)
             datasets["x_train"] = self.X_train_
             datasets["y_train"] = y_arr
+            request.update(row_weight_fields(getattr(self, "row_weights_", None)))
         elif self.model_id is not None:
             request["context"] = {"model_id": self.model_id}
         else:
