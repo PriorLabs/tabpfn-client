@@ -402,6 +402,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         description: str | None,
         text_handling: TextHandling = "advanced",
         wait: bool = True,
+        row_weights: pd.DataFrame | None = None,
     ) -> FitResponse:
         """Upload a train set to the server and fit it.
 
@@ -418,6 +419,8 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             description: Description of the dataset and task for the server.
             text_handling: Text-processing preset, ``"advanced"`` or ``"simple"``.
             wait: Whether to poll the server until the fit completes.
+            row_weights: The ``sample_weight`` and ``label_reliability``
+                columns to fit with, one row per row of ``X``.
 
         Returns:
             The fit as the server reports it: its id, its status and its
@@ -441,6 +444,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             client_options=client_options,
             description=description,
             wait=wait,
+            row_weights=row_weights,
         )
 
     @classmethod
@@ -666,6 +670,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         api_mode: ApiMode = ApiMode.AUTO,
         client_options: ClientOptions | None = None,
         wait: bool = True,
+        row_weights: pd.DataFrame | None = None,
     ) -> GetCrossValidateResultResponse:
         """Upload a train set and cross-validate on it, by fold ids.
 
@@ -683,6 +688,8 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             api_mode: The API mode to use: SYNC, ASYNC, or AUTO.
             client_options: Client specific options (e.g. timeout, headers).
             wait: Whether to poll the server until the job completes.
+            row_weights: The `sample_weight` and `label_reliability` columns,
+                one row per row of `X`.
 
         Returns:
             The job as the server reports it; when not waited for, possibly
@@ -708,6 +715,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             api_mode=api_mode,
             client_options=client_options,
             wait=wait,
+            row_weights=row_weights,
         )
 
     @classmethod
