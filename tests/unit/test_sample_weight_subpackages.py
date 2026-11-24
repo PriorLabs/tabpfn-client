@@ -23,7 +23,8 @@ def _hosted_body(**kwargs: Any) -> Dict[str, Any]:
     recorder = Recorder()
     model = hosted.TabPFNClassifier(endpoint_url="https://example.test/predict")
     recorder.install(model)
-    model.fit(X, Y, **kwargs).predict_proba(X[:2])
+    model.fit(X, Y, **kwargs)
+    model.predict_proba(X[:2])
     return recorder.json_body()
 
 
@@ -33,7 +34,8 @@ def _sagemaker_body(**kwargs: Any) -> Dict[str, Any]:
     answer = json.dumps({"prediction": [[0.4, 0.6]] * 2, "metadata": {}}).encode()
     runtime.invoke_endpoint.return_value = {"Body": BytesIO(answer)}
     with patch.object(model, "_runtime_client", return_value=runtime):
-        model.fit(X, Y, **kwargs).predict_proba(X[:2])
+        model.fit(X, Y, **kwargs)
+        model.predict_proba(X[:2])
     return json.loads(runtime.invoke_endpoint.call_args.kwargs["Body"])
 
 
@@ -48,7 +50,8 @@ def _foundry_body(**kwargs: Any) -> Dict[str, Any]:
         endpoint_url="https://example.test/predict", api_key="key"
     )
     model._cached_client = httpx.Client(transport=httpx.MockTransport(answer))
-    model.fit(X, Y, **kwargs).predict_proba(X[:2])
+    model.fit(X, Y, **kwargs)
+    model.predict_proba(X[:2])
     return sent
 
 
@@ -77,7 +80,8 @@ def test_the_parquet_payload_carries_the_weights_in_the_request_part() -> None:
     )
     recorder.install(model)
 
-    model.fit(X, Y, sample_weight=WEIGHTS["sample_weight"]).predict_proba(X[:2])
+    model.fit(X, Y, sample_weight=WEIGHTS["sample_weight"])
+    model.predict_proba(X[:2])
 
     config, frames = recorder.multipart()
     assert config["sample_weight"] == [1.0, 2.0, 3.0, 4.0]
