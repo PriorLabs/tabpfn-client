@@ -14,6 +14,7 @@ from typing import Any, Literal, TypeVar, cast, get_args, overload
 from typing_extensions import Self
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 from sklearn.base import ClassifierMixin, RegressorMixin
 from sklearn.exceptions import NotFittedError
@@ -264,6 +265,9 @@ class _AsyncMixin(ModelPersistenceMixin):
         self,
         X: pd.DataFrame | np.ndarray,
         y: pd.Series | np.ndarray,
+        sample_weight: npt.ArrayLike | None = None,
+        label_reliability: npt.ArrayLike | None = None,
+        *,
         description: str | None = None,
     ) -> Self:
         """Start fitting the model on the server, without waiting for the fit.
@@ -280,6 +284,14 @@ class _AsyncMixin(ModelPersistenceMixin):
         Args:
             X: The input data.
             y: The target variable.
+            sample_weight: Experimental. One non-negative weight per training
+                row, roughly how many rows it stands for. Only relative values
+                matter. Not every model takes weights; the server rejects them
+                for one that does not, for thinking mode and for
+                `fit_mode="fit_with_cache"`.
+            label_reliability: Experimental. One value in [0, 1] per training
+                row: how much to trust its label, from 1 (known to be right) to
+                0 (carries no information).
             description: Description of the dataset and task for the server.
 
         Returns:
@@ -289,7 +301,14 @@ class _AsyncMixin(ModelPersistenceMixin):
             ValueError: If the data or the estimator's parameters are invalid,
                 or the data exceeds the model limits.
         """
-        return self._fit(X, y, description, submit=True)
+        return self._fit(
+            X,
+            y,
+            description,
+            submit=True,
+            sample_weight=sample_weight,
+            label_reliability=label_reliability,
+        )
 
     def wait_for_fit(self) -> Self:
         """Wait for the server to complete the fit `submit_fit()` started.
@@ -342,6 +361,8 @@ class _AsyncMixin(ModelPersistenceMixin):
         description: str | None,
         *,
         submit: bool,
+        sample_weight: npt.ArrayLike | None,
+        label_reliability: npt.ArrayLike | None,
     ) -> Self:
         """Fit as `fit()` does or, with `submit`, as `submit_fit()` does."""
         raise NotImplementedError  # Each estimator fits its own task.
@@ -1055,6 +1076,9 @@ class TabPFNClassifier(
         self,
         X: pd.DataFrame | np.ndarray,
         y: pd.Series | np.ndarray,
+        sample_weight: npt.ArrayLike | None = None,
+        label_reliability: npt.ArrayLike | None = None,
+        *,
         description: str | None = None,
     ):
         """Fit the model.
@@ -1073,6 +1097,14 @@ class TabPFNClassifier(
         Args:
             X: The input data.
             y: The target variable.
+            sample_weight: Experimental. One non-negative weight per training
+                row, roughly how many rows it stands for. Only relative values
+                matter. Not every model takes weights; the server rejects them
+                for one that does not, for thinking mode and for
+                `fit_mode="fit_with_cache"`.
+            label_reliability: Experimental. One value in [0, 1] per training
+                row: how much to trust its label, from 1 (known to be right) to
+                0 (carries no information).
             description: Description of the dataset and task for the server.
 
         Returns:
@@ -1089,7 +1121,14 @@ class TabPFNClassifier(
                 within `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds. The model is
                 then pending on the new fit.
         """
-        return self._fit(X, y, description, submit=False)
+        return self._fit(
+            X,
+            y,
+            description,
+            submit=False,
+            sample_weight=sample_weight,
+            label_reliability=label_reliability,
+        )
 
     def _fit(
         self,
@@ -1098,6 +1137,8 @@ class TabPFNClassifier(
         description: str | None,
         *,
         submit: bool,
+        sample_weight: npt.ArrayLike | None,
+        label_reliability: npt.ArrayLike | None,
     ) -> Self:
         """Fit as `fit()` does or, with `submit`, as `submit_fit()` does."""
         text_handling = validate_text_handling(self.text_handling)
@@ -1110,6 +1151,7 @@ class TabPFNClassifier(
         validate_train_set(
             X, y, model_path=tabpfn_config.model_path, thinking=thinking_mode
         )
+        row_weights = _row_weights(sample_weight, label_reliability, X.shape[0])
         X_clean = _clean_text_features(X)
         classes = self._validate_targets_and_classes(y)
 
@@ -1157,6 +1199,7 @@ class TabPFNClassifier(
                 description=description,
                 # Waited for below, once the model holds the new fit.
                 wait=False,
+                row_weights=row_weights,
             )
             self._set_fit(fit_result, n_train_rows=X.shape[0])
             # Set only after the server has accepted the fit, so a failed refit
@@ -1911,6 +1954,9 @@ class TabPFNRegressor(
         self,
         X: pd.DataFrame | np.ndarray,
         y: pd.Series | np.ndarray,
+        sample_weight: npt.ArrayLike | None = None,
+        label_reliability: npt.ArrayLike | None = None,
+        *,
         description: str | None = None,
     ):
         """Fit the model.
@@ -1929,6 +1975,14 @@ class TabPFNRegressor(
         Args:
             X: The input data.
             y: The target variable.
+            sample_weight: Experimental. One non-negative weight per training
+                row, roughly how many rows it stands for. Only relative values
+                matter. Not every model takes weights; the server rejects them
+                for one that does not, for thinking mode and for
+                `fit_mode="fit_with_cache"`.
+            label_reliability: Experimental. One value in [0, 1] per training
+                row: how much to trust its label, from 1 (known to be right) to
+                0 (carries no information).
             description: Description of the dataset and task for the server.
 
         Returns:
@@ -1945,7 +1999,14 @@ class TabPFNRegressor(
                 within `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds. The model is
                 then pending on the new fit.
         """
-        return self._fit(X, y, description, submit=False)
+        return self._fit(
+            X,
+            y,
+            description,
+            submit=False,
+            sample_weight=sample_weight,
+            label_reliability=label_reliability,
+        )
 
     def _fit(
         self,
@@ -1954,6 +2015,8 @@ class TabPFNRegressor(
         description: str | None,
         *,
         submit: bool,
+        sample_weight: npt.ArrayLike | None,
+        label_reliability: npt.ArrayLike | None,
     ) -> Self:
         """Fit as `fit()` does or, with `submit`, as `submit_fit()` does."""
         text_handling = validate_text_handling(self.text_handling)
@@ -1965,6 +2028,7 @@ class TabPFNRegressor(
         validate_train_set(
             X, y, model_path=tabpfn_config.model_path, thinking=thinking_mode
         )
+        row_weights = _row_weights(sample_weight, label_reliability, X.shape[0])
         self._validate_targets(y)
         X_clean = _clean_text_features(X)
 
@@ -2002,6 +2066,7 @@ class TabPFNRegressor(
                 description=description,
                 # Waited for below, once the model holds the new fit.
                 wait=False,
+                row_weights=row_weights,
             )
             self._set_fit(fit_result, n_train_rows=X.shape[0])
             self._fit_count += 1
@@ -2563,6 +2628,50 @@ class TabPFNRegressor(
         y_ = column_or_1d(y, warn=True)
         if sum(pd.isnull(y_)) > 0:
             raise ValueError("Input y contains NaN.")
+
+
+def _row_weights(
+    sample_weight: Any, label_reliability: Any, n_rows: int
+) -> pd.DataFrame | None:
+    """The `sample_weight` and `label_reliability` given to `fit`, as one frame.
+
+    Returns:
+        A frame with a column for each argument that is not None, or None if
+        both are None.
+
+    Raises:
+        ValueError: If an argument does not hold one finite number per row,
+            `sample_weight` is negative or all zero, or `label_reliability`
+            lies outside [0, 1].
+    """
+    columns: dict[str, np.ndarray] = {}
+    for name, values in (
+        ("sample_weight", sample_weight),
+        ("label_reliability", label_reliability),
+    ):
+        if values is None:
+            continue
+        try:
+            array = np.asarray(values, dtype=np.float64)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"`{name}` must hold numbers.") from e
+        if array.shape != (n_rows,):
+            raise ValueError(
+                f"`{name}` must hold one value per row of X: got shape "
+                f"{array.shape} for {n_rows} rows."
+            )
+        if not np.isfinite(array).all():
+            raise ValueError(f"`{name}` must hold finite numbers.")
+        columns[name] = array
+    weight = columns.get("sample_weight")
+    if weight is not None and (weight < 0).any():
+        raise ValueError("`sample_weight` must not be negative.")
+    if weight is not None and not weight.any():
+        raise ValueError("`sample_weight` must not be all zero.")
+    reliability = columns.get("label_reliability")
+    if reliability is not None and ((reliability < 0) | (reliability > 1)).any():
+        raise ValueError("`label_reliability` must lie in [0, 1].")
+    return pd.DataFrame(columns) if columns else None
 
 
 def validate_train_set(
