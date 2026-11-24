@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import pickle
 from collections.abc import Iterator
 from email.parser import BytesParser
 from email.policy import default as default_policy
@@ -139,8 +140,12 @@ def _result_parquet() -> bytes:
     return buf.getvalue()
 
 
-def _pending() -> dict[str, Any]:
-    return {"status": "pending", "job_id": str(JOB_ID)}
+def _pending(retry_in_secs: float = 2.0) -> dict[str, Any]:
+    return {
+        "status": "pending",
+        "job_id": str(JOB_ID),
+        "retry_in_secs": retry_in_secs,
+    }
 
 
 def _inline() -> dict[str, Any]:
@@ -172,10 +177,12 @@ def _failed(error_kind: str | None) -> dict[str, Any]:
     }
 
 
-def _error(status_code: int, error_code: str) -> httpx.Response:
+def _error(status_code: int, error_code: str, *, job: bool = False) -> httpx.Response:
+    """An error before the keepalive started, with the job's id if one exists."""
     return httpx.Response(
         status_code,
         json={"message": "the reason", "error_code": error_code, "trace_id": "t"},
+        headers={"X-Job-Id": str(JOB_ID)} if job else {},
     )
 
 
@@ -462,8 +469,9 @@ class TestSyncForecast:
         router.post("/forecast/forecast").respond(200, json=_pending())
         poll = router.post("/forecast/get_job_result")
         poll.side_effect = [
-            httpx.Response(200, json=_pending()),
+            httpx.Response(200, json=_pending(9.0)),
             httpx.Response(503),
+            httpx.Response(200, json=_pending(0.5)),
             httpx.Response(200, json=_stored()),
         ]
         download = router.get(f"{STORAGE}/result.parquet").respond(
@@ -476,10 +484,11 @@ class TestSyncForecast:
         assert result.metadata == ForecastMetadata(**METADATA)
         assert [json.loads(c.request.content) for c in poll.calls] == [
             {"job_id": str(JOB_ID)}
-        ] * 3
+        ] * 4
         assert download.called
-        # No hint from the server: the poll loop's 5 s.
-        assert clock.sleeps == [5.0, 5.0]
+        # The first poll waits for the hint of the request's answer, and each
+        # later one for the hint before it, at least 5 s after a failed poll.
+        assert clock.sleeps == [2.0, 9.0, 9.0, 0.5]
 
 
 class TestFailures:
@@ -505,35 +514,24 @@ class TestFailures:
         assert exc.value.job_id == JOB_ID
 
     @pytest.mark.parametrize(
-        ("response", "error_type", "job_id"),
+        ("response", "error_type"),
         [
+            (_error(422, "INPUT_PARSE_ERROR", job=True), TimeSeriesInputParseError),
             (
-                _error(422, "INPUT_PARSE_ERROR"),
-                TimeSeriesInputParseError,
-                None,
-            ),
-            (
-                _error(422, "INPUT_VALIDATION_ERROR"),
+                _error(422, "INPUT_VALIDATION_ERROR", job=True),
                 TimeSeriesInputValidationError,
-                None,
             ),
             (
                 _streamed_error(422, "INPUT_PARSE_ERROR"),
                 TimeSeriesInputParseError,
-                JOB_ID,
             ),
             (
                 _streamed_error(422, "INPUT_VALIDATION_ERROR"),
                 TimeSeriesInputValidationError,
-                JOB_ID,
             ),
-            (_error(500, "INTERNAL_ERROR"), TimeSeriesJobFailedError, None),
-            (
-                _streamed_error(504, "DEADLINE_EXCEEDED"),
-                TimeSeriesJobFailedError,
-                JOB_ID,
-            ),
-            (_error(503, "BUSY"), TimeSeriesJobFailedError, None),
+            (_error(500, "INTERNAL_ERROR", job=True), TimeSeriesJobFailedError),
+            (_streamed_error(504, "DEADLINE_EXCEEDED"), TimeSeriesJobFailedError),
+            (_error(503, "BUSY", job=True), TimeSeriesJobFailedError),
         ],
         ids=[
             "parse",
@@ -546,7 +544,7 @@ class TestFailures:
         ],
     )
     def test_a_job_that_fails_while_the_request_waits_raises_its_error(
-        self, router, response, error_type, job_id
+        self, router, response, error_type
     ):
         router.post("/forecast/forecast").mock(return_value=response)
 
@@ -554,18 +552,63 @@ class TestFailures:
             _forecast()
 
         assert type(exc.value) is error_type
-        assert exc.value.job_id == job_id
+        assert exc.value.job_id == JOB_ID
 
     @pytest.mark.parametrize(
         "response",
         [_error(422, "USER_ERROR"), _error(413, "USER_ERROR")],
-        ids=["spec", "too_large"],
+        ids=["refused", "too_large"],
     )
-    def test_a_request_the_server_refuses_raises_invalid_series(self, router, response):
+    def test_a_request_refused_before_any_job_raises_invalid_series(
+        self, router, response
+    ):
         router.post("/forecast/forecast").mock(return_value=response)
 
         with pytest.raises(InvalidSeriesError, match="the reason"):
             _forecast()
+
+    def test_a_job_error_can_be_pickled_with_its_job_id(self):
+        error = TimeSeriesInputParseError("the reason", job_id=JOB_ID)
+
+        copy = pickle.loads(pickle.dumps(error))
+
+        assert type(copy) is TimeSeriesInputParseError
+        assert str(copy) == "the reason"
+        assert copy.job_id == JOB_ID
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            httpx.Response(
+                429,
+                json={
+                    "message": "Monthly token quota exceeded.",
+                    "error_code": "USAGE_LIMIT_EXCEEDED",
+                },
+            ),
+            httpx.Response(
+                429,
+                json={
+                    "detail": "Rate limit exceeded: at most 60 forecast requests "
+                    "per minute are allowed. Retry in 12s."
+                },
+                headers={"Retry-After": "12"},
+            ),
+        ],
+        ids=["quota", "rate_limit"],
+    )
+    def test_a_quota_or_rate_limit_raises_the_error_of_a_prediction(
+        self, router, response
+    ):
+        router.post("/forecast/forecast").mock(return_value=response)
+
+        with pytest.raises(
+            RuntimeError, match=r"Fail to call forecast: \[HTTP 429\]"
+        ) as exc:
+            _forecast()
+
+        assert type(exc.value) is RuntimeError
+        assert not isinstance(exc.value, (InvalidSeriesError, TimeSeriesJobFailedError))
 
     def test_an_unknown_job_raises_at_once(self, router, clock):
         router.post("/forecast/forecast").respond(200, json=_pending())

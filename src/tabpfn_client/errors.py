@@ -167,18 +167,21 @@ class TimeSeriesJobFailedError(RuntimeError):
     The message holds the server's reason, and ``job_id`` the id of the job.
     """
 
-    # The default lets pickle and copy rebuild the error from its message, as
-    # they rebuild any exception, and then restore the id.
-    def __init__(self, message: str, *, job_id: UUID | None = None):
+    def __init__(self, message: str, job_id: UUID):
         """Initialize the error.
 
         Args:
             message: The server's reason.
-            job_id: The id of the job, or None if the server did not send it, as
-                when it refuses the input before it starts a job.
+            job_id: The id of the job.
         """
         super().__init__(message)
         self.job_id = job_id
+
+    # Without it, pickle and copy rebuild the error from its message alone, which
+    # lacks the id. A process pool hands an error to its parent that way.
+    def __reduce__(self):
+        """Rebuild the error with its message and its job id."""
+        return type(self), (str(self), self.job_id)
 
 
 class TimeSeriesInputParseError(TimeSeriesJobFailedError):

@@ -126,6 +126,7 @@ _Result = Annotated[Union[_InlineResult, _StoredResult], Field(discriminator="ki
 class _JobPending(BaseModel):
     status: Literal["pending"]
     job_id: UUID
+    retry_in_secs: float
 
 
 class _JobSucceeded(BaseModel):
@@ -150,32 +151,26 @@ _JobResult = Annotated[
 
 class _JobResultResponse(RootModel[_JobResult]):
     @property
-    def retry_in_secs(self) -> None:
-        # The server sends no polling hint, so the poll loop uses its default.
-        return None
+    def retry_in_secs(self) -> float | None:
+        match self.root:
+            case _JobPending():
+                return self.root.retry_in_secs
+            case _JobSucceeded() | _JobFailed():
+                return None
+            case _:
+                assert_never(self.root)
 
 
-class _RequestRefused(BaseModel):
-    """A 413 or 422: the server refused the request or the job's input."""
+class _ErrorBody(BaseModel):
+    """The body of an error response of the forecast endpoints."""
 
     # `detail` in an error streamed after the keepalive started.
     message: str = Field(validation_alias=AliasChoices("message", "detail"))
     error_code: str | None = None
 
 
-class _JobError(BaseModel):
-    """A 5xx with the server's body: the job failed on the server's side."""
-
-    message: str = Field(validation_alias=AliasChoices("message", "detail"))
-
-
-_FORECAST_ERRORS: dict[int, type[_RequestRefused | _JobError]] = {
-    413: _RequestRefused,
-    422: _RequestRefused,
-    500: _JobError,
-    503: _JobError,
-    504: _JobError,
-}
+# A job that failed is named in the `X-Job-Id` header, whatever the status.
+_FORECAST_ERRORS = dict.fromkeys(range(400, 600), _ErrorBody)
 
 
 @dataclass(frozen=True)
@@ -235,14 +230,17 @@ def forecast(
 
     Raises:
         InvalidSeriesError: If the column roles, the column names or the
-            parameters break a rule of the service.
+            parameters break a rule of the service, or the server refuses the
+            request before it creates a job.
         TimeSeriesInputParseError: If the server cannot read a table as the
             column roles name it.
         TimeSeriesInputValidationError: If the server reads the tables, but their
             values break a rule of the service.
         TimeSeriesJobFailedError: If the job fails for another reason.
         TimeoutError: If the job does not finish within the poll timeout.
-        RuntimeError: If the server does not offer forecasts.
+        RuntimeError: If the server does not offer forecasts, or fails the
+            request before it creates a job in any other way, such as 429 for a
+            quota or rate limit.
     """
     init()
     limits = _forecast_limits()
@@ -445,31 +443,33 @@ def _start(
         success_model=_JobResultResponse,
         error_models=_FORECAST_ERRORS,
     )
-    # The server names the job in a header once it streams its answer, so an
-    # error that comes after that carries the id; a quick one does not.
-    header = res.headers.get("X-Job-Id")
-    job_id = None if header is None else UUID(header)
     match resp:
         case _JobResultResponse():
             return resp.root
-        case _RequestRefused():
-            raise _refused(resp, job_id=job_id)
-        case _JobError():
-            raise TimeSeriesJobFailedError(resp.message, job_id=job_id)
+        case _ErrorBody():
+            raise _failure(res, resp)
         case _:
             assert_never(resp)
 
 
-def _refused(
-    resp: _RequestRefused, *, job_id: UUID | None
-) -> InvalidSeriesError | TimeSeriesJobFailedError:
-    match resp.error_code:
+def _failure(res: httpx.Response, error: _ErrorBody) -> Exception:
+    """The error for a failed request: a failed job if the server named one."""
+    header = res.headers.get("X-Job-Id")
+    if header is None:
+        if res.status_code in (413, 422):
+            return InvalidSeriesError(error.message)
+        # No job exists, so this is a quota or rate limit (429) or an outage: the
+        # error of a prediction request that fails before its job.
+        body, message = ServiceClient._read_json_body(res)
+        ServiceClient._raise_http_error(res, "forecast", body, message)
+    job_id = UUID(header)
+    match error.error_code:
         case "INPUT_PARSE_ERROR":
-            return TimeSeriesInputParseError(resp.message, job_id=job_id)
+            return TimeSeriesInputParseError(error.message, job_id=job_id)
         case "INPUT_VALIDATION_ERROR":
-            return TimeSeriesInputValidationError(resp.message, job_id=job_id)
+            return TimeSeriesInputValidationError(error.message, job_id=job_id)
         case _:
-            return InvalidSeriesError(resp.message)
+            return TimeSeriesJobFailedError(error.message, job_id=job_id)
 
 
 def _upload(series: bytes, *, known_covariates: bytes | None) -> UUID:
@@ -503,7 +503,7 @@ def _result_of(job: _JobResult) -> ForecastResult:
     """The forecast of `job`, once it is done."""
     match job:
         case _JobPending():
-            return _result_of(_wait_for_job(job.job_id))
+            return _result_of(_wait_for_job(job))
         case _JobSucceeded():
             return ForecastResult(
                 forecast=_read_result(job.result), metadata=job.metadata
@@ -539,23 +539,27 @@ def _read_result(result: _Result) -> pd.DataFrame:
             assert_never(result)
 
 
-def _wait_for_job(job_id: UUID) -> _JobResult:
+def _wait_for_job(job: _JobPending) -> _JobResult:
     """Poll the job until it succeeds or fails, and return that answer.
+
+    The first poll comes after the job's `retry_in_secs`, and each later one after
+    the hint of the answer before it.
 
     Poll errors are classified as for a prediction: 408, 502, 503, 504 and network
     errors are retried until the poll timeout; 429, 500 and a malformed body up to
     3 times in a row; anything else, such as an unknown job (404), raises at once.
     """
     resp = ServiceClient._poll_until_done(
-        lambda: _get_job_result(job_id),
+        lambda: _get_job_result(job.job_id),
         lambda r: not isinstance(r.root, _JobPending),
-        subject=f"forecast job {job_id}",
+        subject=f"forecast job {job.job_id}",
         transient_errors=(
             httpx.NetworkError,
             httpx.TimeoutException,
             RetryableServerError,
         ),
         capped_errors=(CappedRetryableServerError,),
+        first_poll_delay_secs=job.retry_in_secs,
     )
     return resp.root
 
