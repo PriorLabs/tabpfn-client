@@ -149,3 +149,41 @@ class CrossValidateFailedError(RuntimeError):
         """
         super().__init__(message)
         self.cv_job_id = cv_job_id
+
+
+class InvalidSeriesError(ValueError):
+    """A forecast request breaks a rule of the service before any job runs.
+
+    Raised by ``forecast()`` for the structure of the request: column roles,
+    missing, extra, duplicate or reserved column names, and the limits the
+    server's settings give. The server raises it too, for the request checks
+    it makes before it starts a job.
+    """
+
+
+class TimeSeriesJobFailedError(RuntimeError):
+    """The server reports that a forecast job failed.
+
+    The message holds the server's reason, and ``job_id`` the id of the job.
+    """
+
+    # The default lets pickle and copy rebuild the error from its message, as
+    # they rebuild any exception, and then restore the id.
+    def __init__(self, message: str, *, job_id: UUID | None = None):
+        """Initialize the error.
+
+        Args:
+            message: The server's reason.
+            job_id: The id of the job, or None if the server did not send it, as
+                when it refuses the input before it starts a job.
+        """
+        super().__init__(message)
+        self.job_id = job_id
+
+
+class TimeSeriesInputParseError(TimeSeriesJobFailedError):
+    """The server cannot read a table as the column roles of the job name it."""
+
+
+class TimeSeriesInputValidationError(TimeSeriesJobFailedError):
+    """The server reads the tables, but their values break a rule of the service."""

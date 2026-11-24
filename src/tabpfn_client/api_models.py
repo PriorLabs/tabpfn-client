@@ -304,6 +304,24 @@ class FitTimings(BaseModel):
     )
 
 
+class ForecastLimits(BaseModel):
+    """What one forecast job may take. `get_settings` returns them as `forecast`.
+
+    An uploaded table is also held to `dataset_max_size_bytes` of `get_settings`.
+    """
+
+    max_horizon: int
+    max_inline_table_bytes: int
+    max_items: int
+    max_rows: int
+    quantiles: list[float]
+    max_targets: int
+    max_cells: int
+    max_output_rows: int
+    max_table_bytes: int
+    max_covariates: int
+
+
 class ModelLimit(BaseModel):
     train_set_max_rows: int
     train_set_max_cells: int = Field(
@@ -660,6 +678,7 @@ class GetSettingsResponse(BaseModel):
         | None
     ) = None
     thinking_max_timeout_secs: float | None = None
+    forecast: ForecastLimits | None = None
 
 
 class InlinePredictRequest(BaseModel):
