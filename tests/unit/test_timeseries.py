@@ -59,7 +59,8 @@ def _limits(**overrides: Any) -> ForecastLimits:
             "max_targets": 2,
             "max_cells": 30_000,
             "max_output_rows": 10_000,
-            "max_table_bytes": 1_000_000,
+            "max_file_bytes": 1_000_000,
+            "max_decoded_bytes": 4_000_000,
             "max_covariates": 3,
             **overrides,
         }
