@@ -321,6 +321,7 @@ class ForecastLimits(BaseModel):
     max_file_bytes: int
     max_decoded_bytes: int
     max_covariates: int
+    max_target_rows: int
 
 
 class ModelLimit(BaseModel):

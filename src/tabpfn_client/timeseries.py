@@ -268,6 +268,9 @@ def forecast(
     )
     _check_spec(spec, limits=limits)
     _check_series_columns(series, spec.columns)
+    _check_target_rows(
+        series, known_covariates, n_targets=len(target_columns), limits=limits
+    )
     job = _start(
         spec,
         _parquet(series),
@@ -365,6 +368,25 @@ def _check_series_columns(series: pd.DataFrame, columns: _ColumnRoles) -> None:
         raise InvalidSeriesError(
             f"The series table has column(s) {extra}, which the job does not name. "
             "Drop them, or give them a role."
+        )
+
+
+def _check_target_rows(
+    series: pd.DataFrame,
+    known_covariates: pd.DataFrame | None,
+    *,
+    n_targets: int,
+    limits: ForecastLimits,
+) -> None:
+    """Check the rows of both tables times the targets against the time bound."""
+    rows = len(series) + (0 if known_covariates is None else len(known_covariates))
+    target_rows = rows * n_targets
+    if target_rows > limits.max_target_rows:
+        raise InvalidSeriesError(
+            f"The tables have {rows:,} rows; times {n_targets} targets that is "
+            f"{target_rows:,} target rows, and a job can have at most "
+            f"{limits.max_target_rows:,}. Send fewer rows: shorten the history, or "
+            "split the items or targets over several jobs."
         )
 
 

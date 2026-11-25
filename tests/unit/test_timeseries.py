@@ -62,6 +62,7 @@ def _limits(**overrides: Any) -> ForecastLimits:
             "max_file_bytes": 1_000_000,
             "max_decoded_bytes": 4_000_000,
             "max_covariates": 3,
+            "max_target_rows": 1_000_000,
             **overrides,
         }
     )
@@ -362,6 +363,23 @@ class TestStructureChecks:
                 kwargs = {"past_covariate_columns": [name]}
 
         _forecast(series, **kwargs)
+
+        assert route.called
+
+    def test_refuses_a_job_past_the_target_row_limit_before_any_request(self, router):
+        # 12 series rows + 6 known rows, times 2 targets.
+        with _with_settings(max_target_rows=35):
+            with pytest.raises(InvalidSeriesError, match="18 rows.*36 target rows"):
+                _forecast_with_covariates(
+                    target_columns=["y", "price"], past_covariate_columns=[]
+                )
+
+    def test_accepts_a_job_at_the_target_row_limit(self, router):
+        route = router.post("/forecast/forecast").respond(200, json=_inline())
+        with _with_settings(max_target_rows=36):
+            _forecast_with_covariates(
+                target_columns=["y", "price"], past_covariate_columns=[]
+            )
 
         assert route.called
 
