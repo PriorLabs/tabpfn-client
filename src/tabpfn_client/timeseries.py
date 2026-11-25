@@ -88,6 +88,9 @@ class _ForecastTask(BaseModel):
 
 class _JobSpec(BaseModel):
     freq: str
+    # The server prices the job from it, and fails a job whose series table has
+    # another count.
+    n_items: int
     columns: _ColumnRoles
     task: _ForecastTask
 
@@ -252,24 +255,21 @@ def forecast(
             known_covariates, id_column=id_column, timestamp_column=timestamp_column
         )
     )
-    spec = _JobSpec(
-        freq=freq,
-        columns=_ColumnRoles(
-            id=id_column,
-            timestamp=timestamp_column,
-            targets=list(target_columns),
-            past_covariates=list(past_covariate_columns),
-            known_covariates=known_covariate_columns,
-            static_covariates=list(static_covariate_columns),
-        ),
-        task=_ForecastTask(
-            horizon=horizon, quantiles=None if quantiles is None else list(quantiles)
-        ),
+    columns = _ColumnRoles(
+        id=id_column,
+        timestamp=timestamp_column,
+        targets=list(target_columns),
+        past_covariates=list(past_covariate_columns),
+        known_covariates=known_covariate_columns,
+        static_covariates=list(static_covariate_columns),
     )
-    _check_spec(spec, limits=limits)
-    _check_series_columns(series, spec.columns)
-    _check_target_rows(
-        series, known_covariates, n_targets=len(target_columns), limits=limits
+    task = _ForecastTask(
+        horizon=horizon, quantiles=None if quantiles is None else list(quantiles)
+    )
+    _check_spec(columns, task, limits=limits)
+    _check_series_columns(series, columns)
+    spec = _JobSpec(
+        freq=freq, n_items=int(series[id_column].nunique()), columns=columns, task=task
     )
     job = _start(
         spec,
@@ -299,9 +299,10 @@ def _forecast_limits() -> ForecastLimits:
     return settings.forecast
 
 
-def _check_spec(spec: _JobSpec, *, limits: ForecastLimits) -> None:
+def _check_spec(
+    columns: _ColumnRoles, task: _ForecastTask, *, limits: ForecastLimits
+) -> None:
     """Check the column roles and the task against the rules and `limits`."""
-    columns = spec.columns
     if not columns.targets:
         raise InvalidSeriesError("Name at least one target column.")
     if len(columns.targets) > limits.max_targets:
@@ -334,7 +335,6 @@ def _check_spec(spec: _JobSpec, *, limits: ForecastLimits) -> None:
             f"The job names {len(columns.covariates)} covariates, and a job can "
             f"have at most {limits.max_covariates}. Name fewer."
         )
-    task = spec.task
     if not 1 <= task.horizon <= limits.max_horizon:
         raise InvalidSeriesError(
             f"horizon is {task.horizon}; it must be from 1 to {limits.max_horizon}."
@@ -368,25 +368,6 @@ def _check_series_columns(series: pd.DataFrame, columns: _ColumnRoles) -> None:
         raise InvalidSeriesError(
             f"The series table has column(s) {extra}, which the job does not name. "
             "Drop them, or give them a role."
-        )
-
-
-def _check_target_rows(
-    series: pd.DataFrame,
-    known_covariates: pd.DataFrame | None,
-    *,
-    n_targets: int,
-    limits: ForecastLimits,
-) -> None:
-    """Check the rows of both tables times the targets against the time bound."""
-    rows = len(series) + (0 if known_covariates is None else len(known_covariates))
-    target_rows = rows * n_targets
-    if target_rows > limits.max_target_rows:
-        raise InvalidSeriesError(
-            f"The tables have {rows:,} rows; times {n_targets} targets that is "
-            f"{target_rows:,} target rows, and a job can have at most "
-            f"{limits.max_target_rows:,}. Send fewer rows: shorten the history, or "
-            "split the items or targets over several jobs."
         )
 
 

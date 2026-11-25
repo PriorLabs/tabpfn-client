@@ -62,7 +62,6 @@ def _limits(**overrides: Any) -> ForecastLimits:
             "max_file_bytes": 1_000_000,
             "max_decoded_bytes": 4_000_000,
             "max_covariates": 3,
-            "max_target_rows": 1_000_000,
             **overrides,
         }
     )
@@ -366,23 +365,6 @@ class TestStructureChecks:
 
         assert route.called
 
-    def test_refuses_a_job_past_the_target_row_limit_before_any_request(self, router):
-        # 12 series rows + 6 known rows, times 2 targets.
-        with _with_settings(max_target_rows=35):
-            with pytest.raises(InvalidSeriesError, match="18 rows.*36 target rows"):
-                _forecast_with_covariates(
-                    target_columns=["y", "price"], past_covariate_columns=[]
-                )
-
-    def test_accepts_a_job_at_the_target_row_limit(self, router):
-        route = router.post("/forecast/forecast").respond(200, json=_inline())
-        with _with_settings(max_target_rows=36):
-            _forecast_with_covariates(
-                target_columns=["y", "price"], past_covariate_columns=[]
-            )
-
-        assert route.called
-
     @pytest.mark.parametrize(
         ("known", "match"),
         [
@@ -456,6 +438,7 @@ class TestSyncForecast:
         )
         assert _spec(route) == {
             "freq": "D",
+            "n_items": 2,
             "columns": {
                 "id": "item_id",
                 "timestamp": "timestamp",
@@ -466,6 +449,15 @@ class TestSyncForecast:
             },
             "task": {"task": "forecast", "horizon": HORIZON, "quantiles": [0.5]},
         }
+
+    def test_sends_the_count_of_distinct_ids_as_n_items(self, router):
+        route = router.post("/forecast/forecast").respond(200, json=_inline())
+        # Rows of one item apart from each other still count once.
+        series = _series(n_items=3).sample(frac=1, random_state=0)
+
+        _forecast(series)
+
+        assert _spec(route)["n_items"] == 3
 
     def test_asks_for_the_whole_grid_without_quantiles(self, router):
         route = router.post("/forecast/forecast").respond(200, json=_inline())
