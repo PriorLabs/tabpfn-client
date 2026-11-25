@@ -52,11 +52,14 @@ replica that holds the model without reading the body.
 estimator contract stays intact: `predict(X)` / `predict_proba(X)` work
 with `Pipeline`, `GridSearchCV`, `cross_validate`, etc.
 
-`payload_format="parquet"` sends the datasets as multipart Parquet files
-instead of inline JSON. Encoding dominates request time on large tables,
-and Parquet carries missing and non-finite values exactly. The JSON path
-encodes them as the `NaN` / `Infinity` literals Python's `json` accepts
-but the standard does not, so a strict endpoint needs Parquet for those.
+The datasets go out as multipart Parquet files (`payload_format="parquet"`,
+the default). Parquet is smaller and faster to encode than inline JSON,
+carries missing and non-finite values exactly, and lets the endpoint check
+a table's size from its metadata before decoding it, so large tables are
+admitted by their real size. `payload_format="json"` is deprecated and will
+be removed in a future release: it inlines the datasets and encodes missing
+and non-finite values as the `NaN` / `Infinity` literals Python's `json`
+accepts but the standard does not.
 
 `use_async=True` runs each `predict*` call as a job on the endpoint
 instead of one long request; `predict*` still blocks and returns the same
@@ -77,6 +80,7 @@ import io
 import json
 import time
 import uuid
+import warnings
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import httpx
@@ -201,7 +205,7 @@ class _HostedBase(BaseEstimator):
         memory_saving_mode: bool | Literal["auto"] | None = None,
         categorical_features_indices: List[int] | None = None,
         timeout_s: float = 300.0,
-        payload_format: Literal["json", "parquet"] = "json",
+        payload_format: Literal["json", "parquet"] = "parquet",
         use_kv_cache: bool = False,
         tabpfn_systems: Optional[List[TabPFNSystem | str]] = None,
         use_async: bool = False,
@@ -390,8 +394,19 @@ class _HostedBase(BaseEstimator):
                 status.
             TimeoutError: If `use_async` is set and the endpoint has not
                 answered the job within `async_timeout_s`.
+
+        Warns:
+            DeprecationWarning: If `payload_format` is `"json"`.
         """
         _validate_tabpfn_systems(self.tabpfn_systems)
+        if self.payload_format == "json":
+            warnings.warn(
+                'payload_format="json" is deprecated and will be removed in a '
+                "future release. Parquet is the default; drop the argument or "
+                'pass payload_format="parquet".',
+                DeprecationWarning,
+                stacklevel=3,
+            )
         params: Dict[str, Any] = {"output_type": output_type}
         if predict_params:
             params.update(predict_params)
