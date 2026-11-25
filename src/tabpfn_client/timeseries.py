@@ -52,8 +52,9 @@ _FORECAST_PATH = "/forecast/forecast"
 _JOB_RESULT_PATH = "/forecast/get_job_result"
 
 # Output column names, of the forecast and of the backtest to come (`cutoff`,
-# `actual`), with every name that starts with `_QUANTILE_PREFIX`. No input column
-# may take one.
+# `actual`), with every name that starts with `_QUANTILE_PREFIX`. The id and
+# timestamp columns are output columns too, so they may not take one. Target and
+# covariate names never become column names of the result.
 _QUANTILE_PREFIX = "q_"
 _RESERVED_COLUMNS = frozenset({"target_column", "mean", "cutoff", "actual"})
 
@@ -315,15 +316,15 @@ def _check_spec(spec: _JobSpec, *, limits: ForecastLimits) -> None:
     reserved = sorted(
         {
             name
-            for name in names
+            for name in (columns.id, columns.timestamp)
             if name in _RESERVED_COLUMNS or name.startswith(_QUANTILE_PREFIX)
         }
     )
     if reserved:
         raise InvalidSeriesError(
-            f"Column(s) {reserved} have reserved names: {sorted(_RESERVED_COLUMNS)} "
-            f"and names that start with {_QUANTILE_PREFIX!r} are output columns. "
-            "Rename those columns."
+            f"The id or timestamp column {reserved} has a reserved name: "
+            f"{sorted(_RESERVED_COLUMNS)} and names that start with "
+            f"{_QUANTILE_PREFIX!r} are output columns. Rename the column."
         )
     if len(columns.covariates) > limits.max_covariates:
         raise InvalidSeriesError(

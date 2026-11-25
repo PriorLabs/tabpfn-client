@@ -337,24 +337,32 @@ class TestStructureChecks:
     @pytest.mark.parametrize(
         "name", ["target_column", "mean", "cutoff", "actual", "q_0.5", "q_custom"]
     )
-    @pytest.mark.parametrize("role", ["id", "timestamp", "target", "covariate"])
-    def test_refuses_a_reserved_column_name(self, router, name, role):
+    @pytest.mark.parametrize("role", ["id", "timestamp"])
+    def test_refuses_a_reserved_id_or_timestamp_name(self, router, name, role):
+        column = "item_id" if role == "id" else "timestamp"
+        kwargs = {f"{role}_column": name}
+
+        with pytest.raises(InvalidSeriesError, match=rf"\['{name}'\] has a reserved"):
+            _forecast(_series().rename(columns={column: name}), **kwargs)
+
+    @pytest.mark.parametrize(
+        "name", ["target_column", "mean", "cutoff", "actual", "q_0.5", "q_custom"]
+    )
+    @pytest.mark.parametrize("role", ["target", "covariate"])
+    def test_accepts_a_reserved_target_or_covariate_name(self, router, name, role):
+        route = router.post("/forecast/forecast").respond(200, json=_inline())
         series = _series().assign(price=1.0)
         match role:
-            case "id":
-                column, kwargs = "item_id", {"id_column": name}
-            case "timestamp":
-                column, kwargs = "timestamp", {"timestamp_column": name}
             case "target":
-                column, kwargs = "y", {"target_columns": [name]}
+                series = series.rename(columns={"y": name})
+                kwargs = {"target_columns": [name], "past_covariate_columns": ["price"]}
             case _:
-                column, kwargs = "price", {"past_covariate_columns": [name]}
+                series = series.rename(columns={"price": name})
+                kwargs = {"past_covariate_columns": [name]}
 
-        with pytest.raises(InvalidSeriesError, match=rf"\['{name}'\] have reserved"):
-            _forecast(
-                series.rename(columns={column: name}),
-                **{"past_covariate_columns": ["price"], **kwargs},
-            )
+        _forecast(series, **kwargs)
+
+        assert route.called
 
     @pytest.mark.parametrize(
         ("known", "match"),
