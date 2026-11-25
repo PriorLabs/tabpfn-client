@@ -19,11 +19,9 @@ class Options(BaseSettings):
             already holds.
         TABPFN_CLIENT_DEDUP_DATASETS: Whether to deduplicate dataset uploads.
         TABPFN_CLIENT_ASYNC_USE_ABOVE_TRAINSET_SIZE: Train-set size in bytes above
-            which the asynchronous API is used. Overridden by the server default
-            unless set in the environment.
+            which the asynchronous API is used. None uses the server's value.
         TABPFN_CLIENT_ASYNC_POLL_TIMEOUT: Timeout in seconds when polling an
-            asynchronous job. Overridden by the server default unless set in the
-            environment.
+            asynchronous job. None uses the server's value.
     """
 
     TABPFN_TOKEN: str | None = None
@@ -34,10 +32,8 @@ class Options(BaseSettings):
     TABPFN_CLIENT_FORCE_REUPLOAD: bool = False
     TABPFN_CLIENT_DEDUP_DATASETS: bool = True
 
-    # Overriden by server defaults
-    # Environment > server default > client default
-    TABPFN_CLIENT_ASYNC_USE_ABOVE_TRAINSET_SIZE: int = 50 * 1024 * 1024
-    TABPFN_CLIENT_ASYNC_POLL_TIMEOUT: float = 7200.0
+    TABPFN_CLIENT_ASYNC_USE_ABOVE_TRAINSET_SIZE: int | None = None
+    TABPFN_CLIENT_ASYNC_POLL_TIMEOUT: float | None = None
 
 
 _opts: Options | None = None

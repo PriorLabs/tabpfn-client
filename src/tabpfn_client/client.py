@@ -52,6 +52,7 @@ from tabpfn_client.errors import (
     PredictFailedError,
     PredictionGoneError,
     RefitRequiredError,
+    SettingsUnavailableError,
     StreamedServerError,
 )
 
@@ -544,12 +545,18 @@ class ServiceClient(Singleton):
         return cls._access_token
 
     @classmethod
-    def get_settings(cls) -> GetSettingsResponse | None:
-        """Fetch and cache dataset limits.
+    def get_settings(cls) -> GetSettingsResponse:
+        """Return the server's settings, fetched at most once an hour.
 
-        The cache expires after 1 hour. If fetching fails, the stale cached value
-        (or None) is returned. Not thread-safe, but concurrent calls are benign: duplicates fetch the
+        Not thread-safe, but concurrent calls are benign: duplicates fetch the
         same data and the reference assignment is atomic under the GIL.
+
+        Returns:
+            The server's settings.
+
+        Raises:
+            SettingsUnavailableError: If the server does not send valid settings,
+                after retries.
         """
         ttl = 3600.0  # 1 hour
         if (
@@ -558,51 +565,58 @@ class ServiceClient(Singleton):
         ):
             return cls._api_settings
         try:
-            response = cls.httpx_client.get("/tabpfn/get_settings")
-            response.raise_for_status()
-            cls._api_settings = GetSettingsResponse.model_validate(response.json())
-            cls._api_settings_ts = time.monotonic()
-            return cls._api_settings
-        except Exception:
-            logger.debug("Failed to fetch API settings", exc_info=True)
-            return cls._api_settings  # return stale value if available
+            settings = cls._fetch_settings()
+        except (httpx.HTTPError, ValidationError) as e:
+            raise SettingsUnavailableError(
+                f"Could not get the settings from the TabPFN server: {e}"
+            ) from e
+        cls._api_settings = settings
+        cls._api_settings_ts = time.monotonic()
+        return settings
+
+    @classmethod
+    @backoff.on_exception(
+        backoff.expo,
+        (httpx.TransportError, httpx.HTTPStatusError),
+        # A 4xx other than 429 is the same on every try.
+        giveup=lambda e: (
+            isinstance(e, httpx.HTTPStatusError)
+            and e.response.status_code < 500
+            and e.response.status_code != 429
+        ),
+        max_tries=4,
+        logger=logger,
+        on_backoff=_on_backoff,
+        on_giveup=_on_giveup,
+    )
+    def _fetch_settings(cls) -> GetSettingsResponse:
+        """Fetch the server's settings, with retries."""
+        response = cls.httpx_client.get("/tabpfn/get_settings")
+        response.raise_for_status()
+        return GetSettingsResponse.model_validate(response.json())
 
     @classmethod
     def _drop_settings(cls) -> None:
-        """Drop the cached settings, so that the next `get_settings()` asks again.
+        """Drop the cached settings, so that the next `get_settings()` fetches them.
 
         For settings that describe a server version that is gone, as after a
-        rollback: a `get_settings()` that then fails returns None, not them.
+        rollback.
         """
         cls._api_settings = None
 
     @classmethod
     def _resolve_async_settings(cls) -> ResolvedAsyncSettings:
-        """Resolve async settings: environment > server default > client default.
-
-        An option explicitly set via the environment wins; otherwise the
-        server-sent value applies; the client default is the fallback when the
-        server's settings are unavailable.
-        """
+        """Resolve async settings: an option set in the environment, else the server's."""
         opts = get_opts()
-        api_settings = cls.get_settings()
-        server = api_settings.async_settings if api_settings is not None else None
-
-        def resolve(opt_name: str, server_value: Any) -> Any:
-            if opt_name in opts.model_fields_set:
-                return getattr(opts, opt_name)
-            if server_value is not None:
-                return server_value
-            return getattr(opts, opt_name)
-
+        server = cls.get_settings().async_settings
+        use_above = opts.TABPFN_CLIENT_ASYNC_USE_ABOVE_TRAINSET_SIZE
+        poll_timeout = opts.TABPFN_CLIENT_ASYNC_POLL_TIMEOUT
         return ResolvedAsyncSettings(
-            use_above_trainset_size_bytes=resolve(
-                "TABPFN_CLIENT_ASYNC_USE_ABOVE_TRAINSET_SIZE",
-                server.use_above_trainset_size_bytes if server else None,
+            use_above_trainset_size_bytes=(
+                server.use_above_trainset_size_bytes if use_above is None else use_above
             ),
-            poll_timeout_secs=resolve(
-                "TABPFN_CLIENT_ASYNC_POLL_TIMEOUT",
-                server.poll_timeout_secs if server else None,
+            poll_timeout_secs=(
+                server.poll_timeout_secs if poll_timeout is None else poll_timeout
             ),
         )
 
@@ -621,8 +635,7 @@ class ServiceClient(Singleton):
         SYNC and ASYNC are kept. AUTO runs the prediction as a job once the
         fit's train rows or the test rows reach the server's thresholds: the
         thinking ones for a thinking fit. A fit with a KV cache predicts fast
-        whatever its size, so AUTO predicts it with one request, as it does
-        when the server's settings are unavailable.
+        whatever its size, so AUTO predicts it with one request.
 
         Args:
             api_mode: The requested mode; a plain string works too, as an
@@ -641,14 +654,7 @@ class ServiceClient(Singleton):
             return api_mode
         if fit_with_cache:
             return ApiMode.SYNC
-        api_settings = cls.get_settings()
-        if api_settings is None:
-            # Unreachable, or a server that predates predictions as background
-            # jobs, whose settings lack the thresholds and so don't validate.
-            # One request works on every server.
-            logger.debug("No server settings; predicting with one request.")
-            return ApiMode.SYNC
-        async_settings = api_settings.async_settings
+        async_settings = cls.get_settings().async_settings
         thresholds = (
             async_settings.thinking_predict_use_above
             if thinking
@@ -838,18 +844,15 @@ class ServiceClient(Singleton):
         df_y = cast(pd.DataFrame, y if isinstance(y, pd.DataFrame) else pd.DataFrame(y))
 
         total_mem_usage = 0
-        api_settings = cls.get_settings()
+        max_bytes = cls.get_settings().dataset_max_size_bytes
 
         for name, df in [("x_train", df_X), ("y_train", df_y)]:
             mem_usage = df.memory_usage(deep=True).sum()
             total_mem_usage += mem_usage
-            if (
-                api_settings is not None
-                and mem_usage > api_settings.dataset_max_size_bytes
-            ):
+            if mem_usage > max_bytes:
                 raise ValueError(
                     f"In-memory size of {name} ({mem_usage} bytes) exceeds "
-                    f"the server limit of {api_settings.dataset_max_size_bytes} bytes."
+                    f"the server limit of {max_bytes} bytes."
                 )
         return df_X, df_y, int(total_mem_usage)
 
@@ -2215,14 +2218,13 @@ class ServiceClient(Singleton):
         """
         df_x_test = x_test if isinstance(x_test, pd.DataFrame) else pd.DataFrame(x_test)
 
-        api_settings = cls.get_settings()
-        if api_settings is not None:
-            mem_usage = df_x_test.memory_usage(deep=True).sum()
-            if mem_usage > api_settings.dataset_max_size_bytes:
-                raise ValueError(
-                    f"In-memory size of x_test ({mem_usage} bytes) exceeds "
-                    f"the server limit of {api_settings.dataset_max_size_bytes} bytes."
-                )
+        max_bytes = cls.get_settings().dataset_max_size_bytes
+        mem_usage = df_x_test.memory_usage(deep=True).sum()
+        if mem_usage > max_bytes:
+            raise ValueError(
+                f"In-memory size of x_test ({mem_usage} bytes) exceeds "
+                f"the server limit of {max_bytes} bytes."
+            )
 
         x_test_bytes, _ = _serialize_to_parquet(df_x_test)
         return x_test_bytes
@@ -2230,14 +2232,7 @@ class ServiceClient(Singleton):
     @classmethod
     def _inline_test_set(cls, x_test_bytes: bytes) -> str | None:
         """The test set as base64 if the server accepts it inline, else None."""
-        settings = cls.get_settings()
-        if settings is None:
-            return None
-        max_bytes = settings.inline_test_set_max_parquet_bytes
-        # An older server sends no limit and does not accept inline test sets.
-        if max_bytes is None:
-            return None
-        if len(x_test_bytes) > max_bytes:
+        if len(x_test_bytes) > cls.get_settings().inline_test_set_max_parquet_bytes:
             return None
         return base64.b64encode(x_test_bytes).decode("ascii")
 

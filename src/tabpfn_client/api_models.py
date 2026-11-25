@@ -305,6 +305,7 @@ class FitTimings(BaseModel):
 
 
 class ModelLimit(BaseModel):
+    train_set_min_rows: int
     train_set_max_rows: int
     train_set_max_cells: int = Field(
         description="Maximum training cells per estimator: selected rows times uploaded columns. Row subsampling can keep each context below this limit even when the full upload exceeds it."
@@ -624,6 +625,7 @@ class GetPredictResultResponse(BaseModel):
 
 
 class ThinkingLimit(BaseModel):
+    train_set_min_rows: int
     train_set_max_rows: int
     train_set_max_cells: int = Field(
         description="Maximum training cells per estimator: selected rows times uploaded columns. Row subsampling can keep each context below this limit even when the full upload exceeds it."
@@ -636,9 +638,7 @@ class ThinkingLimit(BaseModel):
     max_cols: int
     predict_row_pairs_budget: int
     efforts: list[Annotated[ThinkingEffort | str, Field(union_mode="left_to_right")]]
-    max_timeout_secs: (
-        dict[Annotated[ThinkingEffort | str, Field(union_mode="left_to_right")], float] | None
-    ) = None
+    max_timeout_secs: dict[Annotated[ThinkingEffort | str, Field(union_mode="left_to_right")], float]
     test_set_max_rows_w_full_regression_output: int
     test_set_max_cells: int
 
@@ -651,15 +651,21 @@ class GetSettingsResponse(BaseModel):
     ]
     dataset_max_size_bytes: int
     async_settings: AsyncSettings
-    inline_test_set_max_parquet_bytes: int | None = None
-    thinking_default_model_version: (
-        Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")] | None
-    ) = None
-    thinking_model_limits: (
-        dict[Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")], ThinkingLimit]
-        | None
-    ) = None
-    thinking_max_timeout_secs: float | None = None
+    inline_test_set_max_parquet_bytes: int
+    kv_cache_predict_max_test_rows: int = Field(
+        description="Most test rows one predict against a fit with a KV cache takes."
+    )
+    classifier_model_names: list[str] = Field(
+        description="The names a classifier's `model_path` accepts, in the order `list_available_models()` shows them."
+    )
+    regressor_model_names: list[str] = Field(
+        description="The names a regressor's `model_path` accepts, in the order `list_available_models()` shows them."
+    )
+    thinking_default_model_version: Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")]
+    thinking_model_limits: dict[
+        Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")], ThinkingLimit
+    ]
+    thinking_max_timeout_secs: float
 
 
 class InlinePredictRequest(BaseModel):

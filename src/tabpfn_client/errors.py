@@ -149,3 +149,9 @@ class CrossValidateFailedError(RuntimeError):
         """
         super().__init__(message)
         self.cv_job_id = cv_job_id
+
+
+class SettingsUnavailableError(RuntimeError):
+    """The client could not get the server's settings, so it cannot run."""
+
+    pass

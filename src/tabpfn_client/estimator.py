@@ -30,10 +30,7 @@ from tabpfn_client.client import (
     _resume_hint,
 )
 from tabpfn_client.config import Config, init
-from tabpfn_client.constants import (
-    MIN_TRAIN_ROWS,
-    URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE,
-)
+from tabpfn_client.constants import URL_TABPFN_EXTENSIONS_GITHUB_MANY_CLASS_CODE
 from tabpfn_client.errors import (
     CrossValidateFailedError,
     FitFailedError,
@@ -95,18 +92,6 @@ logger = logging.getLogger(__name__)
 # (matches the OSS tabpfn package); "default" is a backward-compatible alias.
 _AUTO_MODEL_PATH_ALIASES = (None, "auto", "default")
 
-# One `<version>_default` alias per model version the API schema declares,
-# newest first (the order users see in `list_available_models()`). The server
-# resolves each alias to its current default checkpoint for that version.
-_DEFAULT_MODEL_NAMES = tuple(f"{v.value}_default" for v in reversed(ModelVersion))
-
-# Prediction compute scales with n_train_rows * n_test_rows, so the API caps
-# their product. The effective per-call test row limit therefore shrinks as
-# the fitted training set grows (e.g. 1M training rows -> 250k test rows).
-# The server sends its budget via get_settings (`predict_row_pairs_budget`);
-# this is only the fallback for servers that predate that field.
-FALLBACK_PREDICT_ROW_PAIRS_BUDGET = 250_000 * 1_000_000
-
 # The outputs each estimator predicts. The server accepts more, and would bill a
 # background prediction whose output the estimator cannot return.
 ClassifierOutputLiteral = Literal["preds", "probas"]
@@ -142,13 +127,6 @@ class _PendingCrossValPredict:
 class TabPFNModelSelection:
     """Base class for TabPFN model selection and path handling."""
 
-    _AVAILABLE_MODELS: list[str] = []
-
-    @classmethod
-    def list_available_models(cls) -> list[str]:
-        """Return the model names accepted as `model_path`."""
-        return cls._AVAILABLE_MODELS
-
     @classmethod
     def create_default_for_version(
         cls, version: ModelVersion | str, **overrides
@@ -167,15 +145,15 @@ class TabPFNModelSelection:
         Raises:
             ValueError: If `version` is not a known model version.
         """
-        try:
-            version = ModelVersion(version)
-        except ValueError:
+        name = version.value if isinstance(version, ModelVersion) else version
+        available = [v.value for v in ServiceClient.get_settings().model_limits]
+        if name not in available:
             raise ValueError(
-                f"Invalid model version: {version}. "
-                f"Available versions are: {', '.join(list(ModelVersion))}."
+                f"Invalid model version: {name}. "
+                f"Available versions are: {', '.join(available)}."
             )
         options = overrides.copy()
-        options["model_path"] = f"{version.value}_default"
+        options["model_path"] = f"{name}_default"
         return cls(**options)
 
 
@@ -803,28 +781,10 @@ class TabPFNClassifier(
           or outlier removal is needed.
     """
 
-    _AVAILABLE_MODELS = [
-        # Downstream packages (e.g. tabpfn-time-series) read this list in order
-        # to parse model names by substring, so "v2.5_default-2" must precede "v2.5_default".
-        "v2.5_default-2",
-        *_DEFAULT_MODEL_NAMES,
-        "v2.5_large-features-L",
-        "v2.5_large-features-XL",
-        "v2.5_large-samples",
-        "v2.5_real-large-features",
-        "v2.5_real-large-samples-and-features",
-        "v2.5_real",
-        "v2.5_variant",
-        "auto",
-        # Deprecated alias for "auto"; kept for backward compat with users and
-        # downstream packages (e.g. tabpfn-time-series) that read this list.
-        "default",
-        "gn2p4bpt",
-        "llderlii",
-        "od3j1g5m",
-        "vutqq28w",
-        "znskzxi4",
-    ]
+    @classmethod
+    def list_available_models(cls) -> list[str]:
+        """Return the model names accepted as `model_path`, as the server lists them."""
+        return ServiceClient.get_settings().classifier_model_names
 
     def __init__(
         self,
@@ -1697,14 +1657,9 @@ class TabPFNClassifier(
         # TODO: should pass this from the server
         classes = np.unique(y_)
 
-        # TODO: these things should ideally be shared with the local package
-        api_settings = ServiceClient.get_settings()
-        if api_settings is None:
-            return classes
-
         # We use the most permissive limit across all models as at fit time we
         # don't yet know yet which model will be used.
-        limit = api_settings.max_model_limit
+        limit = ServiceClient.get_settings().max_model_limit
 
         if len(classes) > limit.max_classes:
             raise ValueError(
@@ -1732,23 +1687,10 @@ class TabPFNRegressor(
           or outlier removal is needed.
     """
 
-    _AVAILABLE_MODELS = [
-        *_DEFAULT_MODEL_NAMES,
-        "v2.5_low-skew",
-        "v2.5_quantiles",
-        "v2.5_real-variant",
-        "v2.5_real",
-        "v2.5_small-samples",
-        "v2.5_variant",
-        "auto",
-        # Deprecated alias for "auto"; kept for backward compat with users and
-        # downstream packages (e.g. tabpfn-time-series) that read this list.
-        "default",
-        "2noar4o2",
-        "5wof9ojf",
-        "09gpqh39",
-        "wyl4o83o",
-    ]
+    @classmethod
+    def list_available_models(cls) -> list[str]:
+        """Return the model names accepted as `model_path`, as the server lists them."""
+        return ServiceClient.get_settings().regressor_model_names
 
     def __init__(
         self,
@@ -2721,21 +2663,17 @@ def validate_train_set(
         if X.shape[0] != y.shape[0]:
             raise ValueError("X and y must have the same number of samples")
 
-    # Reject before uploading; the server can't fit fewer rows (issue #73).
-    if X.shape[0] < MIN_TRAIN_ROWS:
-        raise ValueError(
-            f"Found {X.shape[0]} sample(s) in the training set, but at least "
-            f"{MIN_TRAIN_ROWS} are required."
-        )
-
     limit: ModelLimit | ThinkingLimit | None = None
     if thinking:
         limit = _thinking_limit(ServiceClient.get_settings(), model_path)
     if limit is None:
         limit = _limit_for_model_path(model_path)
-    if limit is None:
-        return
 
+    if X.shape[0] < limit.train_set_min_rows:
+        raise ValueError(
+            f"Found {X.shape[0]} sample(s) in the training set, but at least "
+            f"{limit.train_set_min_rows} are required."
+        )
     if X.shape[0] > limit.train_set_max_rows:
         raise ValueError(
             f"The number of train rows ({X.shape[0]}) exceeds the maximum of {limit.train_set_max_rows}."
@@ -2752,21 +2690,18 @@ def validate_train_set(
         )
 
 
-def _limit_for_model_path(model_path: str | None) -> ModelLimit | None:
-    """Return the row/cell caps for `model_path`, or None if unknown."""
+def _limit_for_model_path(model_path: str | None) -> ModelLimit:
+    """Return the row/cell caps for `model_path`."""
     api_settings = ServiceClient.get_settings()
-    if api_settings is None:
-        return None
     if model_path in _AUTO_MODEL_PATH_ALIASES:
         return api_settings.model_limits[api_settings.default_model_version]
     model_version = model_version_from_path(model_path, api_settings.model_limits)
     return model_limit_from_version(model_version, api_settings.model_limits)
 
 
-def _full_output_row_limit(model_path: str | None) -> int | None:
-    """Rows a single `output_type="full"` response may cover, None if unknown."""
-    limit = _limit_for_model_path(model_path)
-    return limit.test_set_max_rows_w_full_regression_output if limit else None
+def _full_output_row_limit(model_path: str | None) -> int:
+    """Rows a single `output_type="full"` response may cover."""
+    return _limit_for_model_path(model_path).test_set_max_rows_w_full_regression_output
 
 
 def _test_row_limit(
@@ -2807,9 +2742,6 @@ def validate_test_set(
         ValueError: If `X` exceeds the model's row, column or cell limits.
     """
     limit = _limit_for_model_path(model_path)
-    if limit is None:
-        return
-
     max_rows = _test_row_limit(limit, train_rows, inference_config)
     if X.shape[0] > max_rows:
         raise ValueError(
@@ -3059,12 +2991,9 @@ def _validate_thinking_timeout(
     """Reject a `thinking_timeout_s` above the server's limit before the upload.
 
     The limit is the effort level's when the server reports one, else the longest
-    any fit takes. Servers that report neither still reject a too-large value when
-    the fit arrives.
+    any fit takes.
     """
     settings = ServiceClient.get_settings()
-    if settings is None:
-        return
     level_cap = _thinking_level_timeout_cap(
         settings, effort=effort, model_path=model_path
     )
@@ -3076,7 +3005,7 @@ def _validate_thinking_timeout(
             )
         return
     max_timeout = settings.thinking_max_timeout_secs
-    if max_timeout is not None and timeout_secs > max_timeout:
+    if timeout_secs > max_timeout:
         raise ValueError(
             f"thinking_timeout_s={timeout_secs:g} exceeds the maximum of "
             f"{max_timeout:g} seconds."
@@ -3090,24 +3019,20 @@ def _thinking_level_timeout_cap(
     if effort is None:
         return None
     limit = _thinking_limit(settings, model_path)
-    if limit is None or limit.max_timeout_secs is None:
+    if limit is None:
         return None
     return limit.max_timeout_secs.get(effort)
 
 
 def _thinking_limit(
-    settings: GetSettingsResponse | None, model_path: str | None
+    settings: GetSettingsResponse, model_path: str | None
 ) -> ThinkingLimit | None:
     """The server's limits for a thinking fit of `model_path`, if it advertises them."""
-    if settings is None or settings.thinking_model_limits is None:
-        return None
     version = (
         settings.thinking_default_model_version
         if model_path is None or model_path in _AUTO_MODEL_PATH_ALIASES
         else model_version_from_path(model_path, settings.thinking_model_limits)
     )
-    if version is None:
-        return None
     return settings.thinking_model_limits.get(version)
 
 
