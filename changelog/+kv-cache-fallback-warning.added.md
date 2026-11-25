@@ -1,0 +1,1 @@
+`predict()`, `predict_proba()` and `wait_for_predict()` log a warning when the server could not use the fitted model's saved cache for the prediction and fit the model again, so it took longer than usual.

@@ -186,6 +186,21 @@ def _timings_dict(timings: FitTimings | None) -> dict[str, Any] | None:
     return timings.model_dump(mode="json") if timings is not None else None
 
 
+def _log_cache_fallback(results: list[PredictionResult]) -> None:
+    """Log once if any request of a prediction could not use the fit's cache.
+
+    Without it, a slow prediction against a stored fit gives no hint why.
+    """
+    if not any(r.metadata.get("cache_outcome") == "fallback" for r in results):
+        return
+    # A log, not a warning: warnings raised as errors would lose a billed result.
+    logger.warning(
+        "The saved cache of this fitted model could not be used for this "
+        "prediction, so TabPFN fit the model again on the server. The prediction "
+        "took longer than usual."
+    )
+
+
 # What a predict request returns: one result, or one per test set.
 _PredictOutputT = TypeVar("_PredictOutputT")
 
@@ -1042,6 +1057,7 @@ class TabPFNClassifier(
         # Unpack and store metadata
         self._last_meta = result.metadata
         self._last_timings = result.timings
+        _log_cache_fallback([result])
 
         return cast("np.ndarray", result.y_pred)
 
@@ -1753,6 +1769,8 @@ class TabPFNRegressor(
             self._last_meta = results[0].metadata
             self._last_timings = results[0].timings
             output = results[0].y_pred
+
+        _log_cache_fallback(results)
 
         if output_type == "quantiles" and isinstance(output, np.ndarray):
             return list(output) if output.ndim == 2 else [output]

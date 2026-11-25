@@ -139,6 +139,7 @@ Notes:
 - `fit_mode` accepts `"fit_preprocessors"` (the default) or `"fit_with_cache"`.
 - Predictions are the same either way — caching changes the speed, not the model.
 - Not compatible with thinking mode.
+- When the server cannot use a fitted model's saved cache for a prediction, it fits the model again for it, so the prediction takes longer than usual. The client then logs a warning.
 
 ## Saving and Loading Fitted Models
 
