@@ -652,6 +652,9 @@ class GetSettingsResponse(BaseModel):
     dataset_max_size_bytes: int
     async_settings: AsyncSettings
     inline_test_set_max_parquet_bytes: int
+    text_max_chars: int = Field(
+        description="Characters of each text value the server reads. It ignores the rest."
+    )
     kv_cache_predict_max_test_rows: int = Field(
         description="Most test rows one predict against a fit with a KV cache takes."
     )

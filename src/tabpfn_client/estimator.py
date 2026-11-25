@@ -2825,8 +2825,9 @@ def _clean_text_features(X):
     """Clean text features in the input data.
 
     Removes commas and collapses whitespace in text columns so the data
-    serializes cleanly, and truncates text to 2500 characters. Numeric arrays
-    are returned unchanged and torch tensors are converted to numpy.
+    serializes cleanly, and truncates text to the server's `text_max_chars`.
+    Numeric arrays are returned unchanged and torch tensors are converted to
+    numpy.
     """
     # Convert numpy array to pandas DataFrame if necessary
     # not necessary if numpy array of numbers
@@ -2847,7 +2848,7 @@ def _clean_text_features(X):
     else:
         df = data.copy()
 
-    # limit to 2500 chars and remove commas for text features
+    max_chars = ServiceClient.get_settings().text_max_chars
     for col in df.columns:
         # Only object columns hold text. Other dtypes, such as periods, make
         # pd.to_numeric raise TypeError.
@@ -2862,7 +2863,7 @@ def _clean_text_features(X):
                 .str.replace(",", "")
                 .str.replace(r"\s+", " ", regex=True)
                 .str.strip()
-                .str.slice(0, 2500)
+                .str.slice(0, max_chars)
             )
 
     # Convert back to numpy if input was numpy (or tensor that was converted to numpy)
