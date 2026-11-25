@@ -1,6 +1,7 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 #  Licensed under the Apache License, Version 2.0
-"""The warning the client logs when the server could not use the fit's cache.
+"""`cache_fallback_strategy`, and the warning the client logs when the server
+could not use the fit's cache.
 
 The server then fits the model again for that prediction, and reports a
 `cache_outcome` of `"fallback"` in its metadata. Hermetic: the `InferenceClient`
@@ -8,6 +9,7 @@ boundary is patched, as in `test_submit_predict`.
 """
 
 import logging
+import pickle
 import warnings
 from typing import Any
 from unittest.mock import patch
@@ -15,6 +17,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 from pydantic import TypeAdapter
+from sklearn.base import clone
 
 from tabpfn_client.api_models import Metadata
 from tabpfn_client.client import ServiceClient
@@ -187,3 +190,44 @@ def test_a_subclass_whose_predict_returns_an_array_still_predicts():
 
     np.testing.assert_array_equal(model.predict(X_TEST), ["preds"] * 3)
     np.testing.assert_array_equal(model.predict_proba(X_TEST), ["probas"] * 3)
+
+
+@ESTIMATORS
+def test_get_params_and_clone_keep_the_strategy(estimator_cls, y):
+    model = estimator_cls(cache_fallback_strategy="refit")
+
+    assert estimator_cls().cache_fallback_strategy == "error"
+    assert model.get_params()["cache_fallback_strategy"] == "refit"
+    assert clone(model).cache_fallback_strategy == "refit"
+
+
+@ESTIMATORS
+def test_an_older_pickle_without_the_strategy_predicts_with_the_default(
+    estimator_cls, y
+):
+    model = _fitted(estimator_cls, y)
+    # Estimators pickled by v0.7.1 or earlier have no `cache_fallback_strategy`.
+    del model.cache_fallback_strategy
+    restored = pickle.loads(pickle.dumps(model))
+
+    with _offline_server() as server:
+        restored.predict(X_TEST)
+
+    assert restored.get_params()["cache_fallback_strategy"] == "error"
+    assert server.predict.call_args.kwargs["cache_fallback_strategy"] == "error"
+
+
+@ESTIMATORS
+@pytest.mark.parametrize("via", ["predict", "submit_predict"])
+def test_an_invalid_strategy_raises_before_any_request(estimator_cls, y, via):
+    model = _fitted(estimator_cls, y, cache_fallback_strategy="retry")
+
+    with (
+        _offline_server() as server,
+        pytest.raises(ValueError, match="cache_fallback_strategy must be one of"),
+    ):
+        getattr(model, via)(X_TEST)
+
+    server.init.assert_not_called()
+    server.predict.assert_not_called()
+    server.submit.assert_not_called()

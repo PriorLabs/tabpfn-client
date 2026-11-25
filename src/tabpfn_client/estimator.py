@@ -41,6 +41,7 @@ from tabpfn_client.utils import (
 )
 from tabpfn_client.service_wrapper import InferenceClient
 from tabpfn_client.api_models import (
+    CacheFallbackStrategy,
     ModelLimit,
     RegressorTabPFNConfig,
     ClassifierTabPFNConfig,
@@ -483,6 +484,9 @@ class TabPFNClassifier(
         "znskzxi4",
     ]
 
+    # Class-level default so estimators pickled before this attribute existed load.
+    cache_fallback_strategy: CacheFallbackStrategy = "error"
+
     def __init__(
         self,
         # start: tabpfn_config
@@ -509,6 +513,7 @@ class TabPFNClassifier(
         api_mode: ApiMode = ApiMode.AUTO,
         client_options: ClientOptions | None = None,
         text_handling: TextHandling = "advanced",
+        cache_fallback_strategy: CacheFallbackStrategy = "error",
     ):
         """Construct a TabPFN classifier.
 
@@ -691,6 +696,25 @@ class TabPFNClassifier(
                 Text-processing preset. Both choices support text. Advanced preserves
                 the default processing; simple is an alternative whose accuracy depends
                 on the dataset. Applies when preprocessing is enabled.
+
+            cache_fallback_strategy:
+                What a prediction does when the server can no longer use the
+                saved cache of a model fitted with `fit_mode="fit_with_cache"`,
+                for instance after a server update.
+
+                - If `"error"`, it raises `RefitRequiredError`: call `fit()`
+                  again.
+                - If `"refit"`, where the server offers it, the server predicts
+                  without the cache, at the price of a prediction without one,
+                  and rebuilds the cache in the background at no charge. That
+                  prediction takes longer than usual, and the client logs a
+                  warning. Otherwise it raises `RefitRequiredError`.
+
+                Applies to predictions sent with one request, as `predict()`
+                sends those of a model fitted with the cache unless `api_mode`
+                is `ASYNC`. Background predictions, with `ASYNC` or
+                `submit_predict()`, always raise `RefitRequiredError`.
+                `save_model()` does not save it.
         """
         self.model_path = model_path
         self.categorical_features_indices = categorical_features_indices
@@ -714,6 +738,7 @@ class TabPFNClassifier(
         self.group_time_col = group_time_col
         self.api_mode = api_mode
         self.client_options = client_options or ClientOptions()
+        self.cache_fallback_strategy = cache_fallback_strategy
 
         self._last_trace_id = None
         self._last_meta = {}
@@ -996,6 +1021,7 @@ class TabPFNClassifier(
                 thinking=_resolve_thinking_mode(
                     self.thinking_mode, self.thinking_effort
                 ),
+                cache_fallback_strategy=self.cache_fallback_strategy,
                 on_accepted=on_accepted,
             ),
         )
@@ -1015,7 +1041,12 @@ class TabPFNClassifier(
         # Before `init()`, so that a model with nothing to predict with fails
         # without authenticating first.
         self._check_fitted()
-        _validate_output_type(output_type, ClassifierOutputLiteral)
+        _validate_choice("output_type", output_type, ClassifierOutputLiteral)
+        _validate_choice(
+            "cache_fallback_strategy",
+            self.cache_fallback_strategy,
+            CacheFallbackStrategy,
+        )
 
         # An estimator restored by `load_model()` (or whose `model_id_` was
         # assigned directly) can reach `predict` without ever calling `fit()`,
@@ -1151,6 +1182,9 @@ class TabPFNRegressor(
         "wyl4o83o",
     ]
 
+    # Class-level default so estimators pickled before this attribute existed load.
+    cache_fallback_strategy: CacheFallbackStrategy = "error"
+
     def __init__(
         self,
         # start: tabpfn_config
@@ -1176,6 +1210,7 @@ class TabPFNRegressor(
         api_mode: ApiMode = ApiMode.AUTO,
         client_options: ClientOptions | None = None,
         text_handling: TextHandling = "advanced",
+        cache_fallback_strategy: CacheFallbackStrategy = "error",
     ):
         """Construct a TabPFN regressor.
 
@@ -1343,6 +1378,25 @@ class TabPFNRegressor(
                 Text-processing preset. Both choices support text. Advanced preserves
                 the default processing; simple is an alternative whose accuracy depends
                 on the dataset. Applies when preprocessing is enabled.
+
+            cache_fallback_strategy:
+                What a prediction does when the server can no longer use the
+                saved cache of a model fitted with `fit_mode="fit_with_cache"`,
+                for instance after a server update.
+
+                - If `"error"`, it raises `RefitRequiredError`: call `fit()`
+                  again.
+                - If `"refit"`, where the server offers it, the server predicts
+                  without the cache, at the price of a prediction without one,
+                  and rebuilds the cache in the background at no charge. That
+                  prediction takes longer than usual, and the client logs a
+                  warning. Otherwise it raises `RefitRequiredError`.
+
+                Applies to predictions sent with one request, as `predict()`
+                sends those of a model fitted with the cache unless `api_mode`
+                is `ASYNC`. Background predictions, with `ASYNC` or
+                `submit_predict()`, always raise `RefitRequiredError`.
+                `save_model()` does not save it.
         """
         self.model_path = model_path
         self.categorical_features_indices = categorical_features_indices
@@ -1365,6 +1419,7 @@ class TabPFNRegressor(
         self.group_time_col = group_time_col
         self.api_mode = api_mode
         self.client_options = client_options or ClientOptions()
+        self.cache_fallback_strategy = cache_fallback_strategy
 
         self._last_trace_id = None
         self._last_meta = {}
@@ -1555,6 +1610,7 @@ class TabPFNRegressor(
                     api_mode=self.api_mode,
                     n_train_rows=self._n_train_rows,
                     thinking=thinking,
+                    cache_fallback_strategy=self.cache_fallback_strategy,
                     on_accepted=on_accepted,
                 ),
             )
@@ -1577,6 +1633,7 @@ class TabPFNRegressor(
                     api_mode=self.api_mode,
                     n_train_rows=self._n_train_rows,
                     thinking=thinking,
+                    cache_fallback_strategy=self.cache_fallback_strategy,
                     on_accepted=on_accepted,
                 ),
                 # Several jobs, whose ids the client logs if the wait stops.
@@ -1686,7 +1743,12 @@ class TabPFNRegressor(
         # Before `init()`, so that a model with nothing to predict with fails
         # without authenticating first.
         self._check_fitted()
-        _validate_output_type(output_type, RegressorOutputLiteral)
+        _validate_choice("output_type", output_type, RegressorOutputLiteral)
+        _validate_choice(
+            "cache_fallback_strategy",
+            self.cache_fallback_strategy,
+            CacheFallbackStrategy,
+        )
 
         # An estimator restored by `load_model()` (or whose `model_id_` was
         # assigned directly) can reach `predict` without ever calling `fit()`,
@@ -2091,17 +2153,16 @@ def _build_tabpfn_systems(
     return ["preprocessing", "text"]
 
 
-def _validate_output_type(output_type: str, allowed: Any) -> None:
-    """Check `output_type` against the `Literal` of the outputs an estimator predicts.
+def _validate_choice(name: str, value: str, allowed: Any) -> None:
+    """Check the `value` of argument `name` against the `Literal` of its choices.
 
     Raises:
-        ValueError: If `output_type` is not among them.
+        ValueError: If `value` is not among them.
     """
     choices = get_args(allowed)
-    if output_type not in choices:
+    if value not in choices:
         raise ValueError(
-            f"output_type must be one of {', '.join(map(repr, choices))}, "
-            f"not {output_type!r}."
+            f"{name} must be one of {', '.join(map(repr, choices))}, not {value!r}."
         )
 
 

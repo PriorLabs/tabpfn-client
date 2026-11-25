@@ -139,7 +139,7 @@ Notes:
 - `fit_mode` accepts `"fit_preprocessors"` (the default) or `"fit_with_cache"`.
 - Predictions are the same either way — caching changes the speed, not the model.
 - Not compatible with thinking mode.
-- When the server cannot use a fitted model's saved cache for a prediction, it fits the model again for it, so the prediction takes longer than usual. The client then logs a warning.
+- When the server can no longer use a fitted model's saved cache, for instance after a server update, `predict()` raises `RefitRequiredError`. With `cache_fallback_strategy="refit"`, where the server offers it, the server instead predicts without the cache, at the price of a prediction without one, and rebuilds the cache in the background at no charge. That prediction takes longer than usual, and the client logs a warning. Otherwise it still raises, as do background predictions (`submit_predict()`, `api_mode="async"`).
 
 ## Saving and Loading Fitted Models
 
@@ -157,7 +157,7 @@ model = TabPFNClassifier.load_model("model.json")
 model.predict(X_test)
 ```
 
-`save_model()` writes a small JSON record: the id of the fitted model, the hyperparameters, the class labels and the training-set size, and whether the fit or a prediction is still pending. It leaves out `api_mode` and `client_options`, which describe how the client talks to the server: a loaded model uses those of the process that loads it. `save_model()` also returns that record as a dict, so it can be kept elsewhere (a database, an experiment tracker) and passed to `load_model()` directly.
+`save_model()` writes a small JSON record: the id of the fitted model, the hyperparameters, the class labels and the training-set size, and whether the fit or a prediction is still pending. It leaves out `api_mode`, `cache_fallback_strategy` and `client_options`, which describe how the client talks to the server: a loaded model uses those of the process that loads it. `save_model()` also returns that record as a dict, so it can be kept elsewhere (a database, an experiment tracker) and passed to `load_model()` directly.
 
 Notes:
 

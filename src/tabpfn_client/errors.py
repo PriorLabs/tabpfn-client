@@ -86,7 +86,9 @@ class RefitRequiredError(PredictFailedError):
     when the server cannot predict with the fit ``model_id_`` refers to: an
     earlier version of the service created it, or its cached state is no longer
     valid. The server's error code says which: ``NEEDS_REFITTING`` or
-    ``KV_CACHE_INVALID``. The message holds the server's reason.
+    ``KV_CACHE_INVALID``. The message holds the server's reason. With
+    ``cache_fallback_strategy="refit"``, a ``predict()`` sent as one request
+    can instead predict without a cache the server can no longer use.
     """
 
     pass

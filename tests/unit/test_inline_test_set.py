@@ -71,7 +71,12 @@ class TestInlineTestSet(unittest.TestCase):
         ServiceClient._api_settings_ts = time.monotonic()
 
     def _predict(
-        self, X=None, api_mode=ApiMode.SYNC, task_config=None, n_train_rows=None
+        self,
+        X=None,
+        api_mode=ApiMode.SYNC,
+        task_config=None,
+        n_train_rows=None,
+        cache_fallback_strategy="error",
     ):
         with patch.object(ServiceClient, "_upload_to_gcs") as upload:
             ServiceClient.predict(
@@ -80,6 +85,7 @@ class TestInlineTestSet(unittest.TestCase):
                 task_config=ClassifierConfig() if task_config is None else task_config,
                 api_mode=api_mode,
                 n_train_rows=n_train_rows,
+                cache_fallback_strategy=cache_fallback_strategy,
             )
         return upload
 
@@ -96,6 +102,27 @@ class TestInlineTestSet(unittest.TestCase):
         (sent,) = _sent(predict)
         self.assertIn("x_test_parquet_base64", sent)
         self.assertNotIn("test_set_upload_id", sent)
+
+    @with_mock_server()
+    def test_sends_the_cache_fallback_strategy_only_for_refit(self, mock_server):
+        mock_server.router.post("/tabpfn/prepare_test_set_upload").respond(
+            200, json=PREPARE_BODY
+        )
+        predict = mock_server.router.post("/tabpfn/predict").respond(
+            200, json=PREDICT_BODY
+        )
+
+        # A server that predates the field rejects a request that carries it.
+        self._predict(cache_fallback_strategy="error")
+        self._predict(cache_fallback_strategy="refit")
+        self._cache_settings(None)
+        self._predict(cache_fallback_strategy="refit")
+
+        inline_error, inline_refit, upload_refit = _sent(predict)
+        self.assertNotIn("cache_fallback_strategy", inline_error)
+        self.assertEqual(inline_refit["cache_fallback_strategy"], "refit")
+        self.assertIn("test_set_upload_id", upload_refit)
+        self.assertEqual(upload_refit["cache_fallback_strategy"], "refit")
 
     def _uploads(self, mock_server) -> bool:
         prepare = mock_server.router.post("/tabpfn/prepare_test_set_upload").respond(

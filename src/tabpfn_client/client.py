@@ -63,6 +63,7 @@ import httpx
 from omegaconf import DictConfig, OmegaConf
 from tabpfn_common_utils.utils import Singleton
 from tabpfn_client.api_models import (
+    CacheFallbackStrategy,
     GetSettingsResponse,
     EstimateCostRequest,
     EstimateCostResponse,
@@ -1134,6 +1135,7 @@ class ServiceClient(Singleton):
         api_mode: ApiMode = ApiMode.SYNC,
         n_train_rows: int | None = None,
         thinking: bool = False,
+        cache_fallback_strategy: CacheFallbackStrategy = "error",
         on_accepted: Callable[[UUID | None], None] | None = None,
     ) -> PredictionResult:
         """Upload a test set and predict it with a fitted train set.
@@ -1155,6 +1157,10 @@ class ServiceClient(Singleton):
             api_mode: The API mode to use for the prediction: SYNC, ASYNC, or AUTO.
             n_train_rows: The fit's train rows, for AUTO; None if unknown.
             thinking: Whether the fit runs in thinking mode, for AUTO.
+            cache_fallback_strategy: What a prediction sent with one request
+                does when the server can no longer use the fit's cache:
+                `"refit"` asks the server to predict without it, `"error"`
+                raises `RefitRequiredError`. A background job always raises.
             on_accepted: Called once the server has accepted the prediction:
                 with its id before the client polls for it, when it runs as a
                 background job, or with None once the server has answered with
@@ -1184,6 +1190,7 @@ class ServiceClient(Singleton):
             api_mode=api_mode,
             n_train_rows=n_train_rows,
             thinking=thinking,
+            cache_fallback_strategy=cache_fallback_strategy,
         )
         if isinstance(started, _PredictJob):
             if on_accepted is not None:
@@ -1208,6 +1215,7 @@ class ServiceClient(Singleton):
         api_mode: ApiMode = ApiMode.SYNC,
         n_train_rows: int | None = None,
         thinking: bool = False,
+        cache_fallback_strategy: CacheFallbackStrategy = "error",
         on_accepted: Callable[[UUID | None], None] | None = None,
     ) -> list[PredictionResult]:
         """Predict several test sets with one fitted train set, as `predict` does each.
@@ -1228,6 +1236,8 @@ class ServiceClient(Singleton):
             api_mode: The API mode for each test set: SYNC, ASYNC, or AUTO.
             n_train_rows: The fit's train rows, for AUTO; None if unknown.
             thinking: Whether the fit runs in thinking mode, for AUTO.
+            cache_fallback_strategy: What each test set does when the server
+                can no longer use the fit's cache, as `predict` takes it.
             on_accepted: Called once the server has accepted each test set's
                 prediction, as `predict` calls it.
 
@@ -1266,6 +1276,7 @@ class ServiceClient(Singleton):
                     api_mode=api_mode,
                     n_train_rows=n_train_rows,
                     thinking=thinking,
+                    cache_fallback_strategy=cache_fallback_strategy,
                 )
                 if isinstance(started, _PredictJob):
                     if on_accepted is not None:
@@ -1300,6 +1311,7 @@ class ServiceClient(Singleton):
         api_mode: ApiMode,
         n_train_rows: int | None,
         thinking: bool,
+        cache_fallback_strategy: CacheFallbackStrategy,
     ) -> _PredictJob | PredictionResult:
         """Predict a test set with one request, or start it as a background job.
 
@@ -1327,6 +1339,7 @@ class ServiceClient(Singleton):
                     fitted_train_set_id=fitted_train_set_id,
                     task_config=task_config,
                     client_options=client_options,
+                    cache_fallback_strategy=cache_fallback_strategy,
                 )
             case ApiMode.ASYNC:
                 resp = cls._async_predict(
@@ -1347,10 +1360,13 @@ class ServiceClient(Singleton):
         fitted_train_set_id: UUID,
         task_config: ClassifierConfig | RegressorConfig,
         client_options: ClientOptions,
+        cache_fallback_strategy: CacheFallbackStrategy,
     ) -> PredictResponseUnion:
         """Predict with one request: the test set inline if the server takes it,
         else uploaded.
         """
+        # A server that predates the field rejects it, so the default is not sent.
+        fallback = "refit" if cache_fallback_strategy == "refit" else None
         if (x_test_base64 := cls._inline_test_set(x_test_bytes)) is not None:
             try:
                 return cls._predict(
@@ -1358,6 +1374,7 @@ class ServiceClient(Singleton):
                         x_test_parquet_base64=x_test_base64,
                         fitted_train_set_id=fitted_train_set_id,
                         task_config=task_config,
+                        cache_fallback_strategy=fallback,
                     ),
                     timeout=client_options.timeout,
                     headers=client_options.headers,
@@ -1377,6 +1394,7 @@ class ServiceClient(Singleton):
                 test_set_upload_id=test_set_upload_id,
                 fitted_train_set_id=fitted_train_set_id,
                 task_config=task_config,
+                cache_fallback_strategy=fallback,
             ),
             timeout=client_options.timeout,
             headers=client_options.headers,

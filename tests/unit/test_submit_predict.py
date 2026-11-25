@@ -720,7 +720,13 @@ class TestPredict:
     def test_passes_what_the_prediction_is_routed_by(
         self, estimator_cls, y, api_mode, params, thinking
     ):
-        model = _fitted(estimator_cls, y, api_mode=api_mode, **params)
+        model = _fitted(
+            estimator_cls,
+            y,
+            api_mode=api_mode,
+            cache_fallback_strategy="refit",
+            **params,
+        )
 
         with _offline_server() as server:
             model.predict(X_TEST)
@@ -729,6 +735,7 @@ class TestPredict:
         assert kwargs["api_mode"] == api_mode
         assert kwargs["n_train_rows"] == len(X_TRAIN)
         assert kwargs["thinking"] is thinking
+        assert kwargs["cache_fallback_strategy"] == "refit"
 
     @ESTIMATORS
     def test_does_not_know_the_train_rows_of_an_assigned_model_id(
@@ -907,7 +914,12 @@ class TestPredict:
     @NO_CRITERION
     def test_splits_a_full_output_into_one_request_per_chunk_in_order(self):
         X = np.arange(10, dtype=float).reshape(5, 2)
-        model = _fitted(TabPFNRegressor, Y_TRAIN_REGRESSION, api_mode=ApiMode.ASYNC)
+        model = _fitted(
+            TabPFNRegressor,
+            Y_TRAIN_REGRESSION,
+            api_mode=ApiMode.ASYNC,
+            cache_fallback_strategy="refit",
+        )
         settings = _settings(test_set_max_rows_w_full_regression_output=2)
 
         chunks: list[np.ndarray] = []
@@ -934,6 +946,7 @@ class TestPredict:
         assert kwargs["api_mode"] == ApiMode.ASYNC
         assert kwargs["n_train_rows"] == len(X_TRAIN)
         assert kwargs["thinking"] is False
+        assert kwargs["cache_fallback_strategy"] == "refit"
         np.testing.assert_array_equal(output["mean"], X[:, 0])
         assert model.get_timings()["predict"] == {k: 3 * v for k, v in TIMINGS.items()}
 

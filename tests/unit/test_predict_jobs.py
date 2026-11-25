@@ -1029,6 +1029,17 @@ class TestAFailureReportedOnTheRequest:
         # The prediction has ended: there is nothing left to come back for.
         assert _broke_off_warnings(caplog) == []
 
+    def test_a_stale_cache_raises_refit_required_when_the_server_does_not_fall_back(
+        self, router
+    ):
+        _upload_route(router)
+        router.post("/tabpfn/predict").mock(
+            return_value=_job_failure(409, STALE_KV_CACHE, "KV_CACHE_INVALID")
+        )
+
+        with pytest.raises(RefitRequiredError):
+            _predict(cache_fallback_strategy="refit")
+
     @pytest.mark.parametrize(
         ("status_code", "message", "error_code", "expected"),
         [
@@ -1120,7 +1131,8 @@ class TestPredictionJobs:
         with _polling(
             router, [_json(200, _pending(0.5)), _json(200, _completed())]
         ) as (clock, poll_route):
-            result = _predict(api_mode=ApiMode.ASYNC)
+            # A background job never asks to fall back from a stale cache.
+            result = _predict(api_mode=ApiMode.ASYNC, cache_fallback_strategy="refit")
 
         assert _sent(submit_route) == {
             "test_set_upload_id": UPLOAD_ID,
@@ -1613,6 +1625,7 @@ class TestPredictChunks:
                 api_mode=ApiMode.AUTO,
                 n_train_rows=7,
                 thinking=True,
+                cache_fallback_strategy="refit",
             )
 
         assert start.call_count == 2
@@ -1622,6 +1635,7 @@ class TestPredictChunks:
                 "api_mode": ApiMode.AUTO,
                 "n_train_rows": 7,
                 "thinking": True,
+                "cache_fallback_strategy": "refit",
             }
 
     def test_a_failed_prediction_stops_the_rest_and_logs_the_running_jobs(self, caplog):

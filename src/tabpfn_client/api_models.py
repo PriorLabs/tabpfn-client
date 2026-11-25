@@ -41,6 +41,9 @@ class UnknownEnum(str):
         return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
+CacheFallbackStrategy = Literal["refit", "error"]
+
+
 DatasetFileType = Literal["csv", "parquet"]
 
 
@@ -578,6 +581,12 @@ class GetSettingsResponse(BaseModel):
 class InlinePredictRequest(BaseModel):
     fitted_train_set_id: UUID
     task_config: TaskConfig
+    cache_fallback_strategy: (
+        Annotated[CacheFallbackStrategy | str, Field(union_mode="left_to_right")] | None
+    ) = Field(
+        default=None,
+        description="What a predict does when the fitted model's cache can no longer be used. `error` fails it with `KV_CACHE_INVALID`. `refit` predicts without the cache at once, billed as a predict without a cache, and rebuilds the cache in the background at no charge. A submitted job ignores it. If unset, `error`.",
+    )
     x_test_parquet_base64: str = Field(
         description="The test set as a base64 Parquet file, in place of `test_set_upload_id`. The decoded file can be at most `inline_test_set_max_parquet_bytes` from `get_settings`. If that value is 0, the server does not accept inline test sets."
     )
@@ -614,6 +623,12 @@ class PredictPendingResponse(BaseModel):
 class PredictRequest(BaseModel):
     fitted_train_set_id: UUID
     task_config: TaskConfig
+    cache_fallback_strategy: (
+        Annotated[CacheFallbackStrategy | str, Field(union_mode="left_to_right")] | None
+    ) = Field(
+        default=None,
+        description="What a predict does when the fitted model's cache can no longer be used. `error` fails it with `KV_CACHE_INVALID`. `refit` predicts without the cache at once, billed as a predict without a cache, and rebuilds the cache in the background at no charge. A submitted job ignores it. If unset, `error`.",
+    )
     test_set_upload_id: UUID
 
 
@@ -671,6 +686,12 @@ class SubmitFitJobResponse(BaseModel):
 class SubmitPredictJobRequest(BaseModel):
     fitted_train_set_id: UUID
     task_config: TaskConfig
+    cache_fallback_strategy: (
+        Annotated[CacheFallbackStrategy | str, Field(union_mode="left_to_right")] | None
+    ) = Field(
+        default=None,
+        description="What a predict does when the fitted model's cache can no longer be used. `error` fails it with `KV_CACHE_INVALID`. `refit` predicts without the cache at once, billed as a predict without a cache, and rebuilds the cache in the background at no charge. A submitted job ignores it. If unset, `error`.",
+    )
     test_set_upload_id: UUID
 
 
