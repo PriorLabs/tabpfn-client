@@ -55,11 +55,11 @@ def _fitted_classifier(classes: list[Any], **params: Any) -> TabPFNClassifier:
 
 
 def _model_params(estimator: TabPFNClassifier | TabPFNRegressor) -> dict[str, Any]:
-    """Constructor params minus the transport-only `client_options` and `api_mode`."""
+    """Constructor params minus the transport-only ones."""
     return {
         k: v
         for k, v in estimator.get_params(deep=False).items()
-        if k not in {"client_options", "api_mode"}
+        if k not in {"client_options", "api_mode", "cache_fallback_strategy"}
     }
 
 
@@ -121,7 +121,9 @@ class TestRecord:
                 Est().save_model()
 
     def test_record_holds_exactly_the_fitted_state(self):
-        reg = _fitted_regressor(n_estimators=4, api_mode="async")
+        reg = _fitted_regressor(
+            n_estimators=4, api_mode="async", cache_fallback_strategy="refit"
+        )
 
         record = reg.save_model()
 
@@ -145,6 +147,8 @@ class TestRecord:
         assert record["params"] == _model_params(reg)
         assert "client_options" not in record["params"]
         assert "api_mode" not in record["params"]
+        # An older client fails to load a record with a param it does not know.
+        assert "cache_fallback_strategy" not in record["params"]
         json.dumps(record)  # JSON-serialisable as returned
 
     def test_a_record_from_before_fit_status_holds_a_completed_fit(self):
@@ -336,14 +340,20 @@ class TestLoadRejects:
 
 
 class TestLoadedEstimator:
-    def test_a_loaded_model_runs_with_the_api_mode_of_its_process(self):
+    @pytest.mark.parametrize(
+        ("param", "value"),
+        [("api_mode", "sync"), ("cache_fallback_strategy", "refit")],
+    )
+    def test_a_loaded_model_runs_with_the_transport_params_of_its_process(
+        self, param, value
+    ):
         # How the client sends requests is the loading process's choice: a mode
         # set where the model was saved does not travel with it.
         loaded = TabPFNRegressor.load_model(
-            _fitted_regressor(api_mode="sync").save_model()
+            _fitted_regressor(**{param: value}).save_model()
         )
 
-        assert loaded.api_mode == TabPFNRegressor().api_mode
+        assert getattr(loaded, param) == getattr(TabPFNRegressor(), param)
 
     def test_predicts_against_the_saved_fit_without_fitting(self):
         loaded = TabPFNRegressor.load_model(
