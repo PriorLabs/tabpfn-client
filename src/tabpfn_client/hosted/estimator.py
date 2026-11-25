@@ -265,8 +265,6 @@ class _HostedBase(BaseEstimator):
 
     def _headers(self) -> Dict[str, str]:
         headers: Dict[str, str] = {"Accept": "application/json"}
-        if self.payload_format == "json":
-            headers["Content-Type"] = "application/json"
         # The API key is optional because some deployments do not require it
         if self.api_key is not None:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -396,7 +394,7 @@ class _HostedBase(BaseEstimator):
                 answered the job within `async_timeout_s`.
 
         Warns:
-            DeprecationWarning: If `payload_format` is `"json"`.
+            FutureWarning: If `payload_format` is `"json"`.
         """
         _validate_tabpfn_systems(self.tabpfn_systems)
         if self.payload_format == "json":
@@ -404,7 +402,7 @@ class _HostedBase(BaseEstimator):
                 'payload_format="json" is deprecated and will be removed in a '
                 "future release. Parquet is the default; drop the argument or "
                 'pass payload_format="parquet".',
-                DeprecationWarning,
+                FutureWarning,
                 stacklevel=3,
             )
         params: Dict[str, Any] = {"output_type": output_type}
@@ -483,6 +481,9 @@ class _HostedBase(BaseEstimator):
         # reroute the request.
         sent = httpx.Headers(self._headers())
         sent.update(headers)
+        # The body's encoding sets Content-Type, whatever `extra_headers` say;
+        # httpx writes the multipart one, with its boundary, only when unset.
+        sent.pop("Content-Type", None)
         if self.payload_format == "parquet":
             return self._http_client().post(
                 self.endpoint_url,
@@ -498,6 +499,7 @@ class _HostedBase(BaseEstimator):
             body[_JSON_DATASET_KEYS[name]] = _to_jsonable(value)
         # Not httpx's `json=`, which rejects non-finite floats outright;
         # `json.dumps` writes the literals Python's own decoder reads back.
+        sent["Content-Type"] = "application/json"
         return self._http_client().post(
             self.endpoint_url,
             content=json.dumps(body).encode("utf-8"),
@@ -537,8 +539,7 @@ class _HostedBase(BaseEstimator):
     def _poll(self, request: Dict[str, Any], job_id: str) -> httpx.Response:
         """Ask the endpoint for the answer to the job `job_id`."""
         headers = httpx.Headers(self._headers())
-        # Parquet mode sets no Content-Type, and the endpoint reads only a
-        # JSON body as a poll.
+        # The endpoint reads only a JSON body as a poll.
         headers.update(
             {"Content-Type": "application/json", **_routing_headers(request, job_id)}
         )

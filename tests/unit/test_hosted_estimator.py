@@ -27,7 +27,7 @@ from tests.unit.test_client import _FakeTime
 
 # Tests that pin the JSON path on purpose; `TestPayloadFormat` checks the warning.
 pytestmark = pytest.mark.filterwarnings(
-    'ignore:payload_format="json" is deprecated:DeprecationWarning'
+    'ignore:payload_format="json" is deprecated:FutureWarning'
 )
 
 
@@ -192,7 +192,7 @@ class TestPayloadFormat:
             warnings.simplefilter("error")
             model = _classifier(Recorder(), payload_format="json")
             model.fit(X_COMPLETE, Y)
-        with pytest.warns(DeprecationWarning, match="Parquet is the default"):
+        with pytest.warns(FutureWarning, match="Parquet is the default"):
             model.predict_proba(X_COMPLETE.iloc[:2])
 
     @pytest.mark.parametrize("payload_format", ["json", "parquet"])
@@ -215,6 +215,41 @@ class TestPayloadFormat:
         assert len(body["X_train"]) == 4
         # y_train on the wire is 2D.
         assert body["y_train"] == [[0], [0], [1], [1]]
+
+
+class TestContentType:
+    """The body's encoding sets Content-Type; `extra_headers` cannot."""
+
+    @pytest.mark.parametrize("name", ["Content-Type", "content-type", "CONTENT-TYPE"])
+    def test_parquet_keeps_the_multipart_boundary(self, name):
+        recorder = Recorder()
+        model = _classifier(
+            recorder,
+            payload_format="parquet",
+            extra_headers={name: "application/json", "x-custom": "kept"},
+        )
+        model.fit(X, Y)
+        model.predict_proba(X.iloc[:2])
+
+        sent = recorder.sent().headers
+        [content_type] = sent.get_list("content-type")
+        assert content_type.startswith("multipart/form-data; boundary=")
+        assert sent["x-custom"] == "kept"
+        config, frames = recorder.multipart()
+        assert config["task_config"]["task"] == "classification"
+        assert set(frames) == {"x_train", "y_train", "x_test"}
+
+    @pytest.mark.parametrize("name", ["Content-Type", "content-type"])
+    def test_json_sends_application_json(self, name):
+        recorder = Recorder()
+        model = _classifier(
+            recorder, payload_format="json", extra_headers={name: "text/plain"}
+        )
+        model.fit(X_COMPLETE, Y)
+        model.predict_proba(X_COMPLETE.iloc[:2])
+
+        assert recorder.sent().headers.get_list("content-type") == ["application/json"]
+        assert len(recorder.json_body()["X_train"]) == 4
 
 
 class TestParquetPayload:
