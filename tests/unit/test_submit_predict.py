@@ -149,6 +149,7 @@ def _settings(**limits: int) -> GetSettingsResponse:
 def _offline_server(
     y_pred: Callable[[], Any] = lambda: np.zeros(3),
     settings: GetSettingsResponse | None = None,
+    metadata: dict[str, Any] = METADATA,
 ) -> Generator[SimpleNamespace]:
     """Run the estimators with no network: no auth, mocked inference.
 
@@ -156,7 +157,7 @@ def _offline_server(
     background job, which waiting finds completed, and accepts every submitted
     prediction as `PREDICTION_ID`. `predict()` gets its prediction answered
     with one request. A prediction, whether predicted with one request or
-    waited for, is `y_pred()` with `METADATA` and `TIMINGS`. `settings` are
+    waited for, is `y_pred()` with `metadata` and `TIMINGS`. `settings` are
     what `get_settings` returns; None leaves the model limits unchecked.
     """
     use_server_before = Config.use_server
@@ -179,7 +180,7 @@ def _offline_server(
     ) -> PredictionResult:
         if on_accepted is not None:
             on_accepted(None)
-        return PredictionResult(y_pred=y_pred(), metadata=METADATA, timings=TIMINGS)
+        return PredictionResult(y_pred=y_pred(), metadata=metadata, timings=TIMINGS)
 
     try:
         with (

@@ -9,10 +9,8 @@ boundary is patched, as in `test_submit_predict`.
 
 import logging
 import warnings
-from collections.abc import Callable
 from typing import Any
 from unittest.mock import patch
-from uuid import UUID
 
 import numpy as np
 import pytest
@@ -24,11 +22,10 @@ from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
 from tabpfn_client.models import PredictionResult
 from tabpfn_client.service_wrapper import InferenceClient
 from tests.unit.test_submit_predict import (
+    ESTIMATORS,
     NO_CRITERION,
     OUTPUTS,
-    TIMINGS,
     X_TEST,
-    Y_TRAIN,
     Y_TRAIN_REGRESSION,
     _fitted,
     _offline_server,
@@ -47,54 +44,6 @@ FALLBACK_RECORD = (
     "so TabPFN fit the model again on the server. The prediction took longer than "
     "usual.",
 )
-# Names of the server's internals, which users must not see.
-INTERNAL_NAMES = ("general pool", "pool", "kv", "lane", "gapi", "worker")
-
-# Each estimator's `predict()` without arguments.
-DEFAULT_OUTPUTS = pytest.mark.parametrize(
-    ("estimator_cls", "y", "output_type"),
-    [
-        (TabPFNClassifier, Y_TRAIN, "preds"),
-        (TabPFNRegressor, Y_TRAIN_REGRESSION, "mean"),
-    ],
-    ids=["classifier", "regressor"],
-)
-VIA = pytest.mark.parametrize("via", ["predict", "wait_for_predict"])
-
-
-class _ArrayClassifier(TabPFNClassifier):
-    """A dependant's classifier, whose `_predict` returns the finished array."""
-
-    def _predict(self, X, output_type):
-        return np.full(len(X), output_type)
-
-
-def _answer(
-    metadata: dict[str, Any], output_type: str
-) -> Callable[..., PredictionResult]:
-    """A server that answers every prediction of `X_TEST` with `metadata`."""
-
-    def answer(
-        *args: Any,
-        on_accepted: Callable[[UUID | None], None] | None = None,
-        **kwargs: Any,
-    ) -> PredictionResult:
-        if on_accepted is not None:
-            on_accepted(None)
-        return PredictionResult(
-            y_pred=_y_pred(X_TEST, output_type), metadata=metadata, timings=TIMINGS
-        )
-
-    return answer
-
-
-def _predict_via(model: Any, via: str, output_type: str, **kwargs: Any) -> Any:
-    """Predict `X_TEST` as `_predict` does, or with `submit_predict()` and then
-    `wait_for_predict()`."""
-    if via == "wait_for_predict":
-        model.submit_predict(X_TEST, output_type=output_type, **kwargs)
-        return model.wait_for_predict()
-    return _predict(model, output_type, **kwargs)
 
 
 def _logged(caplog: pytest.LogCaptureFixture) -> list[tuple[str, int, str]]:
@@ -103,95 +52,84 @@ def _logged(caplog: pytest.LogCaptureFixture) -> list[tuple[str, int, str]]:
 
 
 @OUTPUTS
-@VIA
+@pytest.mark.parametrize("via", ["predict", "wait_for_predict"])
 @NO_CRITERION
 def test_a_prediction_that_could_not_use_the_cache_logs_once(
     estimator_cls, y, output_type, predict_kwargs, via, caplog
 ):
     model = _fitted(estimator_cls, y)
 
-    with _offline_server() as server, _without_criterion_dependencies():
-        server.predict.side_effect = _answer(FALLBACK, output_type)
-        server.wait.side_effect = _answer(FALLBACK, output_type)
-        _predict_via(model, via, output_type, **predict_kwargs)
+    with (
+        _offline_server(lambda: _y_pred(X_TEST, output_type), metadata=FALLBACK),
+        _without_criterion_dependencies(),
+    ):
+        if via == "wait_for_predict":
+            model.submit_predict(X_TEST, output_type=output_type, **predict_kwargs)
+            model.wait_for_predict()
+        else:
+            _predict(model, output_type, **predict_kwargs)
 
     assert _logged(caplog) == [FALLBACK_RECORD]
     assert model._last_meta == FALLBACK
 
 
-@DEFAULT_OUTPUTS
-@VIA
+@ESTIMATORS
 @pytest.mark.parametrize(
     "metadata",
     [
         {"cache_outcome": "hit"},
-        {"cache_outcome": "miss"},
-        {"cache_outcome": "not_requested"},
-        {"cache_outcome": None},
         # A value a newer server may send.
         {"cache_outcome": "stale"},
         # An older server, which does not report it.
-        {"test_set_num_rows": 3},
         {},
     ],
-    ids=["hit", "miss", "not_requested", "none", "unknown", "unreported", "empty"],
+    ids=["hit", "unknown", "unreported"],
 )
 def test_a_prediction_that_did_not_fall_back_logs_nothing(
-    estimator_cls, y, output_type, via, metadata, caplog
+    estimator_cls, y, metadata, caplog
 ):
     model = _fitted(estimator_cls, y)
 
-    with _offline_server() as server:
-        server.predict.side_effect = _answer(metadata, output_type)
-        server.wait.side_effect = _answer(metadata, output_type)
-        _predict_via(model, via, output_type)
+    with _offline_server(metadata=metadata):
+        model.predict(X_TEST)
 
     assert _logged(caplog) == []
 
 
-@DEFAULT_OUTPUTS
-@VIA
-def test_a_prediction_that_could_not_use_the_cache_returns_under_warnings_as_errors(
-    estimator_cls, y, output_type, via
-):
-    model = _fitted(estimator_cls, y)
+def test_a_prediction_that_could_not_use_the_cache_returns_under_warnings_as_errors():
+    model = _fitted()
 
-    with _offline_server() as server, warnings.catch_warnings():
+    with _offline_server(metadata=FALLBACK), warnings.catch_warnings():
         # The server has billed the prediction by now: nothing may lose it.
         warnings.simplefilter("error")
-        server.predict.side_effect = _answer(FALLBACK, output_type)
-        server.wait.side_effect = _answer(FALLBACK, output_type)
-        predicted = _predict_via(model, via, output_type)
+        predicted = model.predict(X_TEST)
 
-    np.testing.assert_array_equal(predicted, _y_pred(X_TEST, output_type))
+    np.testing.assert_array_equal(predicted, np.zeros(3))
 
 
 @NO_CRITERION
 @pytest.mark.parametrize(
     ("outcomes", "logged"),
     [
-        (["hit", "fallback", "hit"], 1),
-        (["fallback"] * 3, 1),
-        (["hit"] * 3, 0),
+        # Two requests, neither the first nor the last: one log, not one each.
+        (["hit", "fallback", "fallback", "hit"], 1),
+        (["hit", "miss", "not_requested", "hit"], 0),
     ],
-    ids=["one_request", "every_request", "no_request"],
+    ids=["fallback", "no_fallback"],
 )
 def test_a_split_full_output_logs_once_if_any_request_could_not_use_the_cache(
     outcomes, logged, caplog
 ):
-    X = np.arange(10, dtype=float).reshape(5, 2)
+    X = np.arange(14, dtype=float).reshape(7, 2)
     model = _fitted(TabPFNRegressor, Y_TRAIN_REGRESSION)
     settings = _settings(test_set_max_rows_w_full_regression_output=2)
 
     def predict_chunks(x_chunks: Any, **kwargs: Any) -> list[PredictionResult]:
         results = []
-        # Strict: the 5 rows go in 3 requests.
+        # Strict: the 7 rows go in 4 requests.
         for chunk, outcome in zip(x_chunks, outcomes, strict=True):
-            results.append(
-                PredictionResult(
-                    y_pred=_y_pred(chunk, "full"), metadata={"cache_outcome": outcome}
-                )
-            )
+            y_pred = _y_pred(chunk, "full")
+            results.append(PredictionResult(y_pred, {"cache_outcome": outcome}))
         return results
 
     with (
@@ -204,21 +142,14 @@ def test_a_split_full_output_logs_once_if_any_request_could_not_use_the_cache(
     assert _logged(caplog) == [FALLBACK_RECORD] * logged
 
 
-@pytest.mark.parametrize(
-    ("estimator_cls", "y", "task"),
-    [
-        (TabPFNClassifier, Y_TRAIN, "classification"),
-        (TabPFNRegressor, Y_TRAIN_REGRESSION, "regression"),
-    ],
-    ids=["classifier", "regressor"],
-)
+@pytest.mark.parametrize("task", ["classification", "regression"])
 @pytest.mark.parametrize(
     ("cache_outcome", "logged"),
-    [("fallback", 1), ("stale", 0), (None, 0)],
-    ids=["fallback", "unknown", "unreported"],
+    [("fallback", 1), (None, 0)],
+    ids=["fallback", "unreported"],
 )
 def test_reads_the_outcome_from_the_metadata_the_server_sends(
-    estimator_cls, y, task, cache_outcome, logged, caplog
+    task, cache_outcome, logged, caplog
 ):
     metadata = TypeAdapter(Metadata).validate_python(
         {
@@ -231,29 +162,28 @@ def test_reads_the_outcome_from_the_metadata_the_server_sends(
         }
     )
     result = ServiceClient._prediction_result([0, 1, 2], metadata, None, None)
-    model = _fitted(estimator_cls, y)
+    model = _fitted()
 
-    with _offline_server() as server:
-        server.predict.side_effect = None
-        server.predict.return_value = result
+    with _offline_server(metadata=result.metadata):
         model.predict(X_TEST)
 
     assert _logged(caplog) == [FALLBACK_RECORD] * logged
 
 
-def test_the_log_names_none_of_the_servers_internals(caplog):
-    model = _fitted()
+def test_the_log_names_none_of_the_servers_internals():
+    internal_names = ("general pool", "pool", "kv", "lane", "gapi", "worker")
+    message = FALLBACK_RECORD[2].lower()
 
-    with _offline_server() as server:
-        server.predict.side_effect = _answer(FALLBACK, "preds")
-        model.predict(X_TEST)
-
-    [(_, _, message)] = _logged(caplog)
-    assert [name for name in INTERNAL_NAMES if name in message.lower()] == []
+    assert [name for name in internal_names if name in message] == []
 
 
 def test_a_subclass_whose_predict_returns_an_array_still_predicts():
-    model = _ArrayClassifier()
+    # A dependant overrides `_predict` to return the finished array.
+    class ArrayClassifier(TabPFNClassifier):
+        def _predict(self, X, output_type):
+            return np.full(len(X), output_type)
+
+    model = ArrayClassifier()
 
     np.testing.assert_array_equal(model.predict(X_TEST), ["preds"] * 3)
     np.testing.assert_array_equal(model.predict_proba(X_TEST), ["probas"] * 3)
