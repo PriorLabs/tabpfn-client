@@ -206,7 +206,7 @@ def test_an_older_pickle_without_the_strategy_predicts_with_the_default(
     estimator_cls, y
 ):
     model = _fitted(estimator_cls, y)
-    # Estimators pickled by v0.7.1 or earlier have no `cache_fallback_strategy`.
+    # Estimators pickled before this attribute existed have no cache_fallback_strategy.
     del model.cache_fallback_strategy
     restored = pickle.loads(pickle.dumps(model))
 
