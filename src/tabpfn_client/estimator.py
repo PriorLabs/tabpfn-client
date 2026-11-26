@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import logging
 import warnings
+from contextlib import contextmanager
 from dataclasses import dataclass
 from uuid import UUID, uuid4
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any, Literal, TypeVar, cast, get_args, overload
 from typing_extensions import Self
 
@@ -866,6 +867,9 @@ class TabPFNClassifier(
                 the latest default model; "default" is accepted as a backward-compatible
                 alias. Use `create_default_for_version()` to pin to a specific major
                 version, and `list_available_models()` for the accepted names.
+                TabPFN v4 (`"v4_default"`) is available to accounts with early
+                access; it does not support thinking mode or
+                `fit_mode="fit_with_cache"` yet.
 
             n_estimators:
                 The number of estimators in the TabPFN ensemble. We aggregate the
@@ -1151,6 +1155,9 @@ class TabPFNClassifier(
 
         # NOTE: Always resolve, do not re-assign to self.thinking_mode, user could change effort.
         thinking_mode = _resolve_thinking_mode(self.thinking_mode, self.thinking_effort)
+        _validate_model_options(
+            tabpfn_config.model_path, fit_mode=self.fit_mode, thinking=thinking_mode
+        )
         validate_train_set(
             X, y, model_path=tabpfn_config.model_path, thinking=thinking_mode
         )
@@ -1188,22 +1195,23 @@ class TabPFNClassifier(
 
             self._last_trace_id = self.client_options.headers["sentry-trace"]
 
-            fit_result = InferenceClient.fit_with_result(
-                X_clean,
-                y,
-                task_config=task_config,
-                tabpfn_systems=tabpfn_systems,
-                text_handling=text_handling,
-                thinking_config=thinking_config,
-                api_mode=_fit_api_mode(
-                    self.api_mode, submit=submit, thinking=thinking_mode
-                ),
-                client_options=self.client_options,
-                description=description,
-                # Waited for below, once the model holds the new fit.
-                wait=False,
-                row_weights=row_weights,
-            )
+            with _early_access_hint(tabpfn_config.model_path):
+                fit_result = InferenceClient.fit_with_result(
+                    X_clean,
+                    y,
+                    task_config=task_config,
+                    tabpfn_systems=tabpfn_systems,
+                    text_handling=text_handling,
+                    thinking_config=thinking_config,
+                    api_mode=_fit_api_mode(
+                        self.api_mode, submit=submit, thinking=thinking_mode
+                    ),
+                    client_options=self.client_options,
+                    description=description,
+                    # Waited for below, once the model holds the new fit.
+                    wait=False,
+                    row_weights=row_weights,
+                )
             self._set_fit(fit_result, n_train_rows=X.shape[0])
             # Set only after the server has accepted the fit, so a failed refit
             # can't pair new classes with the old model_id_.
@@ -1789,6 +1797,9 @@ class TabPFNRegressor(
                 the latest default model; "default" is accepted as a backward-compatible
                 alias. Use `create_default_for_version()` to pin to a specific major
                 version, and `list_available_models()` for the accepted names.
+                TabPFN v4 (`"v4_default"`) is available to accounts with early
+                access; it does not support thinking mode or
+                `fit_mode="fit_with_cache"` yet.
 
             n_estimators:
                 The number of estimators in the TabPFN ensemble. We aggregate the
@@ -2060,6 +2071,9 @@ class TabPFNRegressor(
         tabpfn_config = self._get_tabpfn_config()
 
         thinking_mode = _resolve_thinking_mode(self.thinking_mode, self.thinking_effort)
+        _validate_model_options(
+            tabpfn_config.model_path, fit_mode=self.fit_mode, thinking=thinking_mode
+        )
         validate_train_set(
             X, y, model_path=tabpfn_config.model_path, thinking=thinking_mode
         )
@@ -2087,22 +2101,23 @@ class TabPFNRegressor(
 
             self._last_trace_id = self.client_options.headers["sentry-trace"]
 
-            fit_result = InferenceClient.fit_with_result(
-                X_clean,
-                y,
-                task_config=task_config,
-                tabpfn_systems=tabpfn_systems,
-                text_handling=text_handling,
-                thinking_config=thinking_config,
-                api_mode=_fit_api_mode(
-                    self.api_mode, submit=submit, thinking=thinking_mode
-                ),
-                client_options=self.client_options,
-                description=description,
-                # Waited for below, once the model holds the new fit.
-                wait=False,
-                row_weights=row_weights,
-            )
+            with _early_access_hint(tabpfn_config.model_path):
+                fit_result = InferenceClient.fit_with_result(
+                    X_clean,
+                    y,
+                    task_config=task_config,
+                    tabpfn_systems=tabpfn_systems,
+                    text_handling=text_handling,
+                    thinking_config=thinking_config,
+                    api_mode=_fit_api_mode(
+                        self.api_mode, submit=submit, thinking=thinking_mode
+                    ),
+                    client_options=self.client_options,
+                    description=description,
+                    # Waited for below, once the model holds the new fit.
+                    wait=False,
+                    row_weights=row_weights,
+                )
             self._set_fit(fit_result, n_train_rows=X.shape[0])
             self._fit_count += 1
         else:
@@ -3001,6 +3016,62 @@ def _resolve_thinking_mode(enabled: bool, effort: str | None = None) -> bool:
     if effort:
         return True
     return False
+
+
+def _is_v4(model_path: str | None) -> bool:
+    """Whether `model_path` names a TabPFN v4 model rather than the server default."""
+    if model_path in _AUTO_MODEL_PATH_ALIASES:
+        return False
+    return model_version_from_path(model_path, ()) == ModelVersion.V4
+
+
+def _validate_model_options(
+    model_path: str | None, *, fit_mode: str | None, thinking: bool
+) -> None:
+    """Reject options the chosen model does not support, before the upload.
+
+    Args:
+        model_path: The model the fit runs with.
+        fit_mode: The estimator's `fit_mode`.
+        thinking: Whether the fit runs in thinking mode.
+
+    Raises:
+        ValueError: If a TabPFN v4 model is combined with thinking mode or
+            `fit_mode="fit_with_cache"`.
+    """
+    if not _is_v4(model_path):
+        return
+    if thinking:
+        raise ValueError(
+            "TabPFN v4 does not support thinking mode yet. Disable thinking mode, "
+            "or use another model version."
+        )
+    if fit_mode == "fit_with_cache":
+        raise ValueError(
+            'TabPFN v4 does not support fit_mode="fit_with_cache" yet. Use '
+            'fit_mode="fit_preprocessors", or another model version.'
+        )
+
+
+@contextmanager
+def _early_access_hint(model_path: str | None) -> Iterator[None]:
+    """Explain a rejected TabPFN v4 model path as missing early access.
+
+    Raises:
+        RuntimeError: If the server rejects a v4 `model_path` as invalid, which
+            it does for accounts without early access to TabPFN v4.
+    """
+    try:
+        yield
+    except RuntimeError as e:
+        if _is_v4(model_path) and "Invalid model path" in str(e):
+            raise RuntimeError(
+                f"The server did not accept model_path={model_path!r}. TabPFN v4 "
+                "is available to accounts with early access, and this account "
+                "does not have it. Leave model_path unset to use the current "
+                "default model."
+            ) from e
+        raise
 
 
 def _fit_api_mode(api_mode: ApiMode, *, submit: bool, thinking: bool) -> ApiMode:

@@ -18,6 +18,8 @@ from tabpfn_client.utils import model_version_from_path
         ("tabpfn-v3-classifier-v3_default.ckpt", ModelVersion.V3),
         ("tabpfn-v3.5-classifier-v3.5-fast_default.ckpt", ModelVersion.V3_5),
         ("tabpfn-v3.5-fast-20260909.safetensors", ModelVersion.V3_5_FAST),
+        ("v4_default", ModelVersion.V4),
+        ("tabpfn-v4-default.safetensors", ModelVersion.V4),
         # v2 hash names carry no version marker and fall back to v2.
         ("gn2p4bpt", ModelVersion.V2),
     ],

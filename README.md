@@ -75,6 +75,19 @@ predictions = model.predict(X_test)
 probabilities = model.predict_proba(X_test)
 ```
 
+## Model Versions
+
+Leaving `model_path` unset lets the server pick the current default model. To pin a model version, use `create_default_for_version()`; `list_available_models()` lists the accepted `model_path` names.
+
+```python
+from tabpfn_client import TabPFNClassifier
+from tabpfn_client.constants import ModelVersion
+
+model = TabPFNClassifier.create_default_for_version(ModelVersion.V3_5)
+```
+
+TabPFN v4 is available to accounts with early access. Select it with `create_default_for_version(ModelVersion.V4)` (or `"v4"`), or with `model_path="v4_default"`. It does not support thinking mode or `fit_mode="fit_with_cache"` yet.
+
 ## Thinking Mode
 
 Thinking mode trades extra fit-time compute for higher predictive quality. The server explores additional configurations during `fit()` and returns a tuned model; `predict()` then runs as usual.

@@ -237,6 +237,7 @@ class ModelVersion(str, Enum):
     V3 = "v3"
     V3_5 = "v3.5"
     V3_5_FAST = "v3.5-fast"
+    V4 = "v4"
 
 
 class QuotaOperation(str, Enum):
