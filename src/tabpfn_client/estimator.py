@@ -10,7 +10,7 @@ import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
 from uuid import UUID, uuid4
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from typing import Any, Literal, TypeVar, cast, get_args, overload
 from typing_extensions import Self
 
@@ -3054,7 +3054,7 @@ def _validate_model_options(
 
 
 @contextmanager
-def _early_access_hint(model_path: str | None) -> Iterator[None]:
+def _early_access_hint(model_path: str | None) -> Generator[None, None, None]:
     """Explain a rejected TabPFN v4 model path as missing early access.
 
     Raises:
