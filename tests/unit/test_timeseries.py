@@ -41,6 +41,7 @@ from tests.mock_tabpfn_server import MockTabPFNServer
 from tests.unit.test_client import _api_settings_payload, _FakeTime
 
 JOB_ID = UUID("00000000-0000-0000-0000-0000000000f1")
+UPLOAD_ID = UUID("00000000-0000-0000-0000-0000000000e1")
 HORIZON = 3
 GRID = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 METADATA = {"n_items": 2, "runtime_s": 1.5}
@@ -645,7 +646,10 @@ class TestUpload:
     def test_uploads_a_series_over_the_inline_limit(self, router):
         prepare = router.post("/forecast/prepare_upload").respond(
             200,
-            json={"job_id": str(JOB_ID), "series_info": _upload_info("series", "0,10")},
+            json={
+                "upload_id": str(UPLOAD_ID),
+                "series_info": _upload_info("series", "0,10"),
+            },
         )
         put = router.put(f"{STORAGE}/series.parquet").respond(200)
         route = router.post("/forecast/forecast").respond(200, json=_inline())
@@ -662,8 +666,8 @@ class TestUpload:
             pd.read_parquet(io.BytesIO(put.calls.last.request.content)), _series()
         )
         form = _form(route.calls.last.request)
-        assert set(form) == {"spec", "job_id"}
-        assert form["job_id"] == str(JOB_ID).encode()
+        assert set(form) == {"spec", "upload_id"}
+        assert form["upload_id"] == str(UPLOAD_ID).encode()
 
     def test_sends_a_series_at_the_inline_limit_inline(self, router):
         route = router.post("/forecast/forecast").respond(200, json=_inline())
@@ -678,7 +682,7 @@ class TestUpload:
         prepare = router.post("/forecast/prepare_upload").respond(
             200,
             json={
-                "job_id": str(JOB_ID),
+                "upload_id": str(UPLOAD_ID),
                 "series_info": _upload_info("series", "0,10"),
                 "known_covariates_info": _upload_info("known_covariates", "0,20"),
             },
@@ -706,5 +710,5 @@ class TestUpload:
             _known(),
         )
         form = _form(route.calls.last.request)
-        assert set(form) == {"spec", "job_id"}
+        assert set(form) == {"spec", "upload_id"}
         assert _spec(route)["columns"]["known_covariates"] == ["promo"]

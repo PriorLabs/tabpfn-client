@@ -96,7 +96,7 @@ class _JobSpec(BaseModel):
 
 
 class _PrepareUploadResponse(BaseModel):
-    job_id: UUID
+    upload_id: UUID
     series_info: FileUploadInfo
     known_covariates_info: FileUploadInfo | None = None
 
@@ -439,7 +439,7 @@ def _start(
             )
         res = ServiceClient.httpx_client.post(_FORECAST_PATH, data=data, files=files)
     else:
-        data["job_id"] = str(_upload(series, known_covariates=known_covariates))
+        data["upload_id"] = str(_upload(series, known_covariates=known_covariates))
         res = ServiceClient.httpx_client.post(_FORECAST_PATH, data=data)
     resp = ServiceClient._validate_response(
         res,
@@ -494,7 +494,7 @@ def _upload(series: bytes, *, known_covariates: bytes | None) -> UUID:
         ServiceClient._upload_to_gcs(
             "known_covariates", known_covariates, up.known_covariates_info
         )
-    return up.job_id
+    return up.upload_id
 
 
 def _file_info(table: bytes) -> dict[str, object]:
