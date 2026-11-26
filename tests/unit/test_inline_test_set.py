@@ -12,6 +12,7 @@ import httpx
 import numpy as np
 
 from tabpfn_client.api_models import (
+    CacheFallbackStrategy,
     ClassifierConfig,
     ClassifierTabPFNConfig,
     FitMode,
@@ -76,7 +77,7 @@ class TestInlineTestSet(unittest.TestCase):
         api_mode=ApiMode.SYNC,
         task_config=None,
         n_train_rows=None,
-        cache_fallback_strategy="error",
+        cache_fallback_strategy: CacheFallbackStrategy = "error",
     ):
         with patch.object(ServiceClient, "_upload_to_gcs") as upload:
             ServiceClient.predict(
