@@ -86,7 +86,7 @@ from tabpfn_client.constants import ModelVersion
 model = TabPFNClassifier.create_default_for_version(ModelVersion.V3_5)
 ```
 
-TabPFN v4 is available to accounts with early access. Select it with `create_default_for_version(ModelVersion.V4)` (or `"v4"`), or with `model_path="v4_default"`. It does not support thinking mode or `fit_mode="fit_with_cache"` yet.
+TabPFN v4 is available and selectable: use `create_default_for_version(ModelVersion.V4)` (or `"v4"`), or `model_path="v4_default"`. Leaving `model_path` unset still selects the current default model. v4 does not support thinking mode or `fit_mode="fit_with_cache"` yet.
 
 ## Thinking Mode
 

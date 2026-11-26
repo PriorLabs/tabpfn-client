@@ -11,15 +11,11 @@ from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
 from tabpfn_client.service_wrapper import InferenceClient
 
 _DUMMY_FIT = FitResponse(fitted_train_set_id=UUID(int=0), status=FitStatus.COMPLETED)
-_INVALID_V4 = (
-    "Fail to call fit: [HTTP 422] [{'type': 'value_error', 'msg': 'Value error, "
-    "Invalid model path: v4_default. Valid model names: v3.5_default, v3_default'}]."
-)
 ESTIMATORS = [TabPFNClassifier, TabPFNRegressor]
 
 
 @pytest.fixture(autouse=True)
-def _server_mode():
+def _server_mode():  # pyright: ignore[reportUnusedFunction]
     config.Config.is_initialized = True
     config.Config.use_server = True
     with patch.object(ServiceClient, "get_settings", return_value=None):
@@ -69,33 +65,3 @@ def test_fit_with_cache_stays_allowed_for_other_versions(estimator_cls):
     )
     with patch.object(InferenceClient, "fit_with_result", return_value=_DUMMY_FIT):
         model.fit(*_data(estimator_cls))
-
-
-@pytest.mark.parametrize("estimator_cls", ESTIMATORS)
-def test_a_rejected_v4_model_path_explains_early_access(estimator_cls):
-    model = estimator_cls.create_default_for_version(ModelVersion.V4)
-    with patch.object(
-        InferenceClient, "fit_with_result", side_effect=RuntimeError(_INVALID_V4)
-    ):
-        with pytest.raises(RuntimeError, match="early access") as exc_info:
-            model.fit(*_data(estimator_cls))
-    assert "v4_default" in str(exc_info.value)
-    assert str(exc_info.value.__cause__) == _INVALID_V4
-
-
-@pytest.mark.parametrize("estimator_cls", ESTIMATORS)
-@pytest.mark.parametrize(
-    ("model_path", "error"),
-    [
-        ("v4_default", "Fail to call fit: [HTTP 500] Internal Server Error."),
-        ("v3_unknown", "Fail to call fit: [HTTP 422] Invalid model path: v3_unknown."),
-    ],
-)
-def test_other_errors_pass_through_unchanged(estimator_cls, model_path, error):
-    model = estimator_cls(model_path=model_path)
-    with patch.object(
-        InferenceClient, "fit_with_result", side_effect=RuntimeError(error)
-    ):
-        with pytest.raises(RuntimeError) as exc_info:
-            model.fit(*_data(estimator_cls))
-    assert str(exc_info.value) == error
