@@ -8,6 +8,8 @@ client-side mirror of the accepted sets, and the error surfacing that makes
 a server-side failure reportable (`error_code` / `trace_id`).
 """
 
+from unittest.mock import patch
+
 import httpx
 import numpy as np
 import pytest
@@ -224,3 +226,13 @@ class TestFit:
     def test_a_single_class_is_accepted_without_thinking(self):
         clf = _clf().fit(np.zeros((3, 2)), np.zeros(3))
         assert list(clf.classes_) == [0]
+
+    @pytest.mark.parametrize("make", [_clf, _reg])
+    def test_rejects_a_single_training_row(self, make):
+        est = make()
+        with patch.object(est, "_http_client") as http_client:
+            with pytest.raises(ValueError, match="at least 2 are required"):
+                est.fit(np.zeros((1, 2)), np.zeros(1))
+        http_client.assert_not_called()
+        with pytest.raises(NotFittedError):
+            check_is_fitted(est)

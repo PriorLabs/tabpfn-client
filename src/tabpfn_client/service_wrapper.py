@@ -25,6 +25,7 @@ from tabpfn_client.api_models import (
     FitTaskConfig,
     ClassifierConfig,
     FitResponse,
+    GetCrossValidateResultResponse,
     GetFitStatusResponse,
     RegressorConfig,
     ThinkingConfig,
@@ -402,6 +403,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         description: str | None,
         text_handling: TextHandling = "advanced",
         wait: bool = True,
+        row_weights: pd.DataFrame | None = None,
     ) -> FitResponse:
         """Upload a train set to the server and fit it.
 
@@ -418,6 +420,8 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             description: Description of the dataset and task for the server.
             text_handling: Text-processing preset, ``"advanced"`` or ``"simple"``.
             wait: Whether to poll the server until the fit completes.
+            row_weights: The ``sample_weight`` and ``label_reliability``
+                columns to fit with, one row per row of ``X``.
 
         Returns:
             The fit as the server reports it: its id, its status and its
@@ -441,6 +445,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             client_options=client_options,
             description=description,
             wait=wait,
+            row_weights=row_weights,
         )
 
     @classmethod
@@ -662,3 +667,142 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         return ServiceClient.wait_for_predict(
             fitted_test_set_id, client_options=client_options
         )
+
+    @classmethod
+    def cross_validate(
+        cls,
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray,
+        *,
+        fold_ids: list[list[int]],
+        task_config: ClassifierConfig | RegressorConfig,
+        tabpfn_systems: list[TabPFNSystem],
+        text_handling: TextHandling = "advanced",
+        api_mode: ApiMode = ApiMode.AUTO,
+        client_options: ClientOptions | None = None,
+        wait: bool = True,
+        row_weights: pd.DataFrame | None = None,
+    ) -> GetCrossValidateResultResponse:
+        """Upload a train set and cross-validate on it, by fold ids.
+
+        See `ServiceClient.cross_validate`.
+
+        Args:
+            X: The training input samples, of shape (n_samples, n_features).
+            y: The target values, of shape (n_samples,).
+            fold_ids: One vector per repeat, with one entry per row of `X`:
+                `0..K-1` puts the row in that validation fold, `-1` keeps it in
+                every training split.
+            task_config: The classification or regression task configuration.
+            tabpfn_systems: The systems to use, as for a fit.
+            text_handling: Text-processing preset, `"advanced"` or `"simple"`.
+            api_mode: The API mode to use: SYNC, ASYNC, or AUTO.
+            client_options: Client specific options (e.g. timeout, headers).
+            wait: Whether to poll the server until the job completes.
+            row_weights: The `sample_weight` and `label_reliability` columns,
+                one row per row of `X`.
+
+        Returns:
+            The job as the server reports it; when not waited for, possibly
+            pending.
+
+        Raises:
+            ValueError: If `text_handling` is invalid or the in-memory size of
+                `X` or `y` exceeds the server limit.
+            CrossValidateFailedError: If the server reports that the job
+                failed, or no longer has it.
+            RuntimeError: If the server does not run cross-validation or
+                rejects the request.
+            TimeoutError: If a job waited for has not completed within
+                `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds.
+        """
+        return ServiceClient.cross_validate(
+            X,
+            y,
+            fold_ids=fold_ids,
+            task_config=task_config,
+            tabpfn_systems=tabpfn_systems,
+            text_handling=text_handling,
+            api_mode=api_mode,
+            client_options=client_options,
+            wait=wait,
+            row_weights=row_weights,
+        )
+
+    @classmethod
+    def cross_validate_splits(
+        cls,
+        splits: list[tuple[pd.DataFrame, pd.Series | np.ndarray, int]],
+        *,
+        task_config: ClassifierConfig | RegressorConfig,
+        tabpfn_systems: list[TabPFNSystem],
+        categorical_features_indices: list[list[int] | None] | None = None,
+        text_handling: TextHandling = "advanced",
+        api_mode: ApiMode = ApiMode.AUTO,
+        client_options: ClientOptions | None = None,
+        wait: bool = True,
+    ) -> GetCrossValidateResultResponse:
+        """Upload one train set per split and cross-validate on them.
+
+        See `ServiceClient.cross_validate_splits`, which documents the
+        arguments, the result and the errors.
+        """
+        return ServiceClient.cross_validate_splits(
+            splits,
+            task_config=task_config,
+            tabpfn_systems=tabpfn_systems,
+            categorical_features_indices=categorical_features_indices,
+            text_handling=text_handling,
+            api_mode=api_mode,
+            client_options=client_options,
+            wait=wait,
+        )
+
+    @classmethod
+    def wait_for_cross_validate(
+        cls,
+        cv_job_id: UUID | str,
+        client_options: ClientOptions | None = None,
+        *,
+        first_poll_delay_secs: float = 0.0,
+    ) -> GetCrossValidateResultResponse:
+        """Wait for a cross-validation job the server accepted, and return it.
+
+        See `ServiceClient.wait_for_cross_validate`.
+
+        Args:
+            cv_job_id: The id of the job, as a UUID or a string.
+            client_options: Client specific options (e.g. timeout, headers).
+            first_poll_delay_secs: Seconds to wait before the first poll.
+
+        Returns:
+            The completed job, with the signed URLs of its predictions.
+
+        Raises:
+            ValueError: If `cv_job_id` is not a valid id.
+            CrossValidateFailedError: If the server reports that the job
+                failed, or does not have it.
+            TimeoutError: If the job has not completed within
+                `TABPFN_CLIENT_ASYNC_POLL_TIMEOUT` seconds.
+            RuntimeError: If polling for the job fails 4 times in a row.
+        """
+        return ServiceClient.wait_for_cross_validate(
+            cv_job_id, client_options, first_poll_delay_secs=first_poll_delay_secs
+        )
+
+    @classmethod
+    def download_cross_validate_predictions(
+        cls, urls: list[str], client_options: ClientOptions | None = None
+    ) -> list[pd.DataFrame]:
+        """Download the predictions of a completed cross-validation job.
+
+        See `ServiceClient.download_cross_validate_predictions`.
+
+        Args:
+            urls: The signed URLs of the job's parquet files.
+            client_options: Client specific options; only the timeout applies.
+
+        Returns:
+            One frame per URL: a `row` column, then the prediction columns.
+        """
+        return ServiceClient.download_cross_validate_predictions(urls, client_options)

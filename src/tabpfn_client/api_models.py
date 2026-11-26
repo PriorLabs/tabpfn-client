@@ -107,9 +107,9 @@ class ClassifierTabPFNConfig(BaseModel):
         default=None,
         description="A lower value makes the predicted probabilities more confident. The value 1.0 has no effect. If unset, the model uses its default value.",
     )
-    average_before_softmax: bool | None = Field(
+    average_before_softmax: bool | Literal["auto"] | None = Field(
         default=None,
-        description="If true, the model averages the logits of the ensemble members before the softmax. If false, it averages their probabilities after the softmax.",
+        description="If true, the model averages the logits of the ensemble members before the softmax. If false, it averages their probabilities after the softmax. `auto` takes the setting of the checkpoint, as does unset. A true or false value cannot be combined with `AVERAGE_BEFORE_SOFTMAX` in `inference_config`.",
     )
     random_state: int | None = Field(
         default=None,
@@ -124,6 +124,18 @@ class ClassifierTabPFNConfig(BaseModel):
     ) = Field(
         default=None,
         description="`autocast` always uses mixed precision. `auto` selects the precision from the hardware.",
+    )
+    presets: (
+        Annotated[Literal["zero_inflated", "grouped"] | str, Field(union_mode="left_to_right")]
+        | list[Annotated[Literal["zero_inflated", "grouped"] | str, Field(union_mode="left_to_right")]]
+        | None
+    ) = Field(
+        default=None,
+        description="Names of bundles of inference settings. `zero_inflated` is for regression targets with many exact zeros. `grouped` pools the predictions of a group and needs `group_col`; predict all rows of a group in one request. Several presets combine. Presets that set one setting to different values are rejected. The keys of `inference_config` win over every preset. If unset, the model uses the settings of its checkpoint.",
+    )
+    group_col: str | list[str] | None = Field(
+        default=None,
+        description="The column that says which group a row belongs to, such as a patient, or a list of columns whose joint value is the group. The model replaces them with one categorical feature. Fit and predict data must hold these columns. Thinking mode takes `group_col` in `thinking_config` instead.",
     )
     ignore_pretraining_limits: bool | None = Field(
         default=None,
@@ -199,6 +211,26 @@ class ClassifierMetadata(BaseModel):
         description="Class labels in ascending order. They name the columns of `probas` and the labels of `preds`. Null with `top_k`, because `top_k` has its own `prediction.classes`.",
     )
     top_k: int | None = Field(default=None, description="The `top_k` value of the request.")
+
+
+class CrossValidateSplit(BaseModel):
+    repeat: int
+    fold: int
+    num_train_rows: int
+    num_val_rows: int
+    fit_predict_s: float
+    reused: bool | None = None
+
+
+class CrossValidateUploadSplit(BaseModel):
+    train_set_upload_id: UUID = Field(
+        description="The split's training rows, then its `num_val_rows` validation rows."
+    )
+    num_val_rows: int
+    categorical_features_indices: list[int] | None = Field(
+        default=None,
+        description="Positions in this upload's columns; replaces `task_config`'s for this split.",
+    )
 
 
 class ModelVersion(str, Enum):
@@ -352,9 +384,9 @@ class RegressorTabPFNConfig(BaseModel):
         default=None,
         description="A lower value makes the predicted probabilities more confident. The value 1.0 has no effect. If unset, the model uses its default value.",
     )
-    average_before_softmax: bool | None = Field(
+    average_before_softmax: bool | Literal["auto"] | None = Field(
         default=None,
-        description="If true, the model averages the logits of the ensemble members before the softmax. If false, it averages their probabilities after the softmax.",
+        description="If true, the model averages the logits of the ensemble members before the softmax. If false, it averages their probabilities after the softmax. `auto` takes the setting of the checkpoint, as does unset. A true or false value cannot be combined with `AVERAGE_BEFORE_SOFTMAX` in `inference_config`.",
     )
     random_state: int | None = Field(
         default=None,
@@ -369,6 +401,18 @@ class RegressorTabPFNConfig(BaseModel):
     ) = Field(
         default=None,
         description="`autocast` always uses mixed precision. `auto` selects the precision from the hardware.",
+    )
+    presets: (
+        Annotated[Literal["zero_inflated", "grouped"] | str, Field(union_mode="left_to_right")]
+        | list[Annotated[Literal["zero_inflated", "grouped"] | str, Field(union_mode="left_to_right")]]
+        | None
+    ) = Field(
+        default=None,
+        description="Names of bundles of inference settings. `zero_inflated` is for regression targets with many exact zeros. `grouped` pools the predictions of a group and needs `group_col`; predict all rows of a group in one request. Several presets combine. Presets that set one setting to different values are rejected. The keys of `inference_config` win over every preset. If unset, the model uses the settings of its checkpoint.",
+    )
+    group_col: str | list[str] | None = Field(
+        default=None,
+        description="The column that says which group a row belongs to, such as a patient, or a list of columns whose joint value is the group. The model replaces them with one categorical feature. Fit and predict data must hold these columns. Thinking mode takes `group_col` in `thinking_config` instead.",
     )
     ignore_pretraining_limits: bool | None = Field(
         default=None,
@@ -538,6 +582,22 @@ class FitResponse(BaseModel):
     timings: FitTimings | None = None
 
 
+class GetCrossValidateResultRequest(BaseModel):
+    cv_job_id: UUID
+
+
+class GetCrossValidateResultResponse(BaseModel):
+    cv_job_id: UUID
+    status: Annotated[Literal["pending", "completed", "failed"] | str, Field(union_mode="left_to_right")]
+    retry_in_secs: float | None = None
+    error: str | None = None
+    error_code: str | None = None
+    oof_urls: list[str] | None = None
+    split_urls: list[str] | None = None
+    classes: list[str | int | float | bool] | None = None
+    splits: list[CrossValidateSplit] | None = None
+
+
 class GetFitStatusRequest(BaseModel):
     fitted_train_set_id: UUID
 
@@ -566,6 +626,26 @@ class GetPredictResultResponse(BaseModel):
     timings: PredictTimings | None = None
 
 
+class ThinkingLimit(BaseModel):
+    train_set_max_rows: int
+    train_set_max_cells: int = Field(
+        description="Maximum training cells per estimator: selected rows times uploaded columns. Row subsampling can keep each context below this limit even when the full upload exceeds it."
+    )
+    train_set_max_upload_cells: int = Field(
+        description="Maximum cells in the full training upload before row subsampling. This bounds the table processed before estimator contexts are selected."
+    )
+    test_set_max_rows: int
+    max_classes: int
+    max_cols: int
+    predict_row_pairs_budget: int
+    efforts: list[Annotated[ThinkingEffort | str, Field(union_mode="left_to_right")]]
+    max_timeout_secs: (
+        dict[Annotated[ThinkingEffort | str, Field(union_mode="left_to_right")], float] | None
+    ) = None
+    test_set_max_rows_w_full_regression_output: int
+    test_set_max_cells: int
+
+
 class GetSettingsResponse(BaseModel):
     default_model_version: Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")]
     max_model_limit: ModelLimit
@@ -575,6 +655,13 @@ class GetSettingsResponse(BaseModel):
     dataset_max_size_bytes: int
     async_settings: AsyncSettings
     inline_test_set_max_parquet_bytes: int | None = None
+    thinking_default_model_version: (
+        Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")] | None
+    ) = None
+    thinking_model_limits: (
+        dict[Annotated[ModelVersion | UnknownEnum, Field(union_mode="left_to_right")], ThinkingLimit]
+        | None
+    ) = None
     thinking_max_timeout_secs: float | None = None
 
 
@@ -641,6 +728,18 @@ class PredictResponse(BaseModel):
     )
 
 
+class PrepareFoldIdsUploadRequest(BaseModel):
+    train_set_upload_id: UUID = Field(description="The train set the fold ids split.")
+    fold_ids_info: FileInfo = Field(
+        description="One integer column per repeat and one row per train-set row, in upload order."
+    )
+
+
+class PrepareFoldIdsUploadResponse(BaseModel):
+    fold_ids_upload_id: UUID
+    fold_ids_info: FileUploadInfo
+
+
 class PrepareTestSetUploadRequest(BaseModel):
     fitted_train_set_id: UUID
     x_test_info: FileInfo
@@ -658,6 +757,10 @@ class PrepareTestSetUploadResponse(BaseModel):
 class PrepareTrainSetUploadRequest(BaseModel):
     x_train_info: FileInfo
     y_train_info: FileInfo
+    row_weights_info: FileInfo | None = Field(
+        default=None,
+        description="Optional per-row weights for the fit: a table with one row per train-set row and a `sample_weight` column, a `label_reliability` column, or both.",
+    )
     description: str | None = None
     force_reupload: bool | None = Field(
         default=None,
@@ -669,6 +772,32 @@ class PrepareTrainSetUploadResponse(BaseModel):
     train_set_upload_id: UUID
     x_train_info: FileUploadInfo
     y_train_info: FileUploadInfo
+    row_weights_info: FileUploadInfo | None = None
+
+
+class SubmitCrossValidateRequest(BaseModel):
+    task_config: TaskConfig
+    tabpfn_systems: list[Annotated[TabPFNSystem | str, Field(union_mode="left_to_right")]] | None = None
+    text_handling: Annotated[TextHandling | str, Field(union_mode="left_to_right")] | None = None
+    train_set_upload_id: UUID | None = Field(
+        default=None, description="Fold-id mode: the train set the fold ids split."
+    )
+    fold_ids_upload_id: UUID | None = Field(
+        default=None,
+        description="Fold-id mode: the fold ids, uploaded for `train_set_upload_id` with `/prepare_fold_ids_upload`. One integer column per repeat and one row per train-set row, in upload order. `0..K-1` puts the row in that validation fold; `-1` keeps it in every training split.",
+    )
+    fold_sizes: list[list[int]] | None = Field(
+        default=None,
+        description="Fold-id mode: per repeat, the number of rows in each fold `0..K-1`. The splits are priced from these; a job whose fold ids do not match them fails before any split runs.",
+    )
+    splits: list[CrossValidateUploadSplit] | None = Field(
+        default=None,
+        description="Upload mode: one upload per split, for splits transformed by the client. Results come back in this order.",
+    )
+
+
+class SubmitCrossValidateResponse(BaseModel):
+    cv_job_id: UUID
 
 
 class SubmitFitJobRequest(BaseModel):

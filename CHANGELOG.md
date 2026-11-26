@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-20
+
+### Fixed
+
+- Data checks before upload now use the limits of the model version the server reports, so models newer than the installed client are no longer checked against older limits. ([#463](https://github.com/PriorLabs/tabpfn-client/pull/463))
+
+
+## [0.10.0] - 2026-11-19
+
+### Added
+
+- Add `presets` to `TabPFNClassifier` and `TabPFNRegressor`, named bundles of `inference_config` values. `TabPFNRegressor(presets="zero_inflated")` is for targets with many exact zeros, and `"grouped"` pools the predictions of a group. Presets combine, as in `["zero_inflated", "grouped"]`. The classifier offers only `"grouped"`. ([#453](https://github.com/PriorLabs/tabpfn-client/pull/453))
+- `TabPFNClassifier` and `TabPFNRegressor` gain `cross_val_predict_splits()`, which fits and predicts splits the caller built, each with its own rows, in one cross-validation job on the server, so each split's features can come from preprocessing fitted on that split's training rows only. A job it stopped waiting for is resumed with `wait_for_cross_val_predict_splits()`. ([#456](https://github.com/PriorLabs/tabpfn-client/pull/456))
+
+### Changed
+
+- Accept `average_before_softmax="auto"`, which takes the setting of the checkpoint, as the default does. ([#453](https://github.com/PriorLabs/tabpfn-client/pull/453))
+- Allow `group_col` without thinking mode: the client sends it to the server in `tabpfn_config`, and the model replaces the group columns with one categorical feature. ([#454](https://github.com/PriorLabs/tabpfn-client/pull/454))
+
+### Fixed
+
+- Training sets with fewer than 2 rows now raise a clear `ValueError` before uploading, in the hosted, Azure AI Foundry and SageMaker estimators as well, instead of failing on the server with a 500. ([#447](https://github.com/PriorLabs/tabpfn-client/pull/447))
+
+
+## [0.9.0] - 2026-11-17
+
+### Added
+
+- `TabPFNClassifier` and `TabPFNRegressor` gain `cross_val_predict()`, with `submit_cross_val_predict()` and `wait_for_cross_val_predict()`, which return out-of-fold predictions from one cross-validation job on the server. ([#444](https://github.com/PriorLabs/tabpfn-client/pull/444))
+
+### Fixed
+
+- A thinking-mode `fit()` now checks the training data against the server's thinking limits instead of the standard model limits, so it no longer rejects data the server accepts. ([#449](https://github.com/PriorLabs/tabpfn-client/pull/449))
+
+
+## [0.8.0] - 2026-11-13
+
+### Added
+
+- A `thinking_timeout_s` above the server's limit now raises a `ValueError` before the data is uploaded. ([#438](https://github.com/PriorLabs/tabpfn-client/pull/438))
+- `tabpfn_client.hosted.TabPFNClassifier` and `TabPFNRegressor` accept `tabpfn_systems` to choose which systems the serving container runs around the model, for example `[]` to send the tables with only minimal cleaning. Older containers keep working: the field is only sent when set. ([#439](https://github.com/PriorLabs/tabpfn-client/pull/439))
+- The hosted estimators can run each prediction as a job on the endpoint with `use_async=True`, so a long prediction no longer holds one connection open. ([#440](https://github.com/PriorLabs/tabpfn-client/pull/440))
+- A thinking-mode `TabPFNRegressor` documents the outputs it returns: `"mean"`, `"median"` and `"quantiles"`, where `"mean"` is the prediction that scores best on `thinking_metric`. ([#441](https://github.com/PriorLabs/tabpfn-client/pull/441))
+
+### Changed
+
+- `thinking_timeout_s` is now checked against the maximum of the chosen `thinking_effort` before the data is uploaded. ([#445](https://github.com/PriorLabs/tabpfn-client/pull/445))
+
+
 ## [0.7.1] - 2026-10-30
 
 ### Added

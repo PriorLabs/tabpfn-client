@@ -21,6 +21,9 @@ import pandas as pd
 from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.utils.validation import check_is_fitted
 
+from tabpfn_client.constants import MIN_TRAIN_ROWS
+from tabpfn_client.utils import row_weight_fields, row_weights_frame
+
 try:
     import boto3  # type: ignore[import-untyped]
 except ImportError:  # pragma: no cover
@@ -193,19 +196,32 @@ class _SagemakerBase(BaseEstimator):
         state.pop("_cached_s3", None)
         return state
 
-    def fit(self, X: Any, y: Any) -> "_SagemakerBase":
+    def fit(
+        self,
+        X: Any,
+        y: Any,
+        sample_weight: Optional[Any] = None,
+        label_reliability: Optional[Any] = None,
+    ) -> "_SagemakerBase":
         """Store the training data; the endpoint fits on the next `predict*` call.
 
         Args:
             X: Training features.
             y: Training targets.
+            sample_weight: How much each row counts in the fit, one value per
+                row. Experimental: needs a model that takes weights.
+            label_reliability: How far to trust each target, one value in
+                [0, 1] per row. Experimental: needs a model that takes weights.
 
         Returns:
             The estimator itself.
 
         Raises:
-            ValueError: If `X` and `y` have different numbers of samples, or
-                thinking mode is on and `y` has only one class.
+            ValueError: If `X` and `y` have different numbers of samples, there
+                are fewer than 2 training samples, or thinking mode is on and
+                `y` has only one class.
+            ValueError: If `sample_weight` or `label_reliability` is not valid,
+                or is given for a fit that the endpoint keeps.
         """
         X_arr = X if isinstance(X, pd.DataFrame) else np.asarray(X)
         y_arr = y if isinstance(y, (pd.DataFrame, pd.Series)) else np.asarray(y)
@@ -213,6 +229,11 @@ class _SagemakerBase(BaseEstimator):
             raise ValueError(
                 f"X and y must have the same number of samples; "
                 f"got X={X_arr.shape}, y={y_arr.shape}"
+            )
+        if X_arr.shape[0] < MIN_TRAIN_ROWS:
+            raise ValueError(
+                f"Found {X_arr.shape[0]} sample(s) in the training set, but at least "
+                f"{MIN_TRAIN_ROWS} are required."
             )
         classes = np.unique(y_arr) if self._TASK == "classification" else None
         # Only thinking needs 2 classes; refused here rather than after the first
@@ -223,8 +244,17 @@ class _SagemakerBase(BaseEstimator):
                 "y contains only one class; thinking mode needs at least 2 classes."
             )
 
+        row_weights = row_weights_frame(
+            sample_weight, label_reliability, X_arr.shape[0]
+        )
+        if row_weights is not None and self._effective_use_kv_cache:
+            raise ValueError(
+                "`sample_weight` and `label_reliability` are not supported for a fit "
+                "that the endpoint keeps: `use_kv_cache` or thinking mode."
+            )
         self.X_train_ = X_arr
         self.y_train_ = y_arr
+        self.row_weights_ = row_weights
         self._cached_model_id: Optional[str] = None
         if classes is not None:
             self.classes_ = classes
@@ -263,6 +293,7 @@ class _SagemakerBase(BaseEstimator):
             if y_arr.ndim == 1:
                 y_arr = y_arr.reshape(-1, 1)
             body["y_train"] = y_arr.tolist()
+            body.update(row_weight_fields(getattr(self, "row_weights_", None)))
         body_bytes = json.dumps(body).encode("utf-8")
         if self.use_async:
             payload = self._invoke_async(body_bytes)

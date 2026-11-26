@@ -10,6 +10,9 @@ from tabpfn_client.api_models import ModelVersion as ModelVersion
 
 CACHE_DIR = Path(__file__).parent.resolve() / ".tabpfn"
 
+# The fewest training rows a fit accepts; matches the local `tabpfn` package.
+MIN_TRAIN_ROWS = 2
+
 URL_TABPFN_CLIENT_GITHUB_ISSUES = "https://github.com/priorlabs/tabpfn-client/issues"
 URL_PRIOR_LABS_API_KEYS = "https://platform.priorlabs.ai/account/api-keys"
 URL_PRIOR_LABS_TERMS_AND_CONDITIONS = (

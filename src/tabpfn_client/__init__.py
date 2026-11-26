@@ -15,6 +15,7 @@ from tabpfn_client.config import (
 from tabpfn_client.cost import estimate_cost
 from tabpfn_client.estimator import TabPFNClassifier, TabPFNRegressor
 from tabpfn_client.errors import (
+    CrossValidateFailedError,
     FitFailedError,
     FittedModelNotFoundError,
     PredictFailedError,
@@ -34,6 +35,7 @@ __all__ = [
     "reset",
     "TabPFNClassifier",
     "TabPFNRegressor",
+    "CrossValidateFailedError",
     "FitFailedError",
     "FittedModelNotFoundError",
     "PredictFailedError",

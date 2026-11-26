@@ -3,12 +3,17 @@
 
 """Helpers for model version resolution and argument validation."""
 
+from collections.abc import Iterable
 from typing import Any
-from tabpfn_client.api_models import ModelLimit, ModelVersion, TextHandling
+
+import numpy as np
+import pandas as pd
+
+from tabpfn_client.api_models import ModelLimit, ModelVersion, TextHandling, UnknownEnum
 
 
 def model_limit_from_version(
-    model_version: ModelVersion, model_limits: dict[Any, ModelLimit]
+    model_version: ModelVersion | UnknownEnum, model_limits: dict[Any, ModelLimit]
 ) -> ModelLimit:
     """Resolve limit of a model to the same or closest previous version limit.
 
@@ -30,7 +35,9 @@ def model_limit_from_version(
     raise ValueError(f"No model limits registered at or below {model_version}")
 
 
-def model_version_from_path(model_path: str) -> ModelVersion:
+def model_version_from_path(
+    model_path: str, server_versions: Iterable[ModelVersion | UnknownEnum]
+) -> ModelVersion | UnknownEnum:
     """Best-effort model version of a `model_path` as the caller passed it.
 
     Accepts checkpoint filenames (`tabpfn-v3-classifier-v3_default.ckpt`) and
@@ -41,13 +48,16 @@ def model_version_from_path(model_path: str) -> ModelVersion:
 
     Args:
         model_path: Checkpoint filename or short model name.
+        server_versions: The versions the server lists, matched along with the
+            ones this client knows, so a version newer than this client is
+            still found.
 
     Returns:
         The model version the name refers to, or V2 when it has no version marker.
     """
-    for version in ModelVersion:
-        # "v3" cannot shadow "v3.5" here: both patterns need the separator that
-        # follows the version, and "v3.5" continues with "." instead.
+    # Longest first, so "v3.5-fast_default" is not read as "v3.5" with "-fast".
+    versions = {*ModelVersion, *server_versions}
+    for version in sorted(versions, key=lambda v: len(v.value), reverse=True):
         prefixes = (f"{version.value}_", f"{version.value}-fast_")
         if f"-{version.value}-" in model_path or model_path.startswith(prefixes):
             return version
@@ -69,3 +79,59 @@ def validate_text_handling(value: object) -> TextHandling:
     if value not in ("advanced", "simple"):
         raise ValueError("text_handling must be 'advanced' or 'simple'")
     return value
+
+
+def row_weights_frame(
+    sample_weight: Any, label_reliability: Any, n_rows: int
+) -> pd.DataFrame | None:
+    """The `sample_weight` and `label_reliability` given to `fit`, as one frame.
+
+    Returns:
+        A frame with a column for each argument that is not None, or None if
+        both are None.
+
+    Raises:
+        ValueError: If an argument does not hold one finite number per row,
+            `sample_weight` is negative or all zero, or `label_reliability`
+            lies outside [0, 1].
+    """
+    columns: dict[str, np.ndarray] = {}
+    for name, values in (
+        ("sample_weight", sample_weight),
+        ("label_reliability", label_reliability),
+    ):
+        if values is None:
+            continue
+        try:
+            array = np.asarray(values, dtype=np.float64)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"`{name}` must hold numbers.") from e
+        if array.shape != (n_rows,):
+            raise ValueError(
+                f"`{name}` must hold one value per row of X: got shape "
+                f"{array.shape} for {n_rows} rows."
+            )
+        if not np.isfinite(array).all():
+            raise ValueError(f"`{name}` must hold finite numbers.")
+        columns[name] = array
+    weight = columns.get("sample_weight")
+    if weight is not None and (weight < 0).any():
+        raise ValueError("`sample_weight` must not be negative.")
+    if weight is not None and not weight.any():
+        raise ValueError("`sample_weight` must not be all zero.")
+    reliability = columns.get("label_reliability")
+    if reliability is not None and ((reliability < 0) | (reliability > 1)).any():
+        raise ValueError("`label_reliability` must lie in [0, 1].")
+    return pd.DataFrame(columns) if columns else None
+
+
+def row_weight_fields(row_weights: pd.DataFrame | None) -> dict[str, list[float]]:
+    """The request fields that carry the frame of `row_weights_frame` to a container.
+
+    Returns:
+        A list of values for each column of `row_weights`, by column name; empty
+        if `row_weights` is None.
+    """
+    if row_weights is None:
+        return {}
+    return {str(name): row_weights[name].tolist() for name in row_weights.columns}
