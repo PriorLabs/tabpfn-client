@@ -2,8 +2,8 @@
 #  Licensed under the Apache License, Version 2.0
 """Unit tests for the self-hosted endpoint estimators.
 
-Cover the wire format (JSON stays the default, and `payload_format="parquet"`
-moves the datasets into multipart file parts), the `use_kv_cache` fast path,
+Cover the wire format (Parquet multipart parts by default, and the deprecated
+`payload_format="json"` that inlines the datasets), the `use_kv_cache` fast path,
 async jobs, the routing headers, and the sklearn estimator contract. Async
 jobs run on a fake clock, so nothing sleeps.
 """
@@ -12,6 +12,7 @@ import io
 import json
 import pickle
 import uuid
+import warnings
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import httpx
@@ -24,6 +25,11 @@ from tabpfn_client.hosted import TabPFNClassifier, TabPFNRegressor
 from tabpfn_client.hosted.estimator import _STATE_VERSION
 from tests.unit.test_client import _FakeTime
 
+# Tests that pin the JSON path on purpose; `TestPayloadFormat` checks the warning.
+pytestmark = pytest.mark.filterwarnings(
+    'ignore:payload_format="json" is deprecated:FutureWarning'
+)
+
 
 URL = "https://example.test/predict"
 # A model_id as the endpoint mints one: the header must parse as a UUID.
@@ -32,6 +38,31 @@ MID = "0123456789abcdef0123456789abcdef"
 X = pd.DataFrame({"a": [0.1, 0.2, 0.8, 0.9], "b": [1.0, np.nan, 3.0, 4.0]})
 X_COMPLETE = X.fillna(2.0)
 Y = pd.Series([0, 0, 1, 1])
+
+_JSON_KEYS = {"x_train": "X_train", "y_train": "y_train", "x_test": "X_test"}
+
+
+def _decode(request: httpx.Request) -> Dict[str, Any]:
+    """The request as one JSON-shaped body, whichever format carried it.
+
+    A multipart body's `request` field is the config, and each Parquet part is
+    added under its JSON key as nested lists.
+    """
+    content = request.content
+    if not content.startswith(b"--"):
+        return json.loads(content)
+    boundary = content.split(b"\r\n", 1)[0]
+    body: Dict[str, Any] = {}
+    for part in content.split(boundary)[1:-1]:
+        head, payload = part.split(b"\r\n\r\n", 1)
+        name = head.decode().split('name="')[1].split('"')[0]
+        payload = payload.rstrip(b"\r\n")
+        if name == "request":
+            body.update(json.loads(payload))
+        else:
+            frame = pd.read_parquet(io.BytesIO(payload))
+            body[_JSON_KEYS[name]] = frame.values.tolist()
+    return body
 
 
 class Recorder:
@@ -76,14 +107,14 @@ class Recorder:
         return self.requests[index]
 
     def bodies(self) -> List[Dict[str, Any]]:
-        """Every JSON body sent so far, oldest first."""
-        return [json.loads(r.content) for r in self.requests]
+        """Every body sent so far, oldest first, decoded by `_decode`."""
+        return [_decode(r) for r in self.requests]
 
     def content_type(self, index: int = -1) -> str:
         return self.sent(index).headers["content-type"]
 
     def json_body(self) -> Dict[str, Any]:
-        return json.loads(self.sent().content)
+        return _decode(self.sent())
 
     def multipart(
         self, index: int = -1
@@ -134,10 +165,47 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> _FakeTime:
     return fake
 
 
-class TestJsonPayload:
-    def test_is_the_default(self):
+class TestPayloadFormat:
+    def test_parquet_is_the_default(self):
         recorder = Recorder()
         model = _classifier(recorder)
+        assert model.get_params()["payload_format"] == "parquet"
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            model.fit(X_COMPLETE, Y)
+            model.predict_proba(X_COMPLETE.iloc[:2])
+
+        assert recorder.content_type().startswith("multipart/form-data")
+        _, frames = recorder.multipart()
+        assert set(frames) == {"x_train", "y_train", "x_test"}
+
+    def test_explicit_parquet_does_not_warn(self):
+        model = _classifier(Recorder(), payload_format="parquet")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            model.fit(X_COMPLETE, Y)
+            model.predict_proba(X_COMPLETE.iloc[:2])
+
+    def test_explicit_json_warns_at_predict(self):
+        """The constructor stores the argument untouched, as sklearn requires."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            model = _classifier(Recorder(), payload_format="json")
+            model.fit(X_COMPLETE, Y)
+        with pytest.warns(FutureWarning, match="Parquet is the default"):
+            model.predict_proba(X_COMPLETE.iloc[:2])
+
+    @pytest.mark.parametrize("payload_format", ["json", "parquet"])
+    def test_get_params_and_clone_keep_it(self, payload_format):
+        model = TabPFNRegressor(endpoint_url=URL, payload_format=payload_format)
+        cloned = clone(model)
+        assert isinstance(cloned, TabPFNRegressor)
+        assert model.get_params()["payload_format"] == payload_format
+        assert cloned.get_params() == model.get_params()
+
+    def test_json_inlines_the_datasets(self):
+        recorder = Recorder()
+        model = _classifier(recorder, payload_format="json")
         model.fit(X_COMPLETE, Y)
         model.predict_proba(X_COMPLETE.iloc[:2])
 
@@ -147,6 +215,41 @@ class TestJsonPayload:
         assert len(body["X_train"]) == 4
         # y_train on the wire is 2D.
         assert body["y_train"] == [[0], [0], [1], [1]]
+
+
+class TestContentType:
+    """The body's encoding sets Content-Type; `extra_headers` cannot."""
+
+    @pytest.mark.parametrize("name", ["Content-Type", "content-type", "CONTENT-TYPE"])
+    def test_parquet_keeps_the_multipart_boundary(self, name):
+        recorder = Recorder()
+        model = _classifier(
+            recorder,
+            payload_format="parquet",
+            extra_headers={name: "application/json", "x-custom": "kept"},
+        )
+        model.fit(X, Y)
+        model.predict_proba(X.iloc[:2])
+
+        sent = recorder.sent().headers
+        [content_type] = sent.get_list("content-type")
+        assert content_type.startswith("multipart/form-data; boundary=")
+        assert sent["x-custom"] == "kept"
+        config, frames = recorder.multipart()
+        assert config["task_config"]["task"] == "classification"
+        assert set(frames) == {"x_train", "y_train", "x_test"}
+
+    @pytest.mark.parametrize("name", ["Content-Type", "content-type"])
+    def test_json_sends_application_json(self, name):
+        recorder = Recorder()
+        model = _classifier(
+            recorder, payload_format="json", extra_headers={name: "text/plain"}
+        )
+        model.fit(X_COMPLETE, Y)
+        model.predict_proba(X_COMPLETE.iloc[:2])
+
+        assert recorder.sent().headers.get_list("content-type") == ["application/json"]
+        assert len(recorder.json_body()["X_train"]) == 4
 
 
 class TestParquetPayload:
@@ -440,7 +543,7 @@ class TestNonFiniteJson:
     def test_missing_and_infinite_values_survive_the_json_path(self):
         """Explainers mask features with +inf; httpx's `json=` would reject it."""
         recorder = Recorder()
-        model = _classifier(recorder)
+        model = _classifier(recorder, payload_format="json")
         model.fit(X, Y)
         masked = X.iloc[:2].copy()
         masked["a"] = np.inf
@@ -522,7 +625,7 @@ class TestAsyncJobs:
         np.testing.assert_array_equal(proba, sync.predict_proba(X_COMPLETE.iloc[:2]))
 
         submit, *polls = recorder.requests
-        body = json.loads(submit.content)
+        body = _decode(submit)
         job_id = body["job_id"]
         assert body["execution"] == "async" and "X_train" in body
         # `[]` is a real choice, so the submit carries it too.
@@ -669,7 +772,7 @@ class TestAsyncJobs:
         first_submit, first_poll, submit, poll = recorder.requests
         assert "x-tabpfn-model-id" not in first_submit.headers
         assert "x-tabpfn-model-id" not in first_poll.headers
-        body = json.loads(submit.content)
+        body = _decode(submit)
         assert body["context"] == {"model_id": MID}
         assert "X_train" not in body
         assert submit.headers["x-tabpfn-model-id"] == MID
@@ -691,7 +794,7 @@ class TestAsyncJobs:
         model.predict_proba(X_COMPLETE.iloc[:2])
 
         submit, poll = recorder.requests
-        job_id = json.loads(submit.content)["job_id"]
+        job_id = _decode(submit)["job_id"]
         for request in (submit, poll):
             assert request.headers.get_list("x-tabpfn-job-id") == [job_id]
             assert request.headers.get_list("x-tabpfn-model-id") == [MID]
