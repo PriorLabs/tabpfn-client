@@ -21,6 +21,7 @@ from tabpfn_client.client import (
 import tabpfn_client.constants as constants
 from tabpfn_common_utils.utils import Singleton
 from tabpfn_client.api_models import (
+    CacheFallbackStrategy,
     FitTaskConfig,
     ClassifierConfig,
     FitResponse,
@@ -488,6 +489,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         api_mode: ApiMode = ApiMode.SYNC,
         n_train_rows: int | None = None,
         thinking: bool = False,
+        cache_fallback_strategy: CacheFallbackStrategy = "error",
         on_accepted: Callable[[UUID | None], None] | None = None,
     ) -> PredictionResult:
         """Predict on a test set with a fitted train set.
@@ -502,6 +504,10 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             api_mode: The API mode to use for the prediction: SYNC, ASYNC, or AUTO.
             n_train_rows: The fit's train rows, for AUTO; None if unknown.
             thinking: Whether the fit runs in thinking mode, for AUTO.
+            cache_fallback_strategy: What a prediction sent with one request
+                does when the server can no longer use the fit's cache:
+                `"refit"` asks the server to predict without it, `"error"`
+                raises `RefitRequiredError`. A background job always raises.
             on_accepted: Called once the server has accepted the prediction:
                 with its id before the client polls for it, when it runs as a
                 background job, or with None once the server has answered with
@@ -530,6 +536,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             api_mode=api_mode,
             n_train_rows=n_train_rows,
             thinking=thinking,
+            cache_fallback_strategy=cache_fallback_strategy,
             on_accepted=on_accepted,
         )
 
@@ -544,6 +551,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         api_mode: ApiMode = ApiMode.SYNC,
         n_train_rows: int | None = None,
         thinking: bool = False,
+        cache_fallback_strategy: CacheFallbackStrategy = "error",
         on_accepted: Callable[[UUID | None], None] | None = None,
     ) -> list[PredictionResult]:
         """Predict several test sets with one fitted train set.
@@ -559,6 +567,8 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             api_mode: The API mode for each test set: SYNC, ASYNC, or AUTO.
             n_train_rows: The fit's train rows, for AUTO; None if unknown.
             thinking: Whether the fit runs in thinking mode, for AUTO.
+            cache_fallback_strategy: What each test set does when the server
+                can no longer use the fit's cache, as `predict` takes it.
             on_accepted: Called once the server has accepted each test set's
                 prediction, as `predict` calls it.
 
@@ -584,6 +594,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             api_mode=api_mode,
             n_train_rows=n_train_rows,
             thinking=thinking,
+            cache_fallback_strategy=cache_fallback_strategy,
             on_accepted=on_accepted,
         )
 

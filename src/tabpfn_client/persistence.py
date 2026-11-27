@@ -46,9 +46,10 @@ from tabpfn_client.api_models import FitStatus, PredictionTask
 # change how the client talks to the server, never what the server computes.
 # They are left out of the record, so that a loaded estimator runs with the
 # defaults of the process it is loaded into. `client_options` holds per-session
-# headers and timeouts (and is not JSON), and `api_mode` how the client sends
-# requests.
-_TRANSPORT_PARAMS = frozenset({"client_options", "api_mode"})
+# headers and timeouts (and is not JSON), `api_mode` how the client sends
+# requests, and `cache_fallback_strategy` what a request does when the server
+# can no longer use the fit's cache.
+_TRANSPORT_PARAMS = frozenset({"client_options", "api_mode", "cache_fallback_strategy"})
 # The ones a record may still carry, which loading drops: tabpfn-client 0.6
 # saved `api_mode`. A record that carries any other is rejected.
 _DROPPED_TRANSPORT_PARAMS = frozenset({"api_mode"})
@@ -224,8 +225,9 @@ class ModelPersistenceMixin(BaseEstimator):
         human-readable record: the id the server assigned to the fit
         (`model_id_`), the estimator's hyperparameters, a classifier's class
         labels and the training-set size. No training data is included, nor
-        `api_mode` and `client_options`, which describe how the client talks to
-        the server: the loading process sets its own.
+        `api_mode`, `cache_fallback_strategy` and `client_options`, which
+        describe how the client talks to the server: the loading process sets
+        its own.
 
         `load_model()` turns the record back into a fitted estimator, in a
         later run or on another machine. Fitted models are only visible to the
@@ -282,11 +284,12 @@ class ModelPersistenceMixin(BaseEstimator):
 
         The estimator comes back with the saved hyperparameters and fitted
         state, ready to `predict()` without calling `fit()`, and with the
-        default `api_mode` and `client_options`: set them on the loaded
-        estimator to change them. A record from tabpfn-client 0.6 that holds
-        `api_mode` loads too, without it. No request is made
-        here; the first `predict()` authenticates (like `fit()` would) and
-        raises `FittedModelNotFoundError` if the server no longer has the model.
+        default `api_mode`, `cache_fallback_strategy` and `client_options`:
+        set them on the loaded estimator to change them. A record from
+        tabpfn-client 0.6 that holds `api_mode` loads too, without it. No
+        request is made here; the first `predict()` authenticates (like
+        `fit()` would) and raises `FittedModelNotFoundError` if the server no
+        longer has the model.
 
         A record of a fit that was still pending when it was saved comes back
         pending, as `submit_fit()` left it: call `wait_for_fit()` before

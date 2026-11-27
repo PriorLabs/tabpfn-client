@@ -149,6 +149,7 @@ def _settings(**limits: int) -> GetSettingsResponse:
 def _offline_server(
     y_pred: Callable[[], Any] = lambda: np.zeros(3),
     settings: GetSettingsResponse | None = None,
+    metadata: dict[str, Any] = METADATA,
 ) -> Generator[SimpleNamespace]:
     """Run the estimators with no network: no auth, mocked inference.
 
@@ -156,7 +157,7 @@ def _offline_server(
     background job, which waiting finds completed, and accepts every submitted
     prediction as `PREDICTION_ID`. `predict()` gets its prediction answered
     with one request. A prediction, whether predicted with one request or
-    waited for, is `y_pred()` with `METADATA` and `TIMINGS`. `settings` are
+    waited for, is `y_pred()` with `metadata` and `TIMINGS`. `settings` are
     what `get_settings` returns; None leaves the model limits unchecked.
     """
     use_server_before = Config.use_server
@@ -179,7 +180,7 @@ def _offline_server(
     ) -> PredictionResult:
         if on_accepted is not None:
             on_accepted(None)
-        return PredictionResult(y_pred=y_pred(), metadata=METADATA, timings=TIMINGS)
+        return PredictionResult(y_pred=y_pred(), metadata=metadata, timings=TIMINGS)
 
     try:
         with (
@@ -719,7 +720,13 @@ class TestPredict:
     def test_passes_what_the_prediction_is_routed_by(
         self, estimator_cls, y, api_mode, params, thinking
     ):
-        model = _fitted(estimator_cls, y, api_mode=api_mode, **params)
+        model = _fitted(
+            estimator_cls,
+            y,
+            api_mode=api_mode,
+            cache_fallback_strategy="refit",
+            **params,
+        )
 
         with _offline_server() as server:
             model.predict(X_TEST)
@@ -728,6 +735,7 @@ class TestPredict:
         assert kwargs["api_mode"] == api_mode
         assert kwargs["n_train_rows"] == len(X_TRAIN)
         assert kwargs["thinking"] is thinking
+        assert kwargs["cache_fallback_strategy"] == "refit"
 
     @ESTIMATORS
     def test_does_not_know_the_train_rows_of_an_assigned_model_id(
@@ -906,7 +914,12 @@ class TestPredict:
     @NO_CRITERION
     def test_splits_a_full_output_into_one_request_per_chunk_in_order(self):
         X = np.arange(10, dtype=float).reshape(5, 2)
-        model = _fitted(TabPFNRegressor, Y_TRAIN_REGRESSION, api_mode=ApiMode.ASYNC)
+        model = _fitted(
+            TabPFNRegressor,
+            Y_TRAIN_REGRESSION,
+            api_mode=ApiMode.ASYNC,
+            cache_fallback_strategy="refit",
+        )
         settings = _settings(test_set_max_rows_w_full_regression_output=2)
 
         chunks: list[np.ndarray] = []
@@ -933,6 +946,7 @@ class TestPredict:
         assert kwargs["api_mode"] == ApiMode.ASYNC
         assert kwargs["n_train_rows"] == len(X_TRAIN)
         assert kwargs["thinking"] is False
+        assert kwargs["cache_fallback_strategy"] == "refit"
         np.testing.assert_array_equal(output["mean"], X[:, 0])
         assert model.get_timings()["predict"] == {k: 3 * v for k, v in TIMINGS.items()}
 

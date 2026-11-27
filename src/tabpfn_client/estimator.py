@@ -50,6 +50,7 @@ from tabpfn_client.utils import (
 )
 from tabpfn_client.service_wrapper import InferenceClient
 from tabpfn_client.api_models import (
+    CacheFallbackStrategy,
     GetSettingsResponse,
     ModelLimit,
     RegressorTabPFNConfig,
@@ -229,6 +230,21 @@ def _combine_timings(
 def _timings_dict(timings: FitTimings | None) -> dict[str, Any] | None:
     """Return server-reported fit timings as the plain dict `fit_timings_` holds."""
     return timings.model_dump(mode="json") if timings is not None else None
+
+
+def _log_cache_fallback(results: list[PredictionResult]) -> None:
+    """Log once if any request of a prediction could not use the fit's cache.
+
+    Without it, a slow prediction against a stored fit gives no hint why.
+    """
+    if not any(r.metadata.get("cache_outcome") == "fallback" for r in results):
+        return
+    # A log, not a warning: warnings raised as errors would lose a billed result.
+    logger.warning(
+        "The saved cache of this fitted model could not be used for this "
+        "prediction, so TabPFN fit the model again on the server. The prediction "
+        "took longer than usual."
+    )
 
 
 # What a predict request returns: one result, or one per test set.
@@ -840,6 +856,9 @@ class TabPFNClassifier(
         "znskzxi4",
     ]
 
+    # Class-level default so estimators pickled before this attribute existed load.
+    cache_fallback_strategy: CacheFallbackStrategy = "error"
+
     def __init__(
         self,
         # start: tabpfn_config
@@ -867,6 +886,7 @@ class TabPFNClassifier(
         api_mode: ApiMode = ApiMode.AUTO,
         client_options: ClientOptions | None = None,
         text_handling: TextHandling = "advanced",
+        cache_fallback_strategy: CacheFallbackStrategy = "error",
     ):
         """Construct a TabPFN classifier.
 
@@ -1059,6 +1079,25 @@ class TabPFNClassifier(
                 Text-processing preset. Both choices support text. Advanced preserves
                 the default processing; simple is an alternative whose accuracy depends
                 on the dataset. Applies when preprocessing is enabled.
+
+            cache_fallback_strategy:
+                What a prediction does when the server can no longer use the
+                saved cache of a model fitted with `fit_mode="fit_with_cache"`,
+                for instance after a server update.
+
+                - If `"error"`, it raises `RefitRequiredError`: call `fit()`
+                  again.
+                - If `"refit"`, where the server offers it, the server predicts
+                  without the cache, at the price of a prediction without one,
+                  and rebuilds the cache in the background at no charge. That
+                  prediction takes longer than usual, and the client logs a
+                  warning. Otherwise it raises `RefitRequiredError`.
+
+                Applies to predictions sent with one request, as `predict()`
+                sends those of a model fitted with the cache unless `api_mode`
+                is `ASYNC`. Background predictions, with `ASYNC` or
+                `submit_predict()`, always raise `RefitRequiredError`.
+                `save_model()` does not save it.
         """
         self.model_path = model_path
         self.categorical_features_indices = categorical_features_indices
@@ -1083,6 +1122,7 @@ class TabPFNClassifier(
         self.group_time_col = group_time_col
         self.api_mode = api_mode
         self.client_options = client_options or ClientOptions()
+        self.cache_fallback_strategy = cache_fallback_strategy
 
         self._last_trace_id = None
         self._last_meta = {}
@@ -1617,6 +1657,7 @@ class TabPFNClassifier(
                 thinking=_resolve_thinking_mode(
                     self.thinking_mode, self.thinking_effort
                 ),
+                cache_fallback_strategy=self.cache_fallback_strategy,
                 on_accepted=on_accepted,
             ),
         )
@@ -1637,6 +1678,11 @@ class TabPFNClassifier(
         # without authenticating first.
         self._check_fitted()
         _validate_output_type(output_type, ClassifierOutputLiteral)
+        _validate_choice(
+            "cache_fallback_strategy",
+            self.cache_fallback_strategy,
+            CacheFallbackStrategy,
+        )
 
         # An estimator restored by `load_model()` (or whose `model_id_` was
         # assigned directly) can reach `predict` without ever calling `fit()`,
@@ -1678,6 +1724,7 @@ class TabPFNClassifier(
         # Unpack and store metadata
         self._last_meta = result.metadata
         self._last_timings = result.timings
+        _log_cache_fallback([result])
 
         return cast("np.ndarray", result.y_pred)
 
@@ -1779,6 +1826,9 @@ class TabPFNRegressor(
         "wyl4o83o",
     ]
 
+    # Class-level default so estimators pickled before this attribute existed load.
+    cache_fallback_strategy: CacheFallbackStrategy = "error"
+
     def __init__(
         self,
         # start: tabpfn_config
@@ -1805,6 +1855,7 @@ class TabPFNRegressor(
         api_mode: ApiMode = ApiMode.AUTO,
         client_options: ClientOptions | None = None,
         text_handling: TextHandling = "advanced",
+        cache_fallback_strategy: CacheFallbackStrategy = "error",
     ):
         """Construct a TabPFN regressor.
 
@@ -1985,6 +2036,25 @@ class TabPFNRegressor(
                 Text-processing preset. Both choices support text. Advanced preserves
                 the default processing; simple is an alternative whose accuracy depends
                 on the dataset. Applies when preprocessing is enabled.
+
+            cache_fallback_strategy:
+                What a prediction does when the server can no longer use the
+                saved cache of a model fitted with `fit_mode="fit_with_cache"`,
+                for instance after a server update.
+
+                - If `"error"`, it raises `RefitRequiredError`: call `fit()`
+                  again.
+                - If `"refit"`, where the server offers it, the server predicts
+                  without the cache, at the price of a prediction without one,
+                  and rebuilds the cache in the background at no charge. That
+                  prediction takes longer than usual, and the client logs a
+                  warning. Otherwise it raises `RefitRequiredError`.
+
+                Applies to predictions sent with one request, as `predict()`
+                sends those of a model fitted with the cache unless `api_mode`
+                is `ASYNC`. Background predictions, with `ASYNC` or
+                `submit_predict()`, always raise `RefitRequiredError`.
+                `save_model()` does not save it.
         """
         self.model_path = model_path
         self.categorical_features_indices = categorical_features_indices
@@ -2008,6 +2078,7 @@ class TabPFNRegressor(
         self.group_time_col = group_time_col
         self.api_mode = api_mode
         self.client_options = client_options or ClientOptions()
+        self.cache_fallback_strategy = cache_fallback_strategy
 
         self._last_trace_id = None
         self._last_meta = {}
@@ -2232,6 +2303,7 @@ class TabPFNRegressor(
                     api_mode=self.api_mode,
                     n_train_rows=self._n_train_rows,
                     thinking=thinking,
+                    cache_fallback_strategy=self.cache_fallback_strategy,
                     on_accepted=on_accepted,
                 ),
             )
@@ -2254,6 +2326,7 @@ class TabPFNRegressor(
                     api_mode=self.api_mode,
                     n_train_rows=self._n_train_rows,
                     thinking=thinking,
+                    cache_fallback_strategy=self.cache_fallback_strategy,
                     on_accepted=on_accepted,
                 ),
                 # Several jobs, whose ids the client logs if the wait stops.
@@ -2596,6 +2669,11 @@ class TabPFNRegressor(
         # without authenticating first.
         self._check_fitted()
         _validate_output_type(output_type, RegressorOutputLiteral)
+        _validate_choice(
+            "cache_fallback_strategy",
+            self.cache_fallback_strategy,
+            CacheFallbackStrategy,
+        )
 
         # An estimator restored by `load_model()` (or whose `model_id_` was
         # assigned directly) can reach `predict` without ever calling `fit()`,
@@ -2678,6 +2756,8 @@ class TabPFNRegressor(
             self._last_meta = results[0].metadata
             self._last_timings = results[0].timings
             output = results[0].y_pred
+
+        _log_cache_fallback(results)
 
         if output_type == "quantiles" and isinstance(output, np.ndarray):
             return list(output) if output.ndim == 2 else [output]
