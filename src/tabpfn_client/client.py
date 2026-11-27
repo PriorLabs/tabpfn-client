@@ -393,6 +393,28 @@ def _cross_validate_resume_hint(cv_job_id: UUID) -> str:
     )
 
 
+def _pad_split_weights(
+    index: int, weights: pd.DataFrame | None, num_train_rows: int, num_val_rows: int
+) -> pd.DataFrame | None:
+    """A split's weights as uploaded: one row per uploaded row.
+
+    The server validates the weights of every uploaded row but fits on the
+    training rows' only, so the test rows carry a neutral 1.
+
+    Raises:
+        ValueError: If `weights` does not have one row per training row.
+    """
+    if weights is None:
+        return None
+    if len(weights) != num_train_rows:
+        raise ValueError(
+            f"Split {index}'s row weights have {len(weights)} rows for "
+            f"{num_train_rows} training rows."
+        )
+    padding = pd.DataFrame(1.0, index=range(num_val_rows), columns=weights.columns)
+    return pd.concat([weights.reset_index(drop=True), padding], ignore_index=True)
+
+
 def _fold_sizes(fold_ids: list[list[int]], num_rows: int) -> list[list[int]]:
     """Each repeat's number of rows in each fold `0..K-1`.
 
@@ -1376,6 +1398,7 @@ class ServiceClient(Singleton):
         api_mode: ApiMode = ApiMode.AUTO,
         client_options: ClientOptions | None = None,
         wait: bool = True,
+        row_weights: list[pd.DataFrame | None] | None = None,
     ) -> GetCrossValidateResultResponse:
         """Upload one train set per split, and cross-validate on them.
 
@@ -1400,6 +1423,9 @@ class ServiceClient(Singleton):
             api_mode: The API mode to use: SYNC, ASYNC, or AUTO.
             client_options: Client specific options (e.g. timeout, headers).
             wait: Whether to poll the server until the job completes.
+            row_weights: Per split, the `sample_weight` and
+                `label_reliability` columns, one row per training row; None
+                for a split fits it unweighted.
 
         Returns:
             The job as the server reports it: completed, with `split_urls`, or,
@@ -1407,9 +1433,10 @@ class ServiceClient(Singleton):
 
         Raises:
             ValueError: If there are no splits, a split predicts no row or
-                trains on none, `categorical_features_indices` is not one entry
-                per split, `text_handling` is invalid, or a split exceeds the
-                server's size limit.
+                trains on none, `categorical_features_indices` or
+                `row_weights` is not one entry per split, a split's weights are
+                not one row per training row, `text_handling` is invalid, or a
+                split exceeds the server's size limit.
             CrossValidateFailedError: If the server reports that the job
                 failed, or no longer has it.
             RuntimeError: If the server does not run cross-validation or
@@ -1432,14 +1459,28 @@ class ServiceClient(Singleton):
                 f"categorical_features_indices has {len(split_categoricals)} "
                 f"entries for {len(splits)} splits."
             )
+        split_weights: list[pd.DataFrame | None] = (
+            [None] * len(splits) if row_weights is None else list(row_weights)
+        )
+        if len(split_weights) != len(splits):
+            raise ValueError(
+                f"row_weights has {len(split_weights)} entries for "
+                f"{len(splits)} splits."
+            )
         frames = []
-        for index, (X, y, num_val_rows) in enumerate(splits):
+        uploaded_weights: list[pd.DataFrame | None] = []
+        for index, ((X, y, num_val_rows), weights) in enumerate(
+            zip(splits, split_weights)
+        ):
             if not 0 < num_val_rows < len(X):
                 raise ValueError(
                     f"Split {index} has {len(X)} rows, so num_val_rows="
                     f"{num_val_rows} leaves no row to train on or to predict."
                 )
             frames.append(cls._train_set_frames(X, y))
+            uploaded_weights.append(
+                _pad_split_weights(index, weights, len(X) - num_val_rows, num_val_rows)
+            )
         use_async = cls._runs_as_job(api_mode, sum(size for _, _, size in frames))
         workers = max(
             1, min(get_opts().TABPFN_CLIENT_MAX_THREAD_PER_UPLOAD, len(frames))
@@ -1447,13 +1488,15 @@ class ServiceClient(Singleton):
         with ThreadPoolExecutor(max_workers=workers) as pool:
             upload_ids = list(
                 pool.map(
-                    lambda frame: cls._upload_train_set(
+                    lambda frame, weights: cls._upload_train_set(
                         frame[0],
                         frame[1],
+                        row_weights=weights,
                         description=None,
                         client_options=client_options,
                     ),
                     frames,
+                    uploaded_weights,
                 )
             )
         req = SubmitCrossValidateRequest(

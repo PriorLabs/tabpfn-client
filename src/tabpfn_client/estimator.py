@@ -703,6 +703,8 @@ class _AsyncMixin(ModelPersistenceMixin):
         splits: Any,
         categorical_features_indices: list[list[int] | None] | None,
         *,
+        sample_weight: list[npt.ArrayLike | None] | None,
+        label_reliability: list[npt.ArrayLike | None] | None,
         make_task_config: Callable[[], ClassifierConfig | RegressorConfig],
         method: str,
         validate_targets: Callable[[np.ndarray], np.ndarray | None],
@@ -711,8 +713,8 @@ class _AsyncMixin(ModelPersistenceMixin):
 
         Raises:
             ValueError: If thinking mode is on, there are no splits, a split's
-                data is invalid, or its test rows have other columns than its
-                training rows.
+                data or weights are invalid, or its test rows have other
+                columns than its training rows.
         """
         text_handling = validate_text_handling(self.text_handling)
         if _resolve_thinking_mode(self.thinking_mode, self.thinking_effort):
@@ -722,10 +724,21 @@ class _AsyncMixin(ModelPersistenceMixin):
         splits = list(splits)
         if not splits:
             raise ValueError("There are no splits to cross-validate.")
+        sample_weights = _per_split("sample_weight", sample_weight, len(splits))
+        reliabilities = _per_split("label_reliability", label_reliability, len(splits))
         init()
         model_path = self._get_tabpfn_config().model_path
         uploads = []
+        row_weights: list[pd.DataFrame | None] = []
         for index, (X_train, y_train, X_test) in enumerate(splits):
+            try:
+                row_weights.append(
+                    row_weights_frame(
+                        sample_weights[index], reliabilities[index], len(X_train)
+                    )
+                )
+            except ValueError as e:
+                raise ValueError(f"Split {index}: {e}") from e
             _validate_group_columns(
                 X_train,
                 enabled=False,
@@ -752,6 +765,7 @@ class _AsyncMixin(ModelPersistenceMixin):
             api_mode=ApiMode(self.api_mode),
             client_options=client_options,
             wait=False,
+            row_weights=None if all(w is None for w in row_weights) else row_weights,
         )
         split_rows = tuple(num_val_rows for _, _, num_val_rows in uploads)
         pending = _PendingCrossValPredict(
@@ -1477,6 +1491,8 @@ class TabPFNClassifier(
         *,
         method: ClassifierCrossValMethodLiteral = "predict",
         categorical_features_indices: list[list[int] | None] | None = None,
+        sample_weight: list[npt.ArrayLike | None] | None = None,
+        label_reliability: list[npt.ArrayLike | None] | None = None,
     ) -> list[np.ndarray]:
         """Fit and predict splits you built yourself, in one job on the server.
 
@@ -1496,6 +1512,12 @@ class TabPFNClassifier(
             categorical_features_indices: Per split, the categorical columns
                 of its features; None, or None for a split, keeps the model's
                 `categorical_features_indices`.
+            sample_weight: Experimental. Per split, one weight per row of its
+                `X_train`, as for `fit()`; None, or None for a split, fits it
+                unweighted.
+            label_reliability: Experimental. Per split, one value in [0, 1]
+                per row of its `X_train`, as for `fit()`; None, or None for a
+                split, trusts every label.
 
         Returns:
             One array per split, for its `X_test` rows in order: shape
@@ -1507,8 +1529,10 @@ class TabPFNClassifier(
         Raises:
             ValueError: If `method` is unknown, thinking mode is on, there are
                 no splits, a split's training and test rows together exceed
-                the model limits, or a split's `X_test` has other columns, or
-                columns of another kind, than its `X_train`.
+                the model limits, a split's `X_test` has other columns, or
+                columns of another kind, than its `X_train`, `sample_weight`
+                or `label_reliability` is not one entry per split, or a split's
+                weights are invalid as `fit()` checks them.
             CrossValidateFailedError: If the server reports that the job
                 failed.
             RuntimeError: If the server rejects the request.
@@ -1520,6 +1544,8 @@ class TabPFNClassifier(
         return self._cross_val_predict_splits(
             splits,
             categorical_features_indices,
+            sample_weight=sample_weight,
+            label_reliability=label_reliability,
             make_task_config=lambda: ClassifierConfig(
                 tabpfn_config=self._get_tabpfn_config(),
                 predict_params=ClassifierPredictParams(
@@ -2443,6 +2469,8 @@ class TabPFNRegressor(
         method: RegressorCrossValMethodLiteral = "predict",
         output_type: RegressorCrossValOutputLiteral = "mean",
         categorical_features_indices: list[list[int] | None] | None = None,
+        sample_weight: list[npt.ArrayLike | None] | None = None,
+        label_reliability: list[npt.ArrayLike | None] | None = None,
     ) -> list[np.ndarray]:
         """Fit and predict splits you built yourself, in one job on the server.
 
@@ -2463,6 +2491,12 @@ class TabPFNRegressor(
             categorical_features_indices: Per split, the categorical columns
                 of its features; None, or None for a split, keeps the model's
                 `categorical_features_indices`.
+            sample_weight: Experimental. Per split, one weight per row of its
+                `X_train`, as for `fit()`; None, or None for a split, fits it
+                unweighted.
+            label_reliability: Experimental. Per split, one value in [0, 1]
+                per row of its `X_train`, as for `fit()`; None, or None for a
+                split, trusts every label.
 
         Returns:
             One array of shape (n_test,) per split, for its `X_test` rows in
@@ -2471,8 +2505,10 @@ class TabPFNRegressor(
         Raises:
             ValueError: If `method` or `output_type` is unknown, thinking mode
                 is on, there are no splits, a split's training and test rows
-                together exceed the model limits, or a split's `X_test` has
-                other columns, or columns of another kind, than its `X_train`.
+                together exceed the model limits, a split's `X_test` has other
+                columns, or columns of another kind, than its `X_train`,
+                `sample_weight` or `label_reliability` is not one entry per
+                split, or a split's weights are invalid as `fit()` checks them.
             CrossValidateFailedError: If the server reports that the job
                 failed.
             RuntimeError: If the server rejects the request.
@@ -2485,6 +2521,8 @@ class TabPFNRegressor(
         return self._cross_val_predict_splits(
             splits,
             categorical_features_indices,
+            sample_weight=sample_weight,
+            label_reliability=label_reliability,
             make_task_config=lambda: RegressorConfig(
                 tabpfn_config=self._get_tabpfn_config(),
                 predict_params=RegressorPredictParams.model_validate(
@@ -3242,6 +3280,23 @@ def _cv_fold_ids(
         if train.size == 0:
             raise ValueError(f"Split {fold} has an empty train set.")
     return fold_ids.tolist()
+
+
+def _per_split(name: str, values: list[Any] | None, n_splits: int) -> list[Any]:
+    """A per-split argument as one entry per split, None for each when absent.
+
+    Raises:
+        ValueError: If `values` is not one entry per split.
+    """
+    if values is None:
+        return [None] * n_splits
+    values = list(values)
+    if len(values) != n_splits:
+        raise ValueError(
+            f"`{name}` has {len(values)} entries for {n_splits} splits: give one "
+            "per split, None for a split without."
+        )
+    return values
 
 
 def _split_upload(
