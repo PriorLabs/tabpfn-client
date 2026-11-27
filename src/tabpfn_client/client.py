@@ -30,6 +30,7 @@ from typing import (
     cast,
     Mapping,
     NoReturn,
+    Protocol,
     TypeAlias,
 )
 from typing_extensions import (
@@ -456,12 +457,18 @@ def _serialize_to_parquet(df: pd.DataFrame) -> tuple[bytes, str]:
 
 SuccessT = TypeVar("SuccessT", bound=BaseModel)
 ErrorT = TypeVar("ErrorT", bound=BaseModel, default=Never)
-_PollResponseT = TypeVar(
-    "_PollResponseT",
-    GetFitStatusResponse,
-    GetPredictResultResponse,
-    GetCrossValidateResultResponse,
-)
+
+
+class _PollResponse(Protocol):
+    """A poll answer, with the server's hint for when to poll again."""
+
+    @property
+    def retry_in_secs(self) -> float | None:
+        """Seconds to wait before the next poll, or None for no hint."""
+        ...
+
+
+_PollResponseT = TypeVar("_PollResponseT", bound=_PollResponse)
 
 # Floor for the server's `retry_in_secs` polling hint — defensive: a zero or
 # negative value must neither busy-poll the endpoint nor crash `time.sleep`.
