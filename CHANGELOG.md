@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-27
+
+### Breaking Changes
+
+- `description` in `fit()` and `submit_fit()` is now keyword-only: the third and fourth positions take `sample_weight` and `label_reliability`, as in the TabPFN package. ([#460](https://github.com/PriorLabs/tabpfn-client/pull/460))
+
+### Added
+
+- Add `sample_weight` and `label_reliability` to `fit()` and `submit_fit()` of `TabPFNClassifier` and `TabPFNRegressor`, as in the TabPFN package. Both are experimental, and only some models take them. ([#460](https://github.com/PriorLabs/tabpfn-client/pull/460))
+- `cross_val_predict()` and `submit_cross_val_predict()` take `sample_weight` and `label_reliability`; each fold fits with the weights of its training rows. ([#461](https://github.com/PriorLabs/tabpfn-client/pull/461))
+- `fit()` on the `tabpfn_client.hosted`, `tabpfn_client.sagemaker` and `tabpfn_client.foundry` estimators takes `sample_weight` and `label_reliability`. The endpoint must run a container and a model that take weights. They are not supported with `use_kv_cache`, `fit_mode="fit_with_cache"` or thinking mode. ([#465](https://github.com/PriorLabs/tabpfn-client/pull/465))
+- TabPFN v4 can be selected with `create_default_for_version(ModelVersion.V4)` (or `"v4"`); `list_available_models()` lists `v4_default`. The default model is unchanged. v4 does not support thinking mode or `fit_mode="fit_with_cache"` yet; combining them raises `ValueError` before the upload. ([#471](https://github.com/PriorLabs/tabpfn-client/pull/471))
+- `cross_val_predict_splits()` takes `sample_weight` and `label_reliability`, one entry per split; each split fits with the weights of its training rows. ([#471](https://github.com/PriorLabs/tabpfn-client/pull/471))
+
+
 ## [0.10.1] - 2026-11-20
 
 ### Fixed
