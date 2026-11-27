@@ -708,6 +708,20 @@ class TestUpload:
         assert set(form) == {"spec", "upload_id"}
         assert form["upload_id"] == str(UPLOAD_ID).encode()
 
+    @pytest.mark.parametrize(
+        "response",
+        [_error(422, "USER_ERROR"), _error(413, "USER_ERROR")],
+        ids=["refused", "too_large"],
+    )
+    def test_an_upload_refused_by_the_server_raises_invalid_series(
+        self, router, response
+    ):
+        router.post("/forecast/prepare_upload").mock(return_value=response)
+
+        with _with_settings(max_inline_table_bytes=0):
+            with pytest.raises(InvalidSeriesError, match="the reason"):
+                _forecast()
+
     def test_sends_a_series_at_the_inline_limit_inline(self, router):
         route = router.post("/forecast/forecast").respond(200, json=_inline())
         size = len(timeseries._parquet(_series()))

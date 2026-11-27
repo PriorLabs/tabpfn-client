@@ -520,9 +520,19 @@ def _upload(series: bytes, *, known_covariates: bytes | None) -> UUID:
     if known_covariates is not None:
         request["known_covariates_info"] = _file_info(known_covariates)
     res = ServiceClient.httpx_client.post(_PREPARE_UPLOAD_PATH, json=request)
-    up = ServiceClient._validate_response(
-        res, "prepare_upload", success_model=_PrepareUploadResponse
+    resp = ServiceClient._validate_response(
+        res,
+        "prepare_upload",
+        success_model=_PrepareUploadResponse,
+        error_models={413: _ErrorBody, 422: _ErrorBody},
     )
+    match resp:
+        case _PrepareUploadResponse():
+            up = resp
+        case _ErrorBody():
+            raise _failure(res, resp)
+        case _:
+            assert_never(resp)
     ServiceClient._upload_to_gcs("series", series, up.series_info)
     if known_covariates is not None:
         if up.known_covariates_info is None:
