@@ -912,6 +912,7 @@ class TestTabPFNModelSelection(unittest.TestCase):
     def test_list_available_models_returns_expected_models(self):
         expected_models = [
             "v2.5_default-2",
+            "v4_default",
             "v3.5-fast_default",
             "v3.5_default",
             "v3_default",
@@ -952,6 +953,15 @@ class TestTabPFNModelSelection(unittest.TestCase):
     def test_create_default_for_version_v3_5_selects_the_alias(self):
         estimator = TabPFNClassifier.create_default_for_version(ModelVersion.V3_5)
         self.assertEqual(estimator.model_path, "v3.5_default")
+
+    def test_create_default_for_version_v4_selects_the_alias(self):
+        for version in (ModelVersion.V4, "v4"):
+            with self.subTest(version=version):
+                estimator = TabPFNClassifier.create_default_for_version(version)
+                self.assertEqual(estimator.model_path, "v4_default")
+
+    def test_the_default_model_is_left_to_the_server(self):
+        self.assertIsNone(TabPFNClassifier()._get_tabpfn_config().model_path)
 
     def test_auto_aliases_pass_through_on_the_wire(self):
         # `None`, "auto" and "default" all mean "let the server pick". The server

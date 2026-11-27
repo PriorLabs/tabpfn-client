@@ -913,6 +913,58 @@ class TestCrossValPredictSplits:
             )
         assert output.shape == (2,)
 
+    def test_the_weights_are_sent_per_split(self):
+        weights = np.linspace(0.0, 1.0, N_ROWS - 4)
+        with _offline_splits_server() as server:
+            TabPFNRegressor().cross_val_predict_splits(
+                _splits(Y_REGRESSION),
+                sample_weight=[None, weights + 1],
+                label_reliability=[None, weights],
+            )
+        first, second = server.sent["row_weights"]
+        assert first is None
+        pd.testing.assert_frame_equal(
+            second,
+            pd.DataFrame({"sample_weight": weights + 1, "label_reliability": weights}),
+        )
+
+    def test_a_split_may_take_one_kind_of_weight(self):
+        with _offline_splits_server() as server:
+            TabPFNClassifier().cross_val_predict_splits(
+                _splits(Y_CLASSES), sample_weight=[np.ones(N_ROWS - 3), None]
+            )
+        first, second = server.sent["row_weights"]
+        assert list(first.columns) == ["sample_weight"]
+        assert second is None
+
+    def test_no_weights_send_none(self):
+        with _offline_splits_server() as server:
+            TabPFNRegressor().cross_val_predict_splits(
+                _splits(Y_REGRESSION), sample_weight=[None, None]
+            )
+        assert server.sent["row_weights"] is None
+
+    def test_without_weights_the_request_is_unchanged(self):
+        with _offline_splits_server() as server:
+            TabPFNRegressor().cross_val_predict_splits(_splits(Y_REGRESSION))
+        assert server.sent["row_weights"] is None
+
+    @pytest.mark.parametrize(
+        ("kwargs", "match"),
+        [
+            ({"sample_weight": [np.ones(N_ROWS - 3)]}, "2 splits"),
+            ({"label_reliability": [None, None, None]}, "2 splits"),
+            ({"sample_weight": [np.ones(N_ROWS), None]}, "Split 0.*one value per row"),
+            ({"sample_weight": [None, -np.ones(N_ROWS - 4)]}, "Split 1.*negative"),
+            ({"label_reliability": [np.full(N_ROWS - 3, 2.0), None]}, r"\[0, 1\]"),
+            ({"sample_weight": [np.full(N_ROWS - 3, np.nan), None]}, "finite"),
+        ],
+    )
+    def test_bad_weights_raise_before_any_request(self, kwargs, match):
+        with _offline_splits_server() as server, pytest.raises(ValueError, match=match):
+            TabPFNRegressor().cross_val_predict_splits(_splits(Y_REGRESSION), **kwargs)
+        assert "splits" not in server.sent
+
     def test_no_splits_are_rejected(self):
         with _offline_splits_server(), pytest.raises(ValueError, match="no splits"):
             TabPFNRegressor().cross_val_predict_splits([])
@@ -973,6 +1025,53 @@ class TestServiceClientSplits(_ServiceClientHarness):
         ]
         assert "train_set_upload_id" not in body
         assert "fold_ids_upload_id" not in body
+
+    def test_uploads_each_split_with_its_weights(self, mock_server):
+        x = pd.DataFrame(np.arange(12.0).reshape(6, 2))
+        y = np.array([0, 1, 0, 1, 0, 1])
+        weights = pd.DataFrame({"sample_weight": [1.0, 2.0, 3.0, 4.0]})
+        with (
+            self._patched(),
+            patch.object(
+                ServiceClient,
+                "_upload_train_set",
+                side_effect=lambda *a, **k: UUID(self.UPLOAD_ID),
+            ) as upload,
+            patch.object(ServiceClient, "_run_cross_validate", return_value="result"),
+        ):
+            ServiceClient.cross_validate_splits(
+                [(x, y, 2), (x, y, 3)],
+                task_config=ClassifierConfig(),
+                tabpfn_systems=["preprocessing"],
+                row_weights=[weights, None],
+            )
+        sent = sorted(
+            (call.kwargs["row_weights"] for call in upload.call_args_list),
+            key=lambda w: w is not None,
+        )
+        assert sent[0] is None
+        # The test rows carry a neutral weight; only the training rows' are fitted on.
+        pd.testing.assert_frame_equal(
+            sent[1],
+            pd.DataFrame({"sample_weight": [1.0, 2.0, 3.0, 4.0, 1.0, 1.0]}),
+        )
+
+    @pytest.mark.parametrize(
+        ("row_weights", "match"),
+        [
+            ([None], "1 entries for 2 splits"),
+            ([pd.DataFrame({"sample_weight": [1.0] * 6}), None], "4 training rows"),
+        ],
+    )
+    def test_weights_not_matching_the_splits_are_rejected(self, row_weights, match):
+        x = pd.DataFrame(np.arange(12.0).reshape(6, 2))
+        with pytest.raises(ValueError, match=match):
+            ServiceClient.cross_validate_splits(
+                [(x, np.zeros(6), 2), (x, np.zeros(6), 3)],
+                task_config=RegressorConfig(),
+                tabpfn_systems=["preprocessing"],
+                row_weights=row_weights,
+            )
 
     @pytest.mark.parametrize("num_val_rows", [0, 6])
     def test_a_split_without_train_or_test_rows_is_rejected(self, num_val_rows):

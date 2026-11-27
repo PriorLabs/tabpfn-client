@@ -730,6 +730,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
         api_mode: ApiMode = ApiMode.AUTO,
         client_options: ClientOptions | None = None,
         wait: bool = True,
+        row_weights: list[pd.DataFrame | None] | None = None,
     ) -> GetCrossValidateResultResponse:
         """Upload one train set per split and cross-validate on them.
 
@@ -745,6 +746,7 @@ class InferenceClient(ServiceClientWrapper, Singleton):
             api_mode=api_mode,
             client_options=client_options,
             wait=wait,
+            row_weights=row_weights,
         )
 
     @classmethod
