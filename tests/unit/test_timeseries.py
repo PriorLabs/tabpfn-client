@@ -458,14 +458,15 @@ class TestSyncForecast:
 
         assert _spec(route)["freq"] == "D"
 
-    def test__forecast__hourly_series_without_freq__sends_h(self, router):
+    def test__forecast__hourly_series_without_freq__sends_hourly_alias(self, router):
         route = router.post("/forecast/forecast").respond(200, json=_inline())
         series = _series()
         series["timestamp"] = pd.date_range("2024-01-01", periods=len(series), freq="h")
 
         _forecast(series, freq=None)
 
-        assert _spec(route)["freq"] == "h"
+        # Pandas before 2.2 spells the alias "H".
+        assert _spec(route)["freq"] in {"h", "H"}
 
     def test__forecast__items_disagree_on_freq__raises_without_request(self):
         hourly = _series(n_items=1).assign(item_id="i1")
