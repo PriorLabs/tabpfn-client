@@ -451,6 +451,44 @@ class TestSyncForecast:
             "task": {"task": "forecast", "horizon": HORIZON, "quantiles": [0.5]},
         }
 
+    def test__forecast__daily_series_without_freq__sends_d(self, router):
+        route = router.post("/forecast/forecast").respond(200, json=_inline())
+
+        _forecast(freq=None)
+
+        assert _spec(route)["freq"] == "D"
+
+    def test__forecast__hourly_series_without_freq__sends_h(self, router):
+        route = router.post("/forecast/forecast").respond(200, json=_inline())
+        series = _series()
+        series["timestamp"] = pd.date_range("2024-01-01", periods=len(series), freq="h")
+
+        _forecast(series, freq=None)
+
+        assert _spec(route)["freq"] == "h"
+
+    def test__forecast__items_disagree_on_freq__raises_without_request(self):
+        hourly = _series(n_items=1).assign(item_id="i1")
+        hourly["timestamp"] = pd.date_range("2024-01-01", periods=len(hourly), freq="h")
+        series = pd.concat([_series(n_items=1), hourly], ignore_index=True)
+
+        with pytest.raises(InvalidSeriesError, match="items disagree"):
+            _forecast(series, freq=None)
+
+    def test__forecast__irregular_timestamps_without_freq__raises(self):
+        series = _series()
+        series.loc[series.index[2], "timestamp"] += pd.Timedelta(hours=5)
+
+        with pytest.raises(InvalidSeriesError, match="irregular"):
+            _forecast(series, freq=None)
+
+    def test__forecast__explicit_freq__sends_it_as_given(self, router):
+        route = router.post("/forecast/forecast").respond(200, json=_inline())
+
+        _forecast(freq="W")
+
+        assert _spec(route)["freq"] == "W"
+
     def test_sends_the_count_of_distinct_ids_as_n_items(self, router):
         route = router.post("/forecast/forecast").respond(200, json=_inline())
         # Rows of one item apart from each other still count once.

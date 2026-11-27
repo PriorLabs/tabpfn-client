@@ -199,7 +199,7 @@ def forecast(
     series: pd.DataFrame,
     *,
     horizon: int,
-    freq: str,
+    freq: str | None = None,
     id_column: str = "item_id",
     timestamp_column: str = "timestamp",
     target_columns: Sequence[str] = ("target",),
@@ -216,7 +216,8 @@ def forecast(
         series: Long table, one row per item and timestamp. Every column has one
             role: id, timestamp, target or covariate.
         horizon: Number of steps to forecast.
-        freq: Pandas offset alias of the timestamps, for example "D" or "h".
+        freq: Pandas offset alias of the timestamps, for example "D" or "h". None
+            infers it from the timestamps of the first items of `series`.
         id_column: Column that names the item.
         timestamp_column: Column with the timestamps.
         target_columns: Columns to forecast.
@@ -268,6 +269,10 @@ def forecast(
     )
     _check_spec(columns, task, limits=limits)
     _check_series_columns(series, columns)
+    if freq is None:
+        freq = _infer_freq(
+            series, id_column=id_column, timestamp_column=timestamp_column
+        )
     spec = _JobSpec(
         freq=freq, n_items=int(series[id_column].nunique()), columns=columns, task=task
     )
@@ -283,6 +288,39 @@ def forecast(
 
 
 # -- Structure checks. --
+
+
+_FREQ_SAMPLE_ITEMS = 100
+_FREQ_HINT = 'Pass `freq`, for example "D" or "h".'
+
+
+def _infer_freq(series: pd.DataFrame, *, id_column: str, timestamp_column: str) -> str:
+    """Infer the frequency from the first 100 items (by id) with 3 or more rows."""
+    freqs: set[str] = set()
+    n_sampled = 0
+    for _, rows in series.groupby(id_column, sort=True):
+        if len(rows) < 3:
+            continue
+        timestamps = pd.DatetimeIndex(pd.to_datetime(rows[timestamp_column]))
+        freq = pd.infer_freq(timestamps.sort_values())
+        if freq is None:
+            raise InvalidSeriesError(
+                "Cannot infer `freq`: the timestamps of an item are irregular. "
+                + _FREQ_HINT
+            )
+        freqs.add(freq)
+        n_sampled += 1
+        if n_sampled == _FREQ_SAMPLE_ITEMS:
+            break
+    if n_sampled == 0:
+        raise InvalidSeriesError(
+            "Cannot infer `freq`: no item has 3 rows. " + _FREQ_HINT
+        )
+    if len(freqs) > 1:
+        raise InvalidSeriesError(
+            f"Cannot infer `freq`: items disagree, found {sorted(freqs)}. " + _FREQ_HINT
+        )
+    return freqs.pop()
 
 
 def _forecast_limits() -> ForecastLimits:
